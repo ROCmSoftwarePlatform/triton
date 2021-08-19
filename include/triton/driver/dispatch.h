@@ -8,7 +8,7 @@
 
 #ifdef __HIP_PLATFORM_AMD__
 //HIP Backend
-#include "hip/hip_runtime.h"
+#include "triton/external/CUDA/hip.h"
 #include "triton/external/CUDA/nvml_hip.h"
 #else
 //CUDA Backend
