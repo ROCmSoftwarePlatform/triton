@@ -4,18 +4,18 @@
 #include <sstream>
 
 template <typename T>
-std::string str_join(const T &v, const std::string &delim)
+std::string str_join(const T &token_vector, const std::string &delim)
 {
-    std::ostringstream s;
-    for (const auto &i : v)
+    std::ostringstream joined_token;
+    for (const auto &token : token_vector)
     {
-        if (&i != &v[0])
+        if (&token != &token_vector[0])
         {
-            s << delim;
+            joined_token << delim;
         }
-        s << i;
+        joined_token << token;
     }
-    return s.str();
+    return joined_token.str();
 }
 
 std::vector<std::string> str_split(const std::string &str, const std::string &delim)
@@ -35,21 +35,19 @@ std::vector<std::string> str_split(const std::string &str, const std::string &de
     return tokens;
 }
 
-std::string GetROCMGPUInfo()
+std::string GetAMDGPUInfo()
 {
     system("/opt/rocm/bin/rocminfo |grep -o -m 1 'gfx.*:.*:.*' >/tmp/rocminfo.log");
     std::ifstream t("/tmp/rocminfo.log");
     std::string rocminfo((std::istreambuf_iterator<char>(t)),
                          std::istreambuf_iterator<char>());
-    rocminfo.erase(remove_if(rocminfo.begin(), rocminfo.end(), isspace), rocminfo.end());
+    rocminfo.erase(std::remove_if(rocminfo.begin(), rocminfo.end(), isspace), rocminfo.end());
     return rocminfo;
 }
 
 #define ROCM_VERSION 42000
 std::string MapGCNArchNameTokenToFeatureStr(std::string token)
 {
-    // return  token[token.size() - 1] + token.substr(0, token.size() - 1);;
-
     if (token == "sramecc+")
     {
         return "+sramecc";
