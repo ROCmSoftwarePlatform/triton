@@ -33,7 +33,7 @@ find_library(TERMINFO_LIBRARY tinfo)
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 if (TRITON_USE_ROCM)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS -fvisibility=default -std=gnu++17 -Wno-unused-result -Wno-attributes")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17 -Wno-unused-result -Wno-attributes")
 else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -std=gnu++17")
 endif()
