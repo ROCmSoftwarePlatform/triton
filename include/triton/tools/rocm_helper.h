@@ -103,6 +103,5 @@ std::pair<std::string, std::string> GetFeatureStrFromGCNArchName(
     feature_str = str_join(mapped_tokens, ",");
 #endif
 
-    // std::cout << "feature_str: " << feature_str << std::endl;
     return make_pair(gfx, feature_str);
 }
