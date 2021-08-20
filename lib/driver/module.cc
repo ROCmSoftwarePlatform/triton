@@ -291,7 +291,7 @@ std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device*
   // create
   llvm::SmallVector<char, 0> buffer;
 #ifdef __HIP_PLATFORM_AMD__
-  std::string rocminfo = GetROCMGPUInfo();
+  std::string rocminfo = GetAMDGPUInfo();
   
   std::string triple = "amdgcn-amd-amdhsa";
   std::string layout = "";
