@@ -58,6 +58,7 @@
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "triton/tools/rocm_helper.h"
 #endif
 
 std::string exec(const char* cmd) {
@@ -290,11 +291,24 @@ std::string cu_module::compile_llvm_module(llvm::Module* module, driver::device*
   // create
   llvm::SmallVector<char, 0> buffer;
 #ifdef __HIP_PLATFORM_AMD__
+  std::string rocminfo = GetROCMGPUInfo();
+  
   std::string triple = "amdgcn-amd-amdhsa";
-  std::string proc = "gfx908"; //TODO: add code to QUERY GPU to make sure it works
   std::string layout = "";
-  // std::string features = std::get<1>(GetFeatureStrFromGCNArchName("gfx908:sramecc+:xnack-"));
-  std::string features = "+sramecc,-xnack";
+  std::string proc;
+  std::string features;
+
+  if (!rocminfo.empty())
+  {
+    proc = std::get<0>(GetFeatureStrFromGCNArchName(rocminfo));
+    features = std::get<1>(GetFeatureStrFromGCNArchName(rocminfo));
+  }
+  else
+  { // Default to MI100 params
+    proc = "gfx908";
+    features = "+sramecc,-xnack";
+  }
+  
 #else
   std::string triple = "nvptx64-nvidia-cuda";
   std::string proc = "sm_" + std::to_string(std::min(cc, max_nvvm_cc));
