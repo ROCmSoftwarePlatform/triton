@@ -74,7 +74,6 @@ static std::string llir_to_amdgcn(llvm::Module *module,
     module->setDataLayout(layout);
   // emit machine code
   for (llvm::Function &f : module->functions()) {
-    f.setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
     f.addFnAttr(llvm::Attribute::AlwaysInline);
   }
 
