@@ -244,18 +244,25 @@ struct GCNMemInstr : public GCNInstrBase<GCNMemInstr> {
   using GCNInstrBase<GCNMemInstr>::GCNInstrBase;
   // Add specific type suffix to instruction
 
+  enum VectorWidth {
+    Byte = 8,
+    Short = 16,
+    Dword = 32,
+    Qword = 64
+  };
+
   GCNMemInstr &type(int width) {
     switch (width) {
-    case 8:
+    case Byte:
       o("byte");
       break;
-    case 16:
+    case Short:
       o("short");
       break;
-    case 32:
+    case Dword:
       o("dword");
       break;
-    case 64:
+    case Qword:
       o("dwordx2");
       break;
     default:
