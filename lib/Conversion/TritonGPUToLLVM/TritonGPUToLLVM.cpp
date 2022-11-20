@@ -884,6 +884,39 @@ struct LoadOpConversion
       const int vecNElems = totalWidth / valueElemNbits;
       assert(wordNElems * nWords * numVecs == numElems);
 
+#ifdef USE_ROCM
+      GCNBuilder gcnBuilder;
+
+      const std::string readConstraint = "v";
+      const std::string writeConstraint = "=v";
+
+      auto *dstsOpr = gcnBuilder.newListOperand();
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+        auto *opr = gcnBuilder.newOperand(writeConstraint); // =v operations
+        dstsOpr->listAppend(opr);
+      }
+
+      auto *addrOpr = gcnBuilder.newAddrOperand(ptrElems[vecStart], "v");
+
+      for (size_t ii = 0; ii < vec; ++ii) {
+        auto &gload =
+            gcnBuilder.create<GCNMemInstr>("global_load")->type(width);
+        unsigned offset = ii * (width / 8);
+        auto *offsetMod =
+            gcnBuilder.newModifier("offset", std::to_string(offset));
+        gload({dstsOpr->listGet(ii), addrOpr}, {offsetMod});
+      }
+
+      auto &wait_cnt = *gcnBuilder.create<>("s_waitcnt vmcnt(0)");
+      wait_cnt();
+
+      SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
+      Type retTy = retTys.size() > 1
+                       ? LLVM::LLVMStructType::getLiteral(getContext(), retTys)
+                       : retTys[0];
+
+      Value ret = gcnBuilder.launch(rewriter, loc, retTy);
+#else
       // TODO(Superjomn) Add cache policy fields to StoreOp.
       // TODO(Superjomn) Deal with cache policy here.
       const bool hasL2EvictPolicy = false;
@@ -970,7 +1003,7 @@ struct LoadOpConversion
       auto asmDialectAttr = LLVM::AsmDialectAttr::get(rewriter.getContext(),
                                                       LLVM::AsmDialect::AD_ATT);
       Value ret = ptxBuilder.launch(rewriter, loc, retTy);
-
+#endif
       // ---
       // extract and store return values
       // ---
