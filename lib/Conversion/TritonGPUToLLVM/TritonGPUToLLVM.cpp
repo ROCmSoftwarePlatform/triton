@@ -898,13 +898,13 @@ struct LoadOpConversion
 
       auto *addrOpr = gcnBuilder.newAddrOperand(ptrElems[vecStart], "v");
 
-      for (size_t ii = 0; ii < vec; ++ii) {
+      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         auto &gload =
             gcnBuilder.create<GCNMemInstr>("global_load")->type(width);
-        unsigned offset = ii * (width / 8);
+        unsigned offset = wordIdx * (width / 8);
         auto *offsetMod =
             gcnBuilder.newModifier("offset", std::to_string(offset));
-        gload({dstsOpr->listGet(ii), addrOpr}, {offsetMod});
+        gload({dstsOpr->listGet(wordIdx), addrOpr}, {offsetMod});
       }
 
       auto &wait_cnt = *gcnBuilder.create<>("s_waitcnt vmcnt(0)");
