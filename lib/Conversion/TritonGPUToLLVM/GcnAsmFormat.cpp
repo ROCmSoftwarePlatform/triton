@@ -131,7 +131,7 @@ std::string GCNBuilder::dump() const {
     lines.push_back(exec->dump());
   }
 
-  return strJoin(lines, "\r\n");
+  return strJoin(lines, "\n\t");
 }
 
 GCNInstrExecution &GCNInstrCommon::call(ArrayRef<Operand *> oprs, ArrayRef<Modifier *> mods) {

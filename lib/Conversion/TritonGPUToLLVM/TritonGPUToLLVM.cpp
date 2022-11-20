@@ -17,6 +17,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
+#include "triton/Conversion/TritonGPUToLLVM/GcnAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/PtxAsmFormat.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPU.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -1096,11 +1097,40 @@ struct StoreOpConversion
                                  loc, u32Ty, IntegerAttr::get(u32Ty, elemIdx)));
         }
         llWord = bitcast(valArgTy, llWord);
+#ifdef USE_ROCM
+        std::string constraint = "v";
+        asmArgs.emplace_back(llWord, constraint);
+#else
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
         asmArgs.emplace_back(llWord, constraint);
+#endif
+      }
+#ifdef USE_ROCM
+      // Prepare the AMDGCN inline asm.
+      GCNBuilder gcnBuilder;
+      auto *asmArgList = gcnBuilder.newListOperand(asmArgs);
+      auto *asmAddr = gcnBuilder.newAddrOperand(ptrElems[vecStart], "v");
+      for (size_t ii = 0; ii < vec; ++ii) {
+        auto &gstore =
+            gcnBuilder.create<GCNMemInstr>("global_store")->type(width);
+        unsigned offset = ii * (width / 8);
+        auto *offsetMod =
+            gcnBuilder.newModifier("offset", std::to_string(offset));
+        gstore({asmAddr, asmArgList->listGet(ii)}, {offsetMod});
       }
 
+      auto &wait_cnt = *gcnBuilder.create<>("s_waitcnt vmcnt(0)");
+      wait_cnt();
+
+      Type boolTy = getTypeConverter()->convertType(rewriter.getIntegerType(1));
+      llvm::SmallVector<Type> argTys({boolTy, ptr.getType()});
+      argTys.insert(argTys.end(), nWords, valArgTy);
+
+      auto ASMReturnTy = LLVM::LLVMVoidType::get(ctx);
+
+      gcnBuilder.launch(rewriter, loc, ASMReturnTy);
+#else
       // Prepare the PTX inline asm.
       PTXBuilder ptxBuilder;
       auto *asmArgList = ptxBuilder.newListOperand(asmArgs);
@@ -1121,6 +1151,7 @@ struct StoreOpConversion
       auto ASMReturnTy = LLVM::LLVMVoidType::get(ctx);
 
       ptxBuilder.launch(rewriter, loc, ASMReturnTy);
+#endif
     }
     rewriter.eraseOp(op);
     return success();
@@ -3697,7 +3728,8 @@ public:
     mlir::populateStdToLLVMConversionPatterns(typeConverter, patterns);
 
 #ifdef USE_ROCM
-    mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns, mlir::gpu::amd::HIP);
+    mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
+                                               mlir::gpu::amd::HIP);
 #else
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
 #endif
