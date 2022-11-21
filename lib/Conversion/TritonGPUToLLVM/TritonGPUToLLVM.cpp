@@ -888,7 +888,7 @@ struct LoadOpConversion
       GCNBuilder gcnBuilder;
 
       const std::string readConstraint = "v";
-      const std::string writeConstraint = "=v";
+      const std::string writeConstraint = "=&v";
 
       auto *dstsOpr = gcnBuilder.newListOperand();
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
@@ -900,8 +900,8 @@ struct LoadOpConversion
 
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         auto &gload =
-            gcnBuilder.create<GCNMemInstr>("global_load")->type(width);
-        unsigned offset = wordIdx * (width / 8);
+            gcnBuilder.create<GCNMemInstr>("global_load")->type(valueElemNbits);
+        unsigned offset = wordIdx * (valueElemNbits / 8);
         auto *offsetMod =
             gcnBuilder.newModifier("offset", std::to_string(offset));
         gload({dstsOpr->listGet(wordIdx), addrOpr}, {offsetMod});
@@ -1144,10 +1144,10 @@ struct StoreOpConversion
       GCNBuilder gcnBuilder;
       auto *asmArgList = gcnBuilder.newListOperand(asmArgs);
       auto *asmAddr = gcnBuilder.newAddrOperand(ptrElems[vecStart], "v");
-      for (size_t ii = 0; ii < vec; ++ii) {
+      for (size_t ii = 0; ii < nWords; ++ii) {
         auto &gstore =
-            gcnBuilder.create<GCNMemInstr>("global_store")->type(width);
-        unsigned offset = ii * (width / 8);
+            gcnBuilder.create<GCNMemInstr>("global_store")->type(valueElemNbits);
+        unsigned offset = ii * (valueElemNbits / 8);
         auto *offsetMod =
             gcnBuilder.newModifier("offset", std::to_string(offset));
         gstore({asmAddr, asmArgList->listGet(ii)}, {offsetMod});
