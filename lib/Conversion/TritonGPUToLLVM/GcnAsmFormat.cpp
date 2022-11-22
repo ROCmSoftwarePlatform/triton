@@ -27,7 +27,8 @@ GCNBuilder::Operand *GCNBuilder::newOperand(StringRef constraint) {
   return opr;
 }
 
-GCNBuilder::Modifier *GCNBuilder::newModifier(StringRef modifier, StringRef arg) {
+GCNBuilder::Modifier *GCNBuilder::newModifier(StringRef modifier,
+                                              StringRef arg) {
   assert(!modifier.empty());
   auto *mod = newModifier();
   mod->modifier = modifier;
@@ -51,7 +52,8 @@ std::string GCNBuilder::getConstraints() const {
   auto args = getAllArgs();
   llvm::SmallVector<std::string, 4> argReprs;
   for (auto arg : args)
-    argReprs.push_back(arg->constraint);
+    if (!arg->constraint.empty())
+      argReprs.push_back(arg->constraint);
   return strJoin(argReprs, ",");
 }
 
@@ -110,7 +112,7 @@ std::string GCNInstr::Modifier::dump() const {
   llvm::SmallVector<std::string> mods;
   for (auto *mod : list)
     mods.push_back(mod->dump());
-   return strJoin(mods, " ");
+  return strJoin(mods, " ");
 }
 
 GCNInstr::Operand *GCNBuilder::newAddrOperand(mlir::Value addr,
@@ -119,6 +121,17 @@ GCNInstr::Operand *GCNBuilder::newAddrOperand(mlir::Value addr,
   opr->repr = [](int idx) -> std::string {
     std::stringstream ss;
     ss << "$" << idx;
+    return ss.str();
+  };
+
+  return opr;
+}
+
+GCNInstr::Operand *GCNBuilder::newEmptyOperand(std::string arg) {
+  auto *opr = newOperand();
+  opr->repr = [arg](int idx) -> std::string {
+    std::stringstream ss;
+    ss << arg;
     return ss.str();
   };
 
@@ -134,13 +147,15 @@ std::string GCNBuilder::dump() const {
   return strJoin(lines, "\n\t");
 }
 
-GCNInstrExecution &GCNInstrCommon::call(ArrayRef<Operand *> oprs, ArrayRef<Modifier *> mods) {
+GCNInstrExecution &GCNInstrCommon::call(ArrayRef<Operand *> oprs,
+                                        ArrayRef<Modifier *> mods) {
   builder->executions.emplace_back(
       std::make_unique<GCNInstrExecution>(this, oprs, mods));
   return *builder->executions.back();
 }
 
-GCNInstrExecution &GCNInstrCommon::operator()(ArrayRef<Operand *> oprs, ArrayRef<Modifier *> mods) {
+GCNInstrExecution &GCNInstrCommon::operator()(ArrayRef<Operand *> oprs,
+                                              ArrayRef<Modifier *> mods) {
   return call(oprs, mods);
 }
 
@@ -154,14 +169,14 @@ std::string GCNInstrExecution::dump() const {
   for (auto *arg : argsInOrder) {
     argReprs.push_back(arg->dump());
   }
-  
+
   std::string argsRepr = strJoin(argReprs, ", ");
 
   llvm::SmallVector<std::string, 4> modReprs;
-  for(auto *mod : mods) {
+  for (auto *mod : mods) {
     modReprs.push_back(mod->dump());
   }
-  
+
   std::string modsRepr = strJoin(modReprs, " ");
   os << instrRepr << " " << argsRepr << " " << modsRepr << ";";
   os.flush();

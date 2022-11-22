@@ -133,6 +133,8 @@ struct GCNBuilder {
 
   Operand *newAddrOperand(mlir::Value addr, StringRef constraint);
 
+  Operand *newEmptyOperand(std::string arg);
+
   Modifier *newModifier(StringRef modifier, StringRef arg);
 
   llvm::SmallVector<Operand *, 4> getAllArgs() const;
@@ -190,10 +192,12 @@ struct GCNInstrCommon {
   // clang-format on
 
   // Set operands of this instruction.
-  GCNInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs, llvm::ArrayRef<Modifier*> mods);
+  GCNInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs,
+                                llvm::ArrayRef<Modifier *> mods);
 
 protected:
-  GCNInstrExecution &call(llvm::ArrayRef<Operand *> oprs, ArrayRef<Modifier *> mods);
+  GCNInstrExecution &call(llvm::ArrayRef<Operand *> oprs,
+                          ArrayRef<Modifier *> mods);
 
   GCNBuilder *builder{};
   llvm::SmallVector<std::string, 4> instrParts;
@@ -230,8 +234,10 @@ struct GCNInstrExecution {
 
   GCNInstrExecution() = default;
   explicit GCNInstrExecution(GCNInstrCommon *instr,
-                             llvm::ArrayRef<Operand *> oprs, llvm::ArrayRef<Modifier *> modifiers)
-      : instr(instr), argsInOrder(oprs.begin(), oprs.end()), mods(modifiers.begin(), modifiers.end()) {}
+                             llvm::ArrayRef<Operand *> oprs,
+                             llvm::ArrayRef<Modifier *> modifiers)
+      : instr(instr), argsInOrder(oprs.begin(), oprs.end()),
+        mods(modifiers.begin(), modifiers.end()) {}
 
   std::string dump() const;
 
@@ -244,14 +250,29 @@ struct GCNMemInstr : public GCNInstrBase<GCNMemInstr> {
   using GCNInstrBase<GCNMemInstr>::GCNInstrBase;
   // Add specific type suffix to instruction
 
-  enum VectorWidth {
-    Byte = 8,
-    Short = 16,
-    Dword = 32,
-    Qword = 64
-  };
+  enum VectorWidth { Byte = 8, Short = 16, Dword = 32, Qword = 64 };
 
-  GCNMemInstr &type(int width) {
+  GCNMemInstr &load_type(int width) {
+    switch (width) {
+    case Byte:
+      o("ubyte");
+      break;
+    case Short:
+      o("ushort");
+      break;
+    case Dword:
+      o("dword");
+      break;
+    case Qword:
+      o("dwordx2");
+      break;
+    default:
+      break;
+    }
+    return *this;
+  }
+
+  GCNMemInstr &store_type(int width) {
     switch (width) {
     case Byte:
       o("byte");
