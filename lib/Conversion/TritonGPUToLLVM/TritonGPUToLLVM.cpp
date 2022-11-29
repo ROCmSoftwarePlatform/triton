@@ -1004,64 +1004,12 @@ struct LoadOpConversion
       const size_t wordNElems = width / valueElemNbits;
       assert(wordNElems * nWords * numVecs == numElems);
 #ifdef USE_ROCM
-      GCNBuilder gcnBuilder;
-
-      const std::string readConstraint = "v";
-      const std::string writeConstraint = "=&v";
-
-      auto *dstsOpr = gcnBuilder.newListOperand();
-      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-        auto *opr = gcnBuilder.newOperand(writeConstraint); // =v operations
-        dstsOpr->listAppend(opr);
-      }
-
-      auto *addrOpr = gcnBuilder.newAddrOperand(ptrElems[vecStart], "v");
-      auto *offOpr = gcnBuilder.newEmptyOperand("off");
-
-      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-        auto &gload = gcnBuilder.create<GCNMemInstr>("global_load")
-                          ->load_type(valueElemNbits);
-        unsigned offset = wordIdx * (valueElemNbits / 8);
-        auto *offsetMod =
-            gcnBuilder.newModifier("offset", std::to_string(offset));
-        gload({dstsOpr->listGet(wordIdx), addrOpr, offOpr}, {offsetMod});
-      }
-
-      auto &wait_cnt = *gcnBuilder.create<>("s_waitcnt vmcnt(0)");
-      wait_cnt();
-
-      if (other) {
-        for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-          GCNInstr &mov = *gcnBuilder.create<>("v_mov_b32");
-
-          size_t size = width / valueElemNbits;
-
-          auto vecTy = LLVM::getFixedVectorType(valueElemTy, size);
-          Value v = rewriter.create<LLVM::UndefOp>(loc, vecTy);
-          for (size_t s = 0; s < size; ++s) {
-            Value falseVal = otherElems[vecStart + wordIdx * size + s];
-            Value sVal = createIndexAttrConstant(
-                rewriter, loc, this->getTypeConverter()->getIndexType(), s);
-            v = insert_element(vecTy, v, falseVal, sVal);
-          }
-          v = bitcast(v, IntegerType::get(getContext(), width));
-
-          GCNInstr::Operand *opr{};
-          if (otherIsSplatConstInt)
-            opr = gcnBuilder.newConstantOperand(splatVal);
-          else
-            opr = gcnBuilder.newOperand(v, readConstraint);
-
-          mov(dstsOpr->listGet(wordIdx), opr);
-        }
-      }
-
       SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
       Type retTy = retTys.size() > 1
                        ? LLVM::LLVMStructType::getLiteral(getContext(), retTys)
                        : retTys[0];
 
-      Value ret = gcnBuilder.launch(rewriter, loc, retTy);
+      Value ret = load(ptrElems[vecStart]);
 #else
       // TODO(Superjomn) Add cache policy fields to StoreOp.
       // TODO(Superjomn) Deal with cache policy here.
@@ -1269,40 +1217,18 @@ struct StoreOpConversion
                              rewriter.create<LLVM::ConstantOp>(
                                  loc, u32Ty, IntegerAttr::get(u32Ty, elemIdx)));
         }
-        llWord = bitcast(llWord, valArgTy);
+        llWord = bitcast(llWord,
 #ifdef USE_ROCM
-        std::string constraint = "v";
+            valueElemTy);
 #else
+            valArgTy);
+#endif
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
-#endif
         asmArgs.emplace_back(llWord, constraint);
       }
 #ifdef USE_ROCM
- // Prepare the AMDGCN inline asm.
-      GCNBuilder gcnBuilder;
-      auto *asmArgList = gcnBuilder.newListOperand(asmArgs);
-      auto *asmAddr = gcnBuilder.newAddrOperand(ptrElems[vecStart], "v");
-      auto *offOpr = gcnBuilder.newEmptyOperand("off");
-      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-        auto &gstore = gcnBuilder.create<GCNMemInstr>("global_store")
-                           ->store_type(valueElemNbits);
-        unsigned offset = wordIdx * (valueElemNbits / 8);
-        auto *offsetMod =
-            gcnBuilder.newModifier("offset", std::to_string(offset));
-        gstore({asmAddr, asmArgList->listGet(wordIdx), offOpr}, {offsetMod});
-      }
-
-      auto &wait_cnt = *gcnBuilder.create<>("s_waitcnt vmcnt(0)");
-      wait_cnt();
-
-      Type boolTy = getTypeConverter()->convertType(rewriter.getIntegerType(1));
-      llvm::SmallVector<Type> argTys({boolTy, ptr.getType()});
-      argTys.insert(argTys.end(), nWords, valArgTy);
-
-      auto ASMReturnTy = LLVM::LLVMVoidType::get(ctx);
-
-      gcnBuilder.launch(rewriter, loc, ASMReturnTy);
+      store(asmArgs[vecStart].first, ptrElems[vecStart]);
 #else
       // Prepare the PTX inline asm.
       PTXBuilder ptxBuilder;

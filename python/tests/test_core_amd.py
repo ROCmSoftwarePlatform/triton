@@ -280,7 +280,6 @@ def test_bin_op(dtype_x, dtype_y, op, device='cuda'):
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device)
 
-
 @pytest.mark.parametrize("dtype_x, dtype_y",
                          [(dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes] +
                          [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes]
