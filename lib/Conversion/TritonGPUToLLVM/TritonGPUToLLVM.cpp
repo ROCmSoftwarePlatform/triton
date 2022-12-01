@@ -1005,10 +1005,7 @@ struct LoadOpConversion
       assert(wordNElems * nWords * numVecs == numElems);
 #ifdef USE_ROCM
       SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
-      Type retTy = retTys.size() > 1
-                       ? LLVM::LLVMStructType::getLiteral(getContext(), retTys)
-                       : retTys[0];
-
+      Type retTy = retTys[0];
       Value ret = load(ptrElems[vecStart]);
 #else
       // TODO(Superjomn) Add cache policy fields to StoreOp.
