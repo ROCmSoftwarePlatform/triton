@@ -234,7 +234,7 @@ struct FpToFpOpConversion
     auto *o0 = builder.newOperand("=r");
     auto *o1 = builder.newOperand("=r");
     auto *i = builder.newOperand(fp8x4Vec, "r");
-    call({o0, o1, i}, /* onlyAttachMLIRArgs */ true);
+    call({o0, o1, i}, /* onlyAttachMLIRArg */ true);
 
     auto bf16x2VecTy = vec_ty(i16_ty, 2);
     auto bf16x2x2StructTy =
