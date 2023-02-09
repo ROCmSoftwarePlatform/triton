@@ -54,13 +54,13 @@ def get_llvm_package_info():
     # download if nothing is installed
     system = platform.system()
     system_suffix = {"Linux": "linux-gnu-ubuntu-18.04", "Darwin": "apple-darwin"}[system]
-    use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
+    use_assert_enabled_llvm = False
     if use_assert_enabled_llvm:
         name = 'llvm+mlir-14.0.0-x86_64-{}-assert'.format(system_suffix)
         url = "https://github.com/shintaro-iwasaki/llvm-releases/releases/download/llvm-14.0.0-329fda39c507/{}.tar.xz".format(name)
     else:
-        name = 'clang+llvm-14.0.0-x86_64-{}'.format(system_suffix)
-        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.0/{}.tar.xz".format(name)
+        name = 'LLVM-14.0.0-Linux'
+        url = "https://github.com/whchung/llvm-project/releases/download/exp-sgpr-0.2/LLVM-14.0.0-Linux.tar.gz"
     return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 

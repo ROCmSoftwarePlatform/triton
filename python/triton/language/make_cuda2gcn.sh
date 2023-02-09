@@ -9,8 +9,8 @@ cd ROCm-Device-Libs
 git apply ../cuda2gcn.patch
 mkdir build
 cd build
-cmake .. -DCMAKE_PREFIX_PATH=$HOME/.triton/llvm/clang+llvm-14.0.0-x86_64-linux-gnu-ubuntu-18.04
-make -j4
+cmake .. -DCMAKE_PREFIX_PATH=$HOME/.triton/llvm/LLVM-14.0.0-Linux
+make -j
 
 popd
 cp ROCm-Device-Libs/build/amdgcn/bitcode/cuda2gcn.bc .
