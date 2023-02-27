@@ -4,6 +4,7 @@
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
+include "mlir/Dialect/MemRef/IR/MemRefBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/OpBase.td"
@@ -207,4 +208,19 @@ def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [MemoryEffects<[MemAlloc]>,  // A
   let results = (outs TT_Tensor:$result);
 }
 
+def TTG_TensorToMemRefOp : TTG_Op<"tensor_to_memref", [SameOperandsAndResultShape,
+                                                       SameOperandsAndResultElementType,
+                                                       ResultsAreSharedEncoding,
+                                                       NoMemoryEffect]>{
+  let summary = "tensor to memref";
+
+  let description = [{
+    This operation casts a tensor object into a memref with the same shape.
+    It is assumed that the tensor has been stored in shared memory.
+  }];
+
+  let arguments = (ins TT_Tensor:$src);
+ 
+  let results = (outs AnyMemRef:$result);
+}
 #endif
