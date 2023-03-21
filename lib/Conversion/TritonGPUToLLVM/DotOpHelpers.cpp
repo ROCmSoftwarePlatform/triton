@@ -1425,5 +1425,307 @@ int DotOpFMAConversionHelper::getNumElemsPerThread(
   int sizePerThreadMN = getSizePerThreadForMN(blockedLayout, isM);
   return K * std::max<int>(otherDim / shapePerCTAMN, 1) * sizePerThreadMN;
 }
+
+Type DotOpMFMAConversionHelper::getShemPtrTy() const {
+  switch (mfmaType) {
+  case MatrixCoreType::FP32_FP16_FP16_FP32:
+    return ptr_ty(type::f16Ty(ctx), 3);
+  case MatrixCoreType::FP32_BF16_BF16_FP32:
+    return ptr_ty(type::i16Ty(ctx), 3);
+  case MatrixCoreType::FP32_FP32_FP32_FP32:
+    return ptr_ty(type::f32Ty(ctx), 3);
+  case MatrixCoreType::INT32_INT8_INT8_INT32:
+    return ptr_ty(type::i8Ty(ctx), 3);
+  case MatrixCoreType::FP64_FP64_FP64_FP64:
+    return ptr_ty(type::f64Ty(ctx), 3);
+  default:
+    llvm::report_fatal_error("MFMA data type not supported");
+  }
+  return Type{};
+}
+
+Value DotOpMFMAConversionHelper::generateMFMAOp(Value valA, Value valB,
+                                                Value valC) const {
+  auto resType = valC.getType();
+  Value zeroFlag = i32_val(0);
+  switch (mfmaType) {
+  case MatrixCoreType::FP32_FP16_FP16_FP32:
+    return rewriter.create<ROCDL::mfma_f32_32x32x8f16>(
+        loc, TypeRange{resType},
+        ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
+  case MatrixCoreType::FP32_BF16_BF16_FP32:
+    return rewriter.create<ROCDL::mfma_f32_32x32x4bf16>(
+        loc, TypeRange{resType},
+        ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
+  case MatrixCoreType::FP32_FP32_FP32_FP32:
+    return rewriter.create<ROCDL::mfma_f32_32x32x2f32>(
+        loc, TypeRange{resType},
+        ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
+  case MatrixCoreType::INT32_INT8_INT8_INT32:
+    return rewriter.create<ROCDL::mfma_i32_32x32x8i8>(
+        loc, TypeRange{resType},
+        ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
+  case MatrixCoreType::FP64_FP64_FP64_FP64:
+    return rewriter.create<ROCDL::mfma_f64_16x16x4f64>(
+        loc, TypeRange{resType},
+        ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
+  default:
+    llvm::report_fatal_error("MFMA data type not supported");
+  }
+}
+
+DotOpMFMAConversionHelper::MatrixCoreType
+DotOpMFMAConversionHelper::getMatrixCoreTypeFromOperand(Type operandTy) {
+  auto tensorTy = operandTy.cast<RankedTensorType>();
+  auto elemTy = tensorTy.getElementType();
+  if (elemTy.isF16())
+    return MatrixCoreType::FP32_FP16_FP16_FP32;
+  if (elemTy.isF32())
+    return MatrixCoreType::FP32_FP32_FP32_FP32;
+  if (elemTy.isBF16())
+    return MatrixCoreType::FP32_BF16_BF16_FP32;
+  if (elemTy.isInteger(8))
+    return MatrixCoreType::INT32_INT8_INT8_INT32;
+  if (elemTy.isF64())
+    return MatrixCoreType::FP64_FP64_FP64_FP64;
+  return MatrixCoreType::NOT_APPLICABLE;
+}
+
+llvm::SmallVector<Value>
+DotOpMFMAConversionHelper::computeOffsetsA(Value waveM, Value laneId,
+                                           int numOfElems, int numM, int numK,
+                                           Value cSwizzleOffset) const {
+  SmallVector<Value> offsets(numM * numK * numOfElems);
+  auto mfmaShape = getMFMAInstrShape();
+  int lineSize = mfmaShape[2] * numK;
+  int blockSize = mfmaShape[0] * numM * lineSize;
+
+  Value _32 = i32_val(32);
+  Value waveHalf = udiv(laneId, _32);
+
+  Value waveOffset = mul(waveM, i32_val(blockSize));
+  Value colOffset = mul(waveHalf, i32_val(numOfElems));
+
+  for (int block = 0; block < numM; ++block) {
+    Value blockOffset = mul(i32_val(block * mfmaShape[0] * lineSize));
+    for (int tile = 0; tile < numK; ++tile) {
+      Value tileOffset = i32_val(tile * mfmaShape[2]);
+      for (int elem = 0; elem < numOfElems; ++elem) {
+        Value rowOffset =
+            add(mul(urem(laneId, _32), i32_val(lineSize)), i32_val(elem));
+        Value elemOffset = add(rowOffset, colOffset);
+        Value offset =
+            add(add(add(waveOffset, blockOffset), tileOffset), elemOffset);
+        offsets[numK * block + numOfElems * tile + elem] = offset;
+      }
+    }
+  }
+  return offsets;
+}
+
+llvm::SmallVector<Value>
+DotOpMFMAConversionHelper::computeOffsetsB(Value waveN, Value laneId,
+                                           int numOfElems, int numK, int numN,
+                                           Value cSwizzleOffset) const {
+  SmallVector<Value> offsets(numK * numN * numOfElems);
+  auto mfmaShape = getMFMAInstrShape();
+
+  int lineSize = wpt[1] * mfmaShape[1] * numN;
+  Value _32 = i32_val(32);
+  Value waveHalf = udiv(laneId, _32);
+
+  Value waveOffset = mul(waveN, i32_val(mfmaShape[1] * numN));
+  Value colOffset = urem(laneId, _32);
+
+  for (int block = 0; block < numN; ++block) {
+    Value blockOffset = mul(i32_val(block * mfmaShape[1]));
+    for (int tile = 0; tile < numK; ++tile) {
+      Value tileOffset = i32_val(tile * mfmaShape[2] * lineSize);
+      for (int elem = 0; elem < numOfElems; ++elem) {
+        Value rowOffset = add(i32_val(elem * lineSize),
+                              mul(waveHalf, i32_val(numOfElems * lineSize)));
+        Value elemOffset = add(rowOffset, colOffset);
+        Value offset =
+            add(add(add(waveOffset, blockOffset), tileOffset), elemOffset);
+        offsets[numK * block + numOfElems * tile + elem] = offset;
+      }
+    }
+  }
+  return offsets;
+}
+
+Value DotOpMFMAConversionHelper::loadA(
+    Value tensor, const SharedMemoryObject &smemObj) const {
+  auto aTensorTy = tensor.getType().cast<RankedTensorType>();
+  SmallVector<int64_t> shape(aTensorTy.getShape().begin(),
+                             aTensorTy.getShape().end());
+  auto sharedLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto order = sharedLayout.getOrder();
+
+  SmallVector<Value> ha;
+  auto [mfmaInstrM, mfmaInstrN, mfmaInstrK] = getMFMAInstrShape(aTensorTy);
+
+  int numRepM = getNumRepM(aTensorTy, shape[0]);
+  int numRepK = getNumRepK(aTensorTy, shape[1]);
+
+  Value waveM = getWaveM(shape[0]);
+  int numOfElems = getNumOfElems(aTensorTy);
+  Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
+  auto offsets = computeOffsetsA(waveM, lane, numOfElems, numRepM, numRepK,
+                                 cSwizzleOffset);
+
+  Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
+
+  Type smemPtrTy = getShemPtrTy();
+
+  for (int m = 0; m < numRepM; ++m) {
+    for (int k = 0; k < numRepK; ++k) {
+      auto vecTy = vec_ty(aTensorTy, numOfElems);
+      Value valVec = undef(vecTy);
+      for (unsigned elem = 0; elem < numOfElems; ++elem) {
+        Value elemOffset = offsets[m * numRepK + k * numOfElems + elem];
+        Value elemValue = load(gep(smemPtrTy, smemBase, elemOffset));
+        valVec = insert_element(vecTy, valVec, elemValue, idx_val(elem));
+      }
+      ha.push_back(valVec);
+    }
+  }
+
+  Type elemTy = ha[0].getType();
+  Type structTy = LLVM::LLVMStructType::getLiteral(
+      ctx, SmallVector<Type>(ha.size(), elemTy));
+  auto result = getStructFromElements(loc, ha, rewriter, structTy);
+  return result;
+}
+
+Value DotOpMFMAConversionHelper::loadB(
+    Value tensor, const SharedMemoryObject &smemObj) const {
+  auto bTensorTy = tensor.getType().cast<RankedTensorType>();
+  SmallVector<int64_t> shape(bTensorTy.getShape().begin(),
+                             bTensorTy.getShape().end());
+  auto sharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto order = sharedLayout.getOrder();
+
+  SmallVector<Value> hb;
+  auto [mfmaInstrM, mfmaInstrN, mfmaInstrK] = getMFMAInstrShape(bTensorTy);
+
+  int numRepK = getNumRepK(bTensorTy, shape[0]);
+  int numRepN = getNumRepN(bTensorTy, shape[1]);
+
+  Value waveN = getWaveN(shape[1]);
+  int numOfElems = getNumOfElems(bTensorTy);
+  Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
+  auto offsets = computeOffsetsB(waveN, lane, numOfElems, numRepK, numRepN,
+                                 cSwizzleOffset);
+
+  Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
+
+  Type smemPtrTy = getShemPtrTy();
+
+  for (int n = 0; n < numRepN; ++n) {
+    for (int k = 0; k < numRepK; ++k) {
+      auto vecTy = vec_ty(bTensorTy, numOfElems);
+      Value valVec = undef(vecTy);
+      for (unsigned elem = 0; elem < numOfElems; ++elem) {
+        Value elemOffset = offsets[n * numRepK + k * numOfElems + elem];
+        Value elemValue = load(gep(smemPtrTy, smemBase, elemOffset));
+        valVec = insert_element(vecTy, valVec, elemValue, idx_val(elem));
+      }
+      hb.push_back(valVec);
+    }
+  }
+
+  Type elemTy = hb[0].getType();
+  Type structTy = LLVM::LLVMStructType::getLiteral(
+      ctx, SmallVector<Type>(hb.size(), elemTy));
+  auto result = getStructFromElements(loc, hb, rewriter, structTy);
+  return result;
+}
+
+Value DotOpMFMAConversionHelper::loadC(Value tensor, Value llTensor) const {
+  auto tensorTy = tensor.getType().cast<RankedTensorType>();
+
+  auto mmaLayout = tensorTy.getEncoding().cast<MmaEncodingAttr>();
+  auto wpt = mmaLayout.getWarpsPerCTA();
+
+  int M = tensorTy.getShape()[0];
+  int N = tensorTy.getShape()[1];
+  auto [instrM, instrN] = getInstrShapeMN();
+  int repM = std::max<int>(M / (wpt[0] * instrM), 1);
+  int repN = std::max<int>(N / (wpt[1] * instrN), 1);
+
+  int numOfElems = DotOpMFMAConversionHelper::getNumOfElems();
+  size_t accSize = numOfElems * repM * repN;
+
+  assert(tensorTy.getEncoding().isa<MmaEncodingAttr>() &&
+         "Currently, we only support $c with a mma layout.");
+  auto structTy = llTensor.getType().cast<LLVM::LLVMStructType>();
+  assert(structTy.getBody().size() == accSize &&
+         "DotOp's $c operand should pass the same number of values as $d in "
+         "mma layout.");
+  return llTensor;
+}
+
+DotOpMFMAConversionHelper::ValueTable
+DotOpMFMAConversionHelper::getValuesFromDotOperandLayoutStruct(Value value,
+                                                               int n0,
+                                                               int n1) const {
+  auto elems = getElementsFromStruct(loc, value, rewriter);
+
+  int offset = 0;
+  ValueTable vals;
+  for (int i = 0; i < n0; i++) {
+    for (int j = 0; j < n1; j++) {
+      vals[{i, j}] = elems[offset++];
+    }
+  }
+  return vals;
+}
+
+LogicalResult DotOpMFMAConversionHelper::convertDot(
+    Value a, Value b, Value c, Value d, Value loadedA, Value loadedB,
+    Value loadedC, DotOp op, DotOpAdaptor adaptor) const {
+  auto aTensorTy = a.getType().cast<RankedTensorType>();
+  auto dTensorTy = d.getType().cast<RankedTensorType>();
+
+  SmallVector<int64_t> aShape(aTensorTy.getShape().begin(),
+                              aTensorTy.getShape().end());
+
+  auto dShape = dTensorTy.getShape();
+
+  int numRepM = getNumRepM(aTensorTy, dShape[0]);
+  int numRepN = getNumRepN(aTensorTy, dShape[1]);
+  int numRepK = getNumRepK(aTensorTy, aShape[1]);
+  ValueTable ha =
+      getValuesFromDotOperandLayoutStruct(loadedA, numRepM, numRepK);
+  ValueTable hb =
+      getValuesFromDotOperandLayoutStruct(loadedB, numRepN, numRepK);
+
+  SmallVector<Value> accValues;
+  auto vecTy = vec_ty(dTensorTy, 16);
+  for (int m = 0; m < numRepM; ++m) {
+    for (int n = 0; n < numRepN; ++n) {
+      Value acc = undef(vecTy);
+      for (unsigned v = 0; v < 16; ++v) {
+        Value _0 = dTensorTy.isF32() ? f32_val(0) : i32_val(0);
+        acc = insert_element(vecTy, acc, _0, idx_val(v));
+      }
+      for (size_t k = 0; k < numRepK; k++) {
+        acc = generateMFMAOp(ha[{m, k}], hb[{n, k}], acc);
+      }
+      accValues.push_back(acc);
+    }
+  }
+  // Type resElemTy = dTensorTy.getElementType();
+
+  // replace with new packed result
+  Type structTy = LLVM::LLVMStructType::getLiteral(
+      ctx, SmallVector<Type>(accValues.size(), vecTy));
+  Value res = getStructFromElements(loc, accValues, rewriter, structTy);
+  rewriter.replaceOp(op, res);
+
+  return success();
+}
+
 } // namespace LLVM
 } // namespace mlir

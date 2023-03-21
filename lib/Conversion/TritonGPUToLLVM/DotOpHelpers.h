@@ -11,6 +11,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -625,6 +626,186 @@ struct DotOpFMAConversionHelper {
         order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
     return isM ? mSizePerThread : nSizePerThread;
   }
+};
+
+struct DotOpMFMAConversionHelper {
+  enum class MatrixCoreType : uint8_t {
+    // D = AB + C
+    FP32_FP16_FP16_FP32 = 0, // default
+    FP32_BF16_BF16_FP32,
+    FP32_FP32_FP32_FP32,
+    FP64_FP64_FP64_FP64,
+    INT32_INT8_INT8_INT32,
+    NOT_APPLICABLE,
+  };
+
+  MmaEncodingAttr mmaLayout;
+  ArrayRef<unsigned int> wpt;
+
+  Value thread, lane, wave;
+
+  ConversionPatternRewriter &rewriter;
+  Location loc;
+  MLIRContext *ctx{};
+
+  using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
+  explicit DotOpMFMAConversionHelper(Type dotOperand, MmaEncodingAttr mmaLayout,
+                                     Value thread,
+                                     ConversionPatternRewriter &rewriter,
+                                     TypeConverter *typeConverter, Location loc)
+      : mmaLayout(mmaLayout), wpt(mmaLayout.getWarpsPerCTA()), thread(thread),
+        rewriter(rewriter), typeConverter(typeConverter), loc(loc),
+        ctx(mmaLayout.getContext()) {
+    deduceMFMAType(dotOperand);
+    Value waveSize = i32_val(64);
+    lane = urem(thread, waveSize);
+    wave = udiv(thread, waveSize);
+  }
+
+  void deduceMFMAType(DotOp op) const { mfmaType = getMFMAType(op); }
+  void deduceMFMAType(Type operandTy) const {
+    mfmaType = getMatrixCoreTypeFromOperand(operandTy);
+  }
+
+  ArrayRef<int> getMFMAInstrShape() const {
+    assert(mfmaType != MatrixCoreType::NOT_APPLICABLE &&
+           "Unknown MFMA type found.");
+    return mfmaInstrShape.at(mfmaType);
+  }
+
+  // Get the M and N of MFMA instruction shape.
+  static std::tuple<int, int> getInstrShapeMN() { return {32, 32}; }
+
+  static std::tuple<int, int> getRepMN(const RankedTensorType &tensorTy);
+
+  Type getShemPtrTy() const;
+
+  Type getLoadElemTy();
+
+  Type getMRetType() const;
+
+  llvm::SmallVector<Value> computeOffsetsA(Value waveM, Value laneId,
+                                           int numOfElems, int numM, int numK,
+                                           Value cSwizzleOffset) const;
+  llvm::SmallVector<Value> computeOffsetsB(Value waveN, Value laneId,
+                                           int numOfElems, int numK, int numN,
+                                           Value cSwizzleOffset) const;
+
+  Value generateMFMAOp(Value valA, Value valB, Value valC) const;
+
+  static ArrayRef<int> getMFMAInstrShape(MatrixCoreType matrixCoreType) {
+    assert(matrixCoreType != MatrixCoreType::NOT_APPLICABLE &&
+           "Unknown MFMA type found.");
+    return mfmaInstrShape.at(matrixCoreType);
+  }
+
+  // Deduce the MatrixCoreType from either $a or $b's type.
+  static MatrixCoreType getMatrixCoreTypeFromOperand(Type operandTy);
+
+  static MatrixCoreType getMFMAType(triton::DotOp op);
+
+  std::tuple<int, int, int> getMFMAInstrShape(Type operand) const {
+    deduceMFMAType(operand);
+    auto instrShape = getMFMAInstrShape();
+    int instrM = instrShape[0];
+    int instrN = instrShape[1];
+    int instrK = instrShape[2];
+    return std::make_tuple(instrM, instrN, instrK);
+  }
+
+  // \param operand is either $a or $b's type.
+  inline int getNumRepM(Type operand, int M) const {
+    return getNumRepM(operand, M, wpt[0]);
+  }
+
+  // \param operand is either $a or $b's type.
+  inline int getNumRepN(Type operand, int N) const {
+    return getNumRepN(operand, N, wpt[1]);
+  }
+
+  // \param operand is either $a or $b's type.
+  inline int getNumRepK(Type operand, int K) const {
+    return getNumRepK_(operand, K);
+  }
+
+  static int getNumRepM(Type operand, int M, int wpt) {
+    auto matrixCoreType = getMatrixCoreTypeFromOperand(operand);
+    int instrM = getMFMAInstrShape(matrixCoreType)[0];
+    return std::max<int>(M / (wpt * instrM), 1);
+  }
+
+  static int getNumRepN(Type operand, int N, int wpt) {
+    auto matrixCoreType = getMatrixCoreTypeFromOperand(operand);
+    int instrN = getMFMAInstrShape(matrixCoreType)[1];
+    return std::max<int>(N / (wpt * instrN), 1);
+  }
+
+  static int getNumRepK_(Type operand, int K) {
+    auto matrixCoreType = getMatrixCoreTypeFromOperand(operand);
+    int instrK = getMFMAInstrShape(matrixCoreType)[2];
+    return std::max<int>(K / instrK, 1);
+  }
+
+  int getNumOfElems(Type operand) const {
+    auto matrixCoreType = getMatrixCoreTypeFromOperand(operand);
+    int instrM = getMFMAInstrShape(matrixCoreType)[0];
+    int instrK = getMFMAInstrShape(matrixCoreType)[2];
+    return std::max<int>(instrM * instrK / 64, 1);
+  }
+
+  int getNumOfElems() const {
+    int instrM = getMFMAInstrShape(mfmaType)[0];
+    int instrK = getMFMAInstrShape(mfmaType)[2];
+    return std::max<int>(instrM * instrK / 64, 1);
+  }
+
+  // Get a waveId for M axis.
+  Value getWaveM(int M) const {
+    auto instrShape = getMFMAInstrShape();
+    return urem(urem(wave, i32_val(wpt[0])), i32_val(M / instrShape[0]));
+  }
+
+  // Get a waveId for N axis.
+  Value getWaveN(int N) const {
+    auto instrShape = getMFMAInstrShape();
+    Value waveMN = udiv(wave, i32_val(wpt[0]));
+    return urem(urem(waveMN, i32_val(wpt[1])), i32_val(N / instrShape[1]));
+  }
+
+  // Loading $a from lds to registers, returns a LLVM::Struct.
+  Value loadA(Value tensor, const SharedMemoryObject &smemObj) const;
+
+  // Loading $b from lds to registers, returns a LLVM::Struct.
+  Value loadB(Value tensor, const SharedMemoryObject &smemObj) const;
+
+  // Loading $c to registers, returns a Value.
+  Value loadC(Value tensor, Value llTensor) const;
+
+  // Conduct the Dot conversion.
+  // \param a, \param b, \param c and \param d are DotOp operands.
+  // \param loadedA, \param loadedB, \param loadedC, all of them are result of
+  // loading.
+  LogicalResult convertDot(Value a, Value b, Value c, Value d, Value loadedA,
+                           Value loadedB, Value loadedC, DotOp op,
+                           DotOpAdaptor adaptor) const;
+
+  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0,
+                                                 int n1) const;
+  TypeConverter *getTypeConverter() const { return typeConverter; }
+
+private:
+  TypeConverter *typeConverter;
+  mutable MatrixCoreType mfmaType{MatrixCoreType::NOT_APPLICABLE};
+
+  // Used on AMDGPU mma layout .version == 3
+  inline static const std::map<MatrixCoreType, llvm::SmallVector<int>>
+      mfmaInstrShape = { // m, n, k
+          {MatrixCoreType::FP32_FP16_FP16_FP32, {32, 32, 8}},
+          {MatrixCoreType::FP32_BF16_BF16_FP32, {32, 32, 4}},
+          {MatrixCoreType::FP32_FP32_FP32_FP32, {32, 32, 2}},
+
+          {MatrixCoreType::INT32_INT8_INT8_INT32, {32, 32, 8}},
+          {MatrixCoreType::FP64_FP64_FP64_FP64, {16, 16, 4}}};
 };
 
 } // namespace LLVM

@@ -3,6 +3,7 @@
 #include "Utility.h"
 
 using ::mlir::LLVM::DotOpFMAConversionHelper;
+using ::mlir::LLVM::DotOpMFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
 using ::mlir::LLVM::getElementsFromStruct;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
@@ -125,6 +126,10 @@ private:
         mmaColIdx[1] = add(mmaThreadIdInGrpM2P1, colWarpOffset);
       } else if (mmaLayout.isVolta()) {
         // Volta doesn't follow the pattern here."
+#ifdef USE_ROCM
+      } else if (mmaLayout.isMI200()) {
+        llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
+#endif
       } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
@@ -145,6 +150,10 @@ private:
             threadId, rewriter, mmaLayout.getWarpsPerCTA(), shape, isARow,
             isBRow, isAVec4, isBVec4);
         return DotOpMmaV1ConversionHelper::getCoord(elemId, coords);
+#ifdef USE_ROCM
+      } else if (mmaLayout.isMI200()) {
+        llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
+#endif
       } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
@@ -647,6 +656,20 @@ private:
         res = helper.loadB(src, smemObj, getThreadId(rewriter, loc), loc,
                            rewriter);
       }
+#ifdef USE_ROCM
+      // AMD MI200 matrix cores
+    } else if (!isOuter && mmaLayout.isMI200() && isHMMA) {
+      DotOpMFMAConversionHelper mfmaHelper(src.getType(), mmaLayout,
+                                       getThreadId(rewriter, loc), rewriter,
+                                       getTypeConverter(), op.getLoc());
+      if (dotOperandLayout.getOpIdx() == 0) {
+        // operand $a
+        res = mfmaHelper.loadA(src, smemObj);
+      } else if (dotOperandLayout.getOpIdx() == 1) {
+        // operand $b
+        res = mfmaHelper.loadB(src, smemObj);
+      }
+#endif
     } else {
       assert(false && "Unsupported mma layout found");
     }

@@ -140,6 +140,11 @@ public:
             return struct_ty(SmallVector<Type>(elems, x2Ty));
           }
         }
+
+#ifdef USE_ROCM
+        if (mmaLayout.isMI200())
+          llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
+#endif
       }
 
       llvm::errs() << "Unexpected dot operand layout detected in "

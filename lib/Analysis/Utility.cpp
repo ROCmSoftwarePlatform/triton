@@ -127,7 +127,7 @@ bool supportMMA(triton::DotOp op, int version) {
   // Tensor Core in
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
 #ifdef USE_ROCM
-  return false;
+  //return false;
 #endif
   auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
   auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
@@ -141,10 +141,13 @@ bool supportMMA(Value value, int version) {
   // Tell whether a DotOp support HMMA by the operand type(either $a or $b).
   // We cannot get both the operand types(in TypeConverter), here we assume the
   // types of both the operands are identical here.
+#ifdef USE_ROCM
+  // return false;
+  assert((version == 1 || version == 2 || version == 3) &&
+         "Unexpected MMA layout version found");
+#else
   assert((version == 1 || version == 2) &&
          "Unexpected MMA layout version found");
-#ifdef USE_ROCM
-  return false;
 #endif
   auto elemTy = value.getType().cast<RankedTensorType>().getElementType();
   return elemTy.isF16() || elemTy.isBF16() ||

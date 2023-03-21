@@ -6,6 +6,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::DotOpFMAConversionHelper;
+using ::mlir::LLVM::DotOpMFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
 using ::mlir::LLVM::getElementsFromStruct;
 using ::mlir::LLVM::getStructFromElements;
@@ -39,6 +40,11 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
         return convertMMA884(op, adaptor, rewriter);
       if (mmaLayout.isAmpere())
         return convertMMA16816(op, adaptor, rewriter);
+#ifdef USE_ROCM
+      if (mmaLayout.isMI200()) {
+        return convertMFMA(op, adaptor, rewriter);
+      }
+#endif
 
       llvm::report_fatal_error(
           "Unsupported MMA kind found when converting DotOp to LLVM.");
@@ -287,6 +293,39 @@ private:
     rewriter.replaceOp(op, res);
 
     return success();
+  }
+
+  LogicalResult convertMFMA(triton::DotOp op, OpAdaptor adaptor,
+                            ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto mmaLayout = op.getResult()
+                         .getType()
+                         .cast<RankedTensorType>()
+                         .getEncoding()
+                         .cast<MmaEncodingAttr>();
+
+    Value A = op.getA();
+    Value B = op.getB();
+    Value C = op.getC();
+
+    DotOpMFMAConversionHelper helper(A.getType(), mmaLayout,
+                                     getThreadId(rewriter, loc), rewriter,
+                                     getTypeConverter(), loc);
+
+    auto ATensorTy = A.getType().cast<RankedTensorType>();
+    auto BTensorTy = B.getType().cast<RankedTensorType>();
+
+    assert(ATensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
+           BTensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
+           "Both $a and %b should be DotOperand layout.");
+
+    Value loadedA, loadedB, loadedC;
+    loadedA = adaptor.getA();
+    loadedB = adaptor.getB();
+    loadedC = helper.loadC(op.getC(), adaptor.getC());
+
+    return helper.convertDot(A, B, C, op.getD(), loadedA, loadedB, loadedC, op,
+                             adaptor);
   }
 };
 
