@@ -1507,7 +1507,7 @@ DotOpMFMAConversionHelper::computeOffsetsA(Value waveM, Value laneId,
   Value colOffset = mul(waveHalf, i32_val(numOfElems));
 
   for (int block = 0; block < numM; ++block) {
-    Value blockOffset = mul(i32_val(block * mfmaShape[0] * lineSize));
+    Value blockOffset = i32_val(block * mfmaShape[0] * lineSize);
     for (int tile = 0; tile < numK; ++tile) {
       Value tileOffset = i32_val(tile * mfmaShape[2]);
       for (int elem = 0; elem < numOfElems; ++elem) {
@@ -1538,7 +1538,7 @@ DotOpMFMAConversionHelper::computeOffsetsB(Value waveN, Value laneId,
   Value colOffset = urem(laneId, _32);
 
   for (int block = 0; block < numN; ++block) {
-    Value blockOffset = mul(i32_val(block * mfmaShape[1]));
+    Value blockOffset = i32_val(block * mfmaShape[1]);
     for (int tile = 0; tile < numK; ++tile) {
       Value tileOffset = i32_val(tile * mfmaShape[2] * lineSize);
       for (int elem = 0; elem < numOfElems; ++elem) {
@@ -1580,7 +1580,7 @@ Value DotOpMFMAConversionHelper::loadA(
 
   for (int m = 0; m < numRepM; ++m) {
     for (int k = 0; k < numRepK; ++k) {
-      auto vecTy = vec_ty(aTensorTy, numOfElems);
+      auto vecTy = vec_ty(aTensorTy.getElementType(), numOfElems);
       Value valVec = undef(vecTy);
       for (unsigned elem = 0; elem < numOfElems; ++elem) {
         Value elemOffset = offsets[m * numRepK + k * numOfElems + elem];
@@ -1624,7 +1624,7 @@ Value DotOpMFMAConversionHelper::loadB(
 
   for (int n = 0; n < numRepN; ++n) {
     for (int k = 0; k < numRepK; ++k) {
-      auto vecTy = vec_ty(bTensorTy, numOfElems);
+      auto vecTy = vec_ty(bTensorTy.getElementType(), numOfElems);
       Value valVec = undef(vecTy);
       for (unsigned elem = 0; elem < numOfElems; ++elem) {
         Value elemOffset = offsets[n * numRepK + k * numOfElems + elem];
@@ -1702,12 +1702,12 @@ LogicalResult DotOpMFMAConversionHelper::convertDot(
       getValuesFromDotOperandLayoutStruct(loadedB, numRepN, numRepK);
 
   SmallVector<Value> accValues;
-  auto vecTy = vec_ty(dTensorTy, 16);
+  auto vecTy = vec_ty(dTensorTy.getElementType(), 16);
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
       Value acc = undef(vecTy);
       for (unsigned v = 0; v < 16; ++v) {
-        Value _0 = dTensorTy.isF32() ? f32_val(0) : i32_val(0);
+        Value _0 = dTensorTy.getElementType().isF32() ? f32_val(0) : i32_val(0);
         acc = insert_element(vecTy, acc, _0, idx_val(v));
       }
       for (size_t k = 0; k < numRepK; k++) {

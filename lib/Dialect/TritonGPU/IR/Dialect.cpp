@@ -398,7 +398,8 @@ unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   size_t rank = shape.size();
   assert(rank == 2 && "Unexpected rank of mma layout");
 #ifdef USE_ROCM
-  assert((isVolta() || isAmpere() || isMI200()) && "Only versions 1, 2 or 3 are supported");
+  assert((isVolta() || isAmpere() || isMI200()) &&
+         "Only versions 1, 2 or 3 are supported");
 #else
   assert((isVolta() || isAmpere()) && "Only version 1 and 2 is supported");
 #endif
@@ -424,7 +425,9 @@ unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
     res = elemsCol * elemsRow;
 #ifdef USE_ROCM
   } else if (isMI200()) {
-    llvm_unreachable("if (isMI200()) not implemented");
+    unsigned elemsCol = ceil<unsigned>(shape[0], 32 * getWarpsPerCTA()[0]) * 2;
+    unsigned elemsRow = ceil<unsigned>(shape[1], 32 * getWarpsPerCTA()[1]) * 2;
+    res = elemsCol * elemsRow;
 #endif
   } else {
     llvm_unreachable("Unexpected mma version");

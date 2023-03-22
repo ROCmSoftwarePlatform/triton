@@ -678,6 +678,24 @@ struct DotOpMFMAConversionHelper {
 
   static std::tuple<int, int> getRepMN(const RankedTensorType &tensorTy);
 
+  // Get number of elements per thread for $a operand.
+  static size_t getANumElemsPerThread(RankedTensorType operand, int wpt) {
+    auto shape = operand.getShape();
+    int numOfElem = getNumOfElems(operand);
+    int repM = getNumRepM(operand, shape[0], wpt);
+    int repK = getNumRepK_(operand, shape[1]);
+    return repM * repK;
+  }
+
+  // Get number of elements per thread for $b operand.
+  static size_t getBNumElemsPerThread(RankedTensorType operand, int wpt) {
+    auto shape = operand.getShape();
+    int numOfElem = getNumOfElems(operand);
+    int repK = getNumRepK_(operand, shape[0]);
+    int repN = getNumRepN(operand, shape[1], wpt);
+    return repN * repK;
+  }
+
   Type getShemPtrTy() const;
 
   Type getLoadElemTy();
@@ -746,7 +764,7 @@ struct DotOpMFMAConversionHelper {
     return std::max<int>(K / instrK, 1);
   }
 
-  int getNumOfElems(Type operand) const {
+  static int getNumOfElems(Type operand) {
     auto matrixCoreType = getMatrixCoreTypeFromOperand(operand);
     int instrM = getMFMAInstrShape(matrixCoreType)[0];
     int instrK = getMFMAInstrShape(matrixCoreType)[2];
