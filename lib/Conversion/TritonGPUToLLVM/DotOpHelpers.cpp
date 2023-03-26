@@ -1654,8 +1654,7 @@ Value DotOpMFMAConversionHelper::loadC(Value tensor, Value llTensor) const {
   int repM = std::max<int>(M / (wpt[0] * instrM), 1);
   int repN = std::max<int>(N / (wpt[1] * instrN), 1);
 
-  int numOfElems = DotOpMFMAConversionHelper::getNumOfElems();
-  size_t accSize = numOfElems * repM * repN;
+  size_t accSize = 16 * repM * repN;
 
   assert(tensorTy.getEncoding().isa<MmaEncodingAttr>() &&
          "Currently, we only support $c with a mma layout.");
@@ -1701,27 +1700,34 @@ LogicalResult DotOpMFMAConversionHelper::convertDot(
   ValueTable hb =
       getValuesFromDotOperandLayoutStruct(loadedB, numRepN, numRepK);
 
-  SmallVector<Value> accValues;
-  auto vecTy = vec_ty(dTensorTy.getElementType(), 16);
+  auto fc = getElementsFromStruct(loc, loadedC, rewriter);
+  auto dstElemTy = dTensorTy.getElementType();
+
+  auto vecTy = vec_ty(dstElemTy, 16);
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
       Value acc = undef(vecTy);
       for (unsigned v = 0; v < 16; ++v) {
-        Value _0 = dTensorTy.getElementType().isF32() ? f32_val(0) : i32_val(0);
-        acc = insert_element(vecTy, acc, _0, idx_val(v));
+        acc = insert_element(vecTy, acc, fc[m * numRepN + n * 16 + v],
+                             idx_val(v));
       }
+
       for (size_t k = 0; k < numRepK; k++) {
         acc = generateMFMAOp(ha[{m, k}], hb[{n, k}], acc);
       }
-      accValues.push_back(acc);
+
+      for (unsigned v = 0; v < 16; ++v) {
+        fc[m * numRepN + n * 16 + v] =
+            extract_element(dstElemTy, acc, idx_val(v));
+      }
     }
   }
   // Type resElemTy = dTensorTy.getElementType();
 
   // replace with new packed result
   Type structTy = LLVM::LLVMStructType::getLiteral(
-      ctx, SmallVector<Type>(accValues.size(), vecTy));
-  Value res = getStructFromElements(loc, accValues, rewriter, structTy);
+      ctx, SmallVector<Type>(fc.size(), dstElemTy));
+  Value res = getStructFromElements(loc, fc, rewriter, structTy);
   rewriter.replaceOp(op, res);
 
   return success();

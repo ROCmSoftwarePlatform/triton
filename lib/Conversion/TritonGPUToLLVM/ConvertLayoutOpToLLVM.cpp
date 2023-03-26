@@ -566,39 +566,58 @@ private:
           this->getTypeConverter()->convertType(srcTy.getElementType());
       // for the destination type, we need to pack values together
       // so they can be consumed by tensor core operations
-      unsigned vecSize =
-          std::max<unsigned>(32 / elemTy.getIntOrFloatBitWidth(), 1);
-      Type vecTy = vec_ty(elemTy, vecSize);
-      SmallVector<Type> types(elems / vecSize, vecTy);
-      SmallVector<Value> vecVals;
-      for (unsigned i = 0; i < elems; i += vecSize) {
-        Value packed = rewriter.create<LLVM::UndefOp>(loc, vecTy);
-        for (unsigned j = 0; j < vecSize; j++)
-          packed = insert_element(vecTy, packed, vals[i + j], i32_val(j));
-        vecVals.push_back(packed);
+      unsigned vecSize;
+      if (srcMmaLayout.isMI200()) {
+        vecSize = 16;
+        Type vecTy = vec_ty(elemTy, vecSize);
+        SmallVector<Type> types(elems / vecSize, vecTy);
+        SmallVector<Value> vecVals;
+        for (unsigned i = 0; i < elems; i += vecSize) {
+          Value packed = rewriter.create<LLVM::UndefOp>(loc, vecTy);
+          for (unsigned j = 0; j < vecSize; j++)
+            packed = insert_element(vecTy, packed, vals[i + j], i32_val(j));
+          vecVals.push_back(packed);
+        }
+        Type structTy =
+            LLVM::LLVMStructType::getLiteral(this->getContext(), types);
+        Value view =
+            getStructFromElements(loc, vecVals, rewriter, structTy);
+        rewriter.replaceOp(op, view);
+        return success();
+      } else {
+        vecSize = std::max<unsigned>(32 / elemTy.getIntOrFloatBitWidth(), 1);
+        Type vecTy = vec_ty(elemTy, vecSize);
+        SmallVector<Type> types(elems / vecSize, vecTy);
+        SmallVector<Value> vecVals;
+        for (unsigned i = 0; i < elems; i += vecSize) {
+          Value packed = rewriter.create<LLVM::UndefOp>(loc, vecTy);
+          for (unsigned j = 0; j < vecSize; j++)
+            packed = insert_element(vecTy, packed, vals[i + j], i32_val(j));
+          vecVals.push_back(packed);
+        }
+
+        // This needs to be ordered the same way that
+        // ldmatrix.x4 would order it
+        // TODO: this needs to be refactor so we don't
+        // implicitly depends on how emitOffsetsForMMAV2
+        // is implemented
+        SmallVector<Value> reorderedVals;
+        for (unsigned i = 0; i < vecVals.size(); i += 4) {
+          reorderedVals.push_back(vecVals[i]);
+          reorderedVals.push_back(vecVals[i + 2]);
+          reorderedVals.push_back(vecVals[i + 1]);
+          reorderedVals.push_back(vecVals[i + 3]);
+        }
+
+        // return composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
+
+        Type structTy =
+            LLVM::LLVMStructType::getLiteral(this->getContext(), types);
+        Value view =
+            getStructFromElements(loc, reorderedVals, rewriter, structTy);
+        rewriter.replaceOp(op, view);
+        return success();
       }
-
-      // This needs to be ordered the same way that
-      // ldmatrix.x4 would order it
-      // TODO: this needs to be refactor so we don't
-      // implicitly depends on how emitOffsetsForMMAV2
-      // is implemented
-      SmallVector<Value> reorderedVals;
-      for (unsigned i = 0; i < vecVals.size(); i += 4) {
-        reorderedVals.push_back(vecVals[i]);
-        reorderedVals.push_back(vecVals[i + 2]);
-        reorderedVals.push_back(vecVals[i + 1]);
-        reorderedVals.push_back(vecVals[i + 3]);
-      }
-
-      // return composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
-
-      Type structTy =
-          LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-      Value view =
-          getStructFromElements(loc, reorderedVals, rewriter, structTy);
-      rewriter.replaceOp(op, view);
-      return success();
     }
     return failure();
   }
@@ -660,8 +679,8 @@ private:
       // AMD MI200 matrix cores
     } else if (!isOuter && mmaLayout.isMI200() && isHMMA) {
       DotOpMFMAConversionHelper mfmaHelper(src.getType(), mmaLayout,
-                                       getThreadId(rewriter, loc), rewriter,
-                                       getTypeConverter(), op.getLoc());
+                                           getThreadId(rewriter, loc), rewriter,
+                                           getTypeConverter(), op.getLoc());
       if (dotOperandLayout.getOpIdx() == 0) {
         // operand $a
         res = mfmaHelper.loadA(src, smemObj);
