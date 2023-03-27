@@ -92,7 +92,7 @@ private:
     }
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
       SmallVector<Value> mmaColIdx(4);
-      SmallVector<Value> mmaRowIdx(2);
+      SmallVector<Value> mmaRowIdx(16);
       Value threadId = getThreadId(rewriter, loc);
 #ifdef USE_ROCM
       Value warpSize = idx_val(64);
@@ -110,6 +110,7 @@ private:
       Value _4 = idx_val(4);
       Value _8 = idx_val(8);
       Value _16 = idx_val(16);
+      Value _32 = idx_val(32);
       if (mmaLayout.isAmpere()) {
         multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
         multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 8));
@@ -128,7 +129,20 @@ private:
         // Volta doesn't follow the pattern here."
 #ifdef USE_ROCM
       } else if (mmaLayout.isMI200()) {
-        llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
+        multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 32));
+        multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 32));
+        Value halfOffset = mul(udiv(laneId, _32), _4);
+        Value mfmaGroup32 = urem(laneId, _32);
+        Value rowWarpOffset = mul(multiDimWarpId[0], _32);
+        for (unsigned block = 0; block < 4; ++block) {
+          mmaRowIdx[4 * block] = block == 0 ? add(halfOffset, rowWarpOffset)
+                                            : mmaRowIdx[4 * (block - 1)];
+          for (int r = 1; r < 4; ++r) {
+            mmaRowIdx[4 * block + r] = add(mmaRowIdx[4 * block + r - 1], _1);
+          }
+        }
+        Value colWarpOffset = mul(multiDimWarpId[1], _32);
+        mmaColIdx[0] = add(mfmaGroup32, colWarpOffset);
 #endif
       } else {
         llvm_unreachable("Unexpected MMALayout version");
@@ -152,7 +166,12 @@ private:
         return DotOpMmaV1ConversionHelper::getCoord(elemId, coords);
 #ifdef USE_ROCM
       } else if (mmaLayout.isMI200()) {
-        llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
+        multiDimOffset[0] = mmaRowIdx[elemId % 16];
+        multiDimOffset[1] = mmaColIdx[0];
+        multiDimOffset[0] = add(
+            multiDimOffset[0], idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
+        multiDimOffset[1] = add(
+            multiDimOffset[1], idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
 #endif
       } else {
         llvm_unreachable("Unexpected MMALayout version");
@@ -580,8 +599,7 @@ private:
         }
         Type structTy =
             LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-        Value view =
-            getStructFromElements(loc, vecVals, rewriter, structTy);
+        Value view = getStructFromElements(loc, vecVals, rewriter, structTy);
         rewriter.replaceOp(op, view);
         return success();
       } else {

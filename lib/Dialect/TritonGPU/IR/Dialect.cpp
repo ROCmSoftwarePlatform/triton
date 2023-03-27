@@ -129,8 +129,19 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");
     if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingAttr>()) {
 #ifdef USE_ROCM
-      if (mmaLayout.isMI200())
-        llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
+      if (mmaLayout.isMI200()) {
+        auto parentShapePerCTA = getShapePerCTA(parentLayout);
+        auto opIdx = dotLayout.getOpIdx();
+        if (opIdx == 0) {
+          return {4, 1};
+        } else if (opIdx == 1) {
+          return {1, 4};
+        } else {
+          assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
+          return {};
+        }
+      }
+
 #endif
       assert(parentMmaLayout.isAmpere() &&
              "mmaLayout version = 1 is not implemented yet");
@@ -155,11 +166,12 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
   }
 }
 
-SmallVector<unsigned> getContigPerThread(const Attribute &layout) {
+SmallVector<unsigned>  getContigPerThread(const Attribute &layout) {
   if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
 #ifdef USE_ROCM
     if (mmaLayout.isMI200())
-      llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
+      return {4, 1};
+      // llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
 #endif
     assert(mmaLayout.isVolta() || mmaLayout.isAmpere());
     return {1, 2};
@@ -178,6 +190,10 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
     if (mmaLayout.getVersionMajor() == 2) {
       threads = {8 * mmaLayout.getWarpsPerCTA()[0],
                  4 * mmaLayout.getWarpsPerCTA()[1]};
+    }
+    if (mmaLayout.getVersionMajor() == 3) {
+      threads = {32 * mmaLayout.getWarpsPerCTA()[0],
+                 2 * mmaLayout.getWarpsPerCTA()[1]};
     } else
       assert(0 && "Unimplemented usage of MmaEncodingAttr");
   } else {
@@ -217,7 +233,8 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout,
     }
 #ifdef USE_ROCM
     if (mmaLayout.isMI200())
-      llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
+      return {32 * mmaLayout.getWarpsPerCTA()[0],
+              32 * mmaLayout.getWarpsPerCTA()[1]};
 #endif
     assert(0 && "Unexpected MMA layout version found");
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
@@ -425,9 +442,9 @@ unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
     res = elemsCol * elemsRow;
 #ifdef USE_ROCM
   } else if (isMI200()) {
-    unsigned elemsCol = ceil<unsigned>(shape[0], 32 * getWarpsPerCTA()[0]) * 2;
-    unsigned elemsRow = ceil<unsigned>(shape[1], 32 * getWarpsPerCTA()[1]) * 2;
-    res = elemsCol * elemsRow;
+    unsigned elemsCol = ceil<unsigned>(shape[0], 32 * getWarpsPerCTA()[0]);
+    unsigned elemsRow = ceil<unsigned>(shape[1], 32 * getWarpsPerCTA()[1]);
+    res = elemsCol * elemsRow * 16;
 #endif
   } else {
     llvm_unreachable("Unexpected mma version");

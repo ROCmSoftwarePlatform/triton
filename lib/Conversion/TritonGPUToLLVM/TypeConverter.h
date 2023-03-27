@@ -146,14 +146,13 @@ public:
         if (mmaLayout.isMI200()) {
           const llvm::DenseMap<int, Type> targetTyMap = {
               {32, vec_ty(elemTy, 1)},
-              {16, vec_ty(elemTy, 8)},
-              {8, vec_ty(elemTy, 8)},
+              {16, vec_ty(elemTy, 4)},
+              {8, vec_ty(elemTy, 4)},
           };
           Type targetTy = targetTyMap.lookup(elemTy.getIntOrFloatBitWidth());
           if (dotOpLayout.getOpIdx() == 0) { // $a
             auto elems =
                 DotOpMFMAConversionHelper::getANumElemsPerThread(type, wpt[0]);
-
             return struct_ty(SmallVector<Type>(elems, targetTy));
           }
           if (dotOpLayout.getOpIdx() == 1) { // $b
