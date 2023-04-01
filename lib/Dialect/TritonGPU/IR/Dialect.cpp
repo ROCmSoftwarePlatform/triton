@@ -170,7 +170,7 @@ SmallVector<unsigned>  getContigPerThread(const Attribute &layout) {
   if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
 #ifdef USE_ROCM
     if (mmaLayout.isMI200())
-      return {4, 1};
+      return {1, 1};
       // llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
 #endif
     assert(mmaLayout.isVolta() || mmaLayout.isAmpere());

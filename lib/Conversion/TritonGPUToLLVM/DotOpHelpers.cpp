@@ -1499,12 +1499,12 @@ DotOpMFMAConversionHelper::computeOffsetsA(Value waveM, Value laneId,
   auto mfmaShape = getMFMAInstrShape();
   int lineSize = mfmaShape[2] * numK;
   int blockSize = mfmaShape[0] * numM * lineSize;
-
+  Value _0 = i32_val(0);
   Value _32 = i32_val(32);
   Value waveHalf = udiv(laneId, _32);
 
   Value waveOffset = mul(waveM, i32_val(blockSize));
-  Value colOffset = mul(waveHalf, i32_val(numOfElems));
+  Value colOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
 
   for (int block = 0; block < numM; ++block) {
     Value blockOffset = i32_val(block * mfmaShape[0] * lineSize);
@@ -1516,7 +1516,7 @@ DotOpMFMAConversionHelper::computeOffsetsA(Value waveM, Value laneId,
         Value elemOffset = add(rowOffset, colOffset);
         Value offset =
             add(add(add(waveOffset, blockOffset), tileOffset), elemOffset);
-        offsets[numK * block + numOfElems * tile + elem] = offset;
+        offsets[numK * numOfElems * block + numOfElems * tile + elem] = offset;
       }
     }
   }
@@ -1531,8 +1531,8 @@ DotOpMFMAConversionHelper::computeOffsetsB(Value waveN, Value laneId,
   auto mfmaShape = getMFMAInstrShape();
 
   int lineSize = wpt[1] * mfmaShape[1] * numN;
+  Value _0 = i32_val(0);
   Value _32 = i32_val(32);
-  Value waveHalf = udiv(laneId, _32);
 
   Value waveOffset = mul(waveN, i32_val(mfmaShape[1] * numN));
   Value colOffset = urem(laneId, _32);
@@ -1542,12 +1542,13 @@ DotOpMFMAConversionHelper::computeOffsetsB(Value waveN, Value laneId,
     for (int tile = 0; tile < numK; ++tile) {
       Value tileOffset = i32_val(tile * mfmaShape[2] * lineSize);
       for (int elem = 0; elem < numOfElems; ++elem) {
-        Value rowOffset = add(i32_val(elem * lineSize),
-                              mul(waveHalf, i32_val(numOfElems * lineSize)));
+        Value halfOffset =
+            select(icmp_uge(laneId, _32), i32_val(numOfElems * lineSize), _0);
+        Value rowOffset = add(i32_val(elem * lineSize), halfOffset);
         Value elemOffset = add(rowOffset, colOffset);
         Value offset =
             add(add(add(waveOffset, blockOffset), tileOffset), elemOffset);
-        offsets[numK * block + numOfElems * tile + elem] = offset;
+        offsets[numK * numOfElems * block + numOfElems * tile + elem] = offset;
       }
     }
   }
@@ -1583,7 +1584,7 @@ Value DotOpMFMAConversionHelper::loadA(
       auto vecTy = vec_ty(aTensorTy.getElementType(), numOfElems);
       Value valVec = undef(vecTy);
       for (unsigned elem = 0; elem < numOfElems; ++elem) {
-        Value elemOffset = offsets[m * numRepK + k * numOfElems + elem];
+        Value elemOffset = offsets[m * numOfElems * numRepK + k * numOfElems + elem];
         Value elemValue = load(gep(smemPtrTy, smemBase, elemOffset));
         valVec = insert_element(vecTy, valVec, elemValue, idx_val(elem));
       }
@@ -1627,7 +1628,7 @@ Value DotOpMFMAConversionHelper::loadB(
       auto vecTy = vec_ty(bTensorTy.getElementType(), numOfElems);
       Value valVec = undef(vecTy);
       for (unsigned elem = 0; elem < numOfElems; ++elem) {
-        Value elemOffset = offsets[n * numRepK + k * numOfElems + elem];
+        Value elemOffset = offsets[n * numOfElems * numRepK + k * numOfElems + elem];
         Value elemValue = load(gep(smemPtrTy, smemBase, elemOffset));
         valVec = insert_element(vecTy, valVec, elemValue, idx_val(elem));
       }
@@ -1670,12 +1671,10 @@ DotOpMFMAConversionHelper::getValuesFromDotOperandLayoutStruct(Value value,
                                                                int n0,
                                                                int n1) const {
   auto elems = getElementsFromStruct(loc, value, rewriter);
-
-  int offset = 0;
   ValueTable vals;
   for (int i = 0; i < n0; i++) {
     for (int j = 0; j < n1; j++) {
-      vals[{i, j}] = elems[offset++];
+      vals[{i, j}] = elems[n1 * i + j];
     }
   }
   return vals;
@@ -1702,22 +1701,20 @@ LogicalResult DotOpMFMAConversionHelper::convertDot(
 
   auto fc = getElementsFromStruct(loc, loadedC, rewriter);
   auto dstElemTy = dTensorTy.getElementType();
-
   auto vecTy = vec_ty(dstElemTy, 16);
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
       Value acc = undef(vecTy);
       for (unsigned v = 0; v < 16; ++v) {
-        acc = insert_element(vecTy, acc, fc[m * numRepN + n * 16 + v],
+        acc = insert_element(vecTy, acc, fc[m * numRepN * 16 + n * 16 + v],
                              idx_val(v));
       }
 
       for (size_t k = 0; k < numRepK; k++) {
         acc = generateMFMAOp(ha[{m, k}], hb[{n, k}], acc);
       }
-
       for (unsigned v = 0; v < 16; ++v) {
-        fc[m * numRepN + n * 16 + v] =
+        fc[m * numRepN * 16 + n * 16 + v] =
             extract_element(dstElemTy, acc, idx_val(v));
       }
     }

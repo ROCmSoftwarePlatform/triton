@@ -105,6 +105,7 @@ private:
       SmallVector<Value> multiDimWarpId(2);
       multiDimWarpId[0] = urem(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
       multiDimWarpId[1] = udiv(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
+      Value _0 = idx_val(0);
       Value _1 = idx_val(1);
       Value _2 = idx_val(2);
       Value _4 = idx_val(4);
@@ -131,12 +132,13 @@ private:
       } else if (mmaLayout.isMI200()) {
         multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 32));
         multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 32));
-        Value halfOffset = mul(udiv(laneId, _32), _4);
+        Value halfOffset = select(icmp_uge(laneId, _32), _4, _0);
         Value mfmaGroup32 = urem(laneId, _32);
         Value rowWarpOffset = mul(multiDimWarpId[0], _32);
         for (unsigned block = 0; block < 4; ++block) {
-          mmaRowIdx[4 * block] = block == 0 ? add(halfOffset, rowWarpOffset)
-                                            : mmaRowIdx[4 * (block - 1)];
+          mmaRowIdx[4 * block] = block == 0
+                                     ? add(halfOffset, rowWarpOffset)
+                                     : add(mmaRowIdx[4 * (block - 1)], _8);
           for (int r = 1; r < 4; ++r) {
             mmaRowIdx[4 * block + r] = add(mmaRowIdx[4 * block + r - 1], _1);
           }
@@ -167,6 +169,7 @@ private:
 #ifdef USE_ROCM
       } else if (mmaLayout.isMI200()) {
         multiDimOffset[0] = mmaRowIdx[elemId % 16];
+
         multiDimOffset[1] = mmaColIdx[0];
         multiDimOffset[0] = add(
             multiDimOffset[0], idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
