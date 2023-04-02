@@ -127,15 +127,19 @@ bool supportMMA(triton::DotOp op, int version) {
   // Tensor Core in
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
 #ifdef USE_ROCM
-  //return false;
+  // return false;
 #endif
   auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
   auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
+  auto aOrder = triton::gpu::getOrder(
+      op.getA().getType().cast<RankedTensorType>().getEncoding());
+  auto bOrder = triton::gpu::getOrder(
+      op.getB().getType().cast<RankedTensorType>().getEncoding());
+  if (aOrder[1] == 0 || bOrder[1] == 0)
+    return false;
   if (aElemTy.isF32() && bElemTy.isF32()) {
-    return (op.getAllowTF32() && version == 2) || (!op.getAllowTF32() && version == 3);
-  }
-  if (aElemTy.isF32() && bElemTy.isF32()) {
-    
+    return (op.getAllowTF32() && version == 2) ||
+           (!op.getAllowTF32() && version == 3);
   }
   return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }
