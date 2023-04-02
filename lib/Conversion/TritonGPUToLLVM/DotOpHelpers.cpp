@@ -1584,7 +1584,8 @@ Value DotOpMFMAConversionHelper::loadA(
       auto vecTy = vec_ty(aTensorTy.getElementType(), numOfElems);
       Value valVec = undef(vecTy);
       for (unsigned elem = 0; elem < numOfElems; ++elem) {
-        Value elemOffset = offsets[m * numOfElems * numRepK + k * numOfElems + elem];
+        Value elemOffset =
+            offsets[m * numOfElems * numRepK + k * numOfElems + elem];
         Value elemValue = load(gep(smemPtrTy, smemBase, elemOffset));
         valVec = insert_element(vecTy, valVec, elemValue, idx_val(elem));
       }
@@ -1628,7 +1629,8 @@ Value DotOpMFMAConversionHelper::loadB(
       auto vecTy = vec_ty(bTensorTy.getElementType(), numOfElems);
       Value valVec = undef(vecTy);
       for (unsigned elem = 0; elem < numOfElems; ++elem) {
-        Value elemOffset = offsets[n * numOfElems * numRepK + k * numOfElems + elem];
+        Value elemOffset =
+            offsets[n * numOfElems * numRepK + k * numOfElems + elem];
         Value elemValue = load(gep(smemPtrTy, smemBase, elemOffset));
         valVec = insert_element(vecTy, valVec, elemValue, idx_val(elem));
       }
