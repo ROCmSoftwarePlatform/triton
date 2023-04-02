@@ -145,9 +145,9 @@ public:
 #ifdef USE_ROCM
         if (mmaLayout.isMI200()) {
           const llvm::DenseMap<int, Type> targetTyMap = {
-              {32, vec_ty(elemTy, 1)},
+              {32, elemTy},
               {16, vec_ty(elemTy, 4)},
-              {8, vec_ty(elemTy, 4)},
+              {8, IntegerType::get(ctx, 32)},
           };
           Type targetTy = targetTyMap.lookup(elemTy.getIntOrFloatBitWidth());
           if (dotOpLayout.getOpIdx() == 0) { // $a

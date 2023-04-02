@@ -1492,7 +1492,7 @@ DotOpMFMAConversionHelper::getMatrixCoreTypeFromOperand(Type operandTy) {
 }
 
 llvm::SmallVector<Value>
-DotOpMFMAConversionHelper::computeOffsetsA(Value waveM, Value laneId,
+DotOpMFMAConversionHelper::computeOffsetsA(Value waveM, Value laneId, int wptA,
                                            int numOfElems, int numM, int numK,
                                            Value cSwizzleOffset) const {
   SmallVector<Value> offsets(numM * numK * numOfElems);
@@ -1503,11 +1503,15 @@ DotOpMFMAConversionHelper::computeOffsetsA(Value waveM, Value laneId,
   Value _32 = i32_val(32);
   Value waveHalf = udiv(laneId, _32);
 
-  Value waveOffset = mul(waveM, i32_val(blockSize));
+  // Value waveOffset = mul(waveM, i32_val(blockSize));
+  Value waveOffset = wptA > 1 ? mul(waveM, i32_val(mfmaShape[0] * lineSize))
+                              : mul(waveM, i32_val(blockSize));
   Value colOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
 
   for (int block = 0; block < numM; ++block) {
-    Value blockOffset = i32_val(block * mfmaShape[0] * lineSize);
+    // Value blockOffset = i32_val(block * mfmaShape[0] * lineSize);
+    Value blockOffset = wptA > 1 ? i32_val(block * blockSize)
+                                 : i32_val(block * mfmaShape[0] * lineSize);
     for (int tile = 0; tile < numK; ++tile) {
       Value tileOffset = i32_val(tile * mfmaShape[2]);
       for (int elem = 0; elem < numOfElems; ++elem) {
@@ -1524,7 +1528,7 @@ DotOpMFMAConversionHelper::computeOffsetsA(Value waveM, Value laneId,
 }
 
 llvm::SmallVector<Value>
-DotOpMFMAConversionHelper::computeOffsetsB(Value waveN, Value laneId,
+DotOpMFMAConversionHelper::computeOffsetsB(Value waveN, Value laneId, int wptB,
                                            int numOfElems, int numK, int numN,
                                            Value cSwizzleOffset) const {
   SmallVector<Value> offsets(numK * numN * numOfElems);
@@ -1533,12 +1537,15 @@ DotOpMFMAConversionHelper::computeOffsetsB(Value waveN, Value laneId,
   int lineSize = wpt[1] * mfmaShape[1] * numN;
   Value _0 = i32_val(0);
   Value _32 = i32_val(32);
-
-  Value waveOffset = mul(waveN, i32_val(mfmaShape[1] * numN));
+  Value waveOffset = wptB > 1 ? mul(waveN, i32_val(mfmaShape[1]))
+                              : mul(waveN, i32_val(mfmaShape[1] * numN));
+  // Value waveOffset = mul(waveN, i32_val(mfmaShape[1] * numN));
   Value colOffset = urem(laneId, _32);
 
   for (int block = 0; block < numN; ++block) {
-    Value blockOffset = i32_val(block * mfmaShape[1]);
+    // Value blockOffset = i32_val(block * mfmaShape[1]);
+    Value blockOffset = wptB > 1 ? i32_val(block * mfmaShape[1] * numN)
+                                 : i32_val(block * mfmaShape[1]);
     for (int tile = 0; tile < numK; ++tile) {
       Value tileOffset = i32_val(tile * mfmaShape[2] * lineSize);
       for (int elem = 0; elem < numOfElems; ++elem) {
@@ -1572,28 +1579,40 @@ Value DotOpMFMAConversionHelper::loadA(
   Value waveM = getWaveM(shape[0]);
   int numOfElems = getNumOfElems(aTensorTy);
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
-  auto offsets = computeOffsetsA(waveM, lane, numOfElems, numRepM, numRepK,
+  int macroTileM =
+      std::max<int>(shape[0] / (mmaLayout.getWarpsPerCTA()[0] * 32), 1);
+  int wptM = std::min<int>(mmaLayout.getWarpsPerCTA()[0], macroTileM);
+  int macroTileN =
+      std::max<int>(shape[1] / (mmaLayout.getWarpsPerCTA()[1] * 32), 1);
+  int wptN = std::min<int>(mmaLayout.getWarpsPerCTA()[1], macroTileN);
+  int wpt = std::max<int>(wptM, wptN);
+  auto offsets = computeOffsetsA(waveM, lane, wpt, numOfElems, numRepM, numRepK,
                                  cSwizzleOffset);
 
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
   Type smemPtrTy = getShemPtrTy();
-
+  Type elemTy = aTensorTy.getElementType();
   for (int m = 0; m < numRepM; ++m) {
     for (int k = 0; k < numRepK; ++k) {
-      auto vecTy = vec_ty(aTensorTy.getElementType(), numOfElems);
+      auto vecTy = vec_ty(elemTy, numOfElems);
       Value valVec = undef(vecTy);
       for (unsigned elem = 0; elem < numOfElems; ++elem) {
         Value elemOffset =
             offsets[m * numOfElems * numRepK + k * numOfElems + elem];
         Value elemValue = load(gep(smemPtrTy, smemBase, elemOffset));
-        valVec = insert_element(vecTy, valVec, elemValue, idx_val(elem));
+        if (numOfElems > 1)
+          valVec = insert_element(vecTy, valVec, elemValue, idx_val(elem));
+        else
+          valVec = elemValue;
       }
+      if (elemTy == i8_ty)
+        valVec = bitcast(valVec, i32_ty);
       ha.push_back(valVec);
     }
   }
 
-  Type elemTy = ha[0].getType();
+  elemTy = ha[0].getType();
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(ha.size(), elemTy));
   auto result = getStructFromElements(loc, ha, rewriter, structTy);
@@ -1617,13 +1636,23 @@ Value DotOpMFMAConversionHelper::loadB(
   Value waveN = getWaveN(shape[1]);
   int numOfElems = getNumOfElems(bTensorTy);
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
-  auto offsets = computeOffsetsB(waveN, lane, numOfElems, numRepK, numRepN,
+
+  int macroTileM =
+      std::max<int>(shape[0] / (mmaLayout.getWarpsPerCTA()[0] * 32), 1);
+  int wptM = std::min<int>(mmaLayout.getWarpsPerCTA()[0], macroTileM);
+  int macroTileN =
+      std::max<int>(shape[1] / (mmaLayout.getWarpsPerCTA()[1] * 32), 1);
+  int wptN = std::min<int>(mmaLayout.getWarpsPerCTA()[1], macroTileN);
+  int wpt = std::max<int>(wptM, wptN);
+
+  auto offsets = computeOffsetsB(waveN, lane, wpt, numOfElems, numRepK, numRepN,
                                  cSwizzleOffset);
 
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
   Type smemPtrTy = getShemPtrTy();
 
+  Type elemTy = bTensorTy.getElementType();
   for (int n = 0; n < numRepN; ++n) {
     for (int k = 0; k < numRepK; ++k) {
       auto vecTy = vec_ty(bTensorTy.getElementType(), numOfElems);
@@ -1632,13 +1661,18 @@ Value DotOpMFMAConversionHelper::loadB(
         Value elemOffset =
             offsets[n * numOfElems * numRepK + k * numOfElems + elem];
         Value elemValue = load(gep(smemPtrTy, smemBase, elemOffset));
-        valVec = insert_element(vecTy, valVec, elemValue, idx_val(elem));
+        if (numOfElems > 1)
+          valVec = insert_element(vecTy, valVec, elemValue, idx_val(elem));
+        else
+          valVec = elemValue;
       }
+      if (elemTy == i8_ty)
+        valVec = bitcast(valVec, i32_ty);
       hb.push_back(valVec);
     }
   }
 
-  Type elemTy = hb[0].getType();
+  elemTy = hb[0].getType();
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(hb.size(), elemTy));
   auto result = getStructFromElements(loc, hb, rewriter, structTy);

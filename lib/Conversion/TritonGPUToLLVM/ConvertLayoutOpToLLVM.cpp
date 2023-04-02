@@ -590,7 +590,8 @@ private:
       // so they can be consumed by tensor core operations
       unsigned vecSize;
       if (srcMmaLayout.isMI200()) {
-        vecSize = 16;
+        // recheck double-check this part
+        vecSize = 1;
         Type vecTy = vec_ty(elemTy, vecSize);
         SmallVector<Type> types(elems / vecSize, vecTy);
         SmallVector<Value> vecVals;

@@ -85,8 +85,8 @@ SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
 
 #ifdef USE_ROCM
 SmallVector<unsigned, 2> warpsPerTileMI200(triton::DotOp dotOp,
-                                        const ArrayRef<int64_t> shape,
-                                        int numWarps) {
+                                           const ArrayRef<int64_t> shape,
+                                           int numWarps) {
   // TODO: needs to be updated with appropriate shapePerWarp etc.
   SetVector<Operation *> slices;
   mlir::getForwardSlice(dotOp.getResult(), &slices);
@@ -94,7 +94,7 @@ SmallVector<unsigned, 2> warpsPerTileMI200(triton::DotOp dotOp,
         return isa<triton::DotOp>(op);
       }) != slices.end())
     return {(unsigned)numWarps, 1};
-
+  SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp = {32, 32};
   bool changed = false;
@@ -102,13 +102,19 @@ SmallVector<unsigned, 2> warpsPerTileMI200(triton::DotOp dotOp,
   // original logic in
   // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
   // seems buggy for shape = [32, 16] ?
+
+  // TODO(@Bitway): the comment above is also true for AMDGPU for shape = {64,
+  // 32},  as a temporary solution the measurements have been swapped
+  if (shape[0] == 2 * shape[1])
+    tensorShape = {shape[1], shape[0]};
+
   do {
     changed = false;
     if (ret[0] * ret[1] >= numWarps)
       break;
-    if (shape[0] / shapePerWarp[0] / ret[0] >=
-        shape[1] / (shapePerWarp[1] * 2) / ret[1]) {
-      if (ret[0] < shape[0] / shapePerWarp[0]) {
+    if (tensorShape[0] / shapePerWarp[0] / ret[0] >=
+        tensorShape[1] / (shapePerWarp[1] * 2) / ret[1]) {
+      if (ret[0] < tensorShape[0] / shapePerWarp[0]) {
         ret[0] *= 2;
       } else
         ret[1] *= 2;
@@ -116,6 +122,11 @@ SmallVector<unsigned, 2> warpsPerTileMI200(triton::DotOp dotOp,
       ret[1] *= 2;
     }
   } while (true);
+
+  if (ret[1] * shapePerWarp[1] > tensorShape[1]) {
+    return {ret[1], ret[0]};
+  }
+
   return ret;
 }
 #endif

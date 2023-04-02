@@ -702,10 +702,10 @@ struct DotOpMFMAConversionHelper {
 
   Type getMRetType() const;
 
-  llvm::SmallVector<Value> computeOffsetsA(Value waveM, Value laneId,
+  llvm::SmallVector<Value> computeOffsetsA(Value waveM, Value laneId, int wptA,
                                            int numOfElems, int numM, int numK,
                                            Value cSwizzleOffset) const;
-  llvm::SmallVector<Value> computeOffsetsB(Value waveN, Value laneId,
+  llvm::SmallVector<Value> computeOffsetsB(Value waveN, Value laneId, int wptB,
                                            int numOfElems, int numK, int numN,
                                            Value cSwizzleOffset) const;
 

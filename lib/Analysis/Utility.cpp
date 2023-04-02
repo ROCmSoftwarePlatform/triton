@@ -132,7 +132,10 @@ bool supportMMA(triton::DotOp op, int version) {
   auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
   auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
   if (aElemTy.isF32() && bElemTy.isF32()) {
-    return op.getAllowTF32() && version >= 2;
+    return (op.getAllowTF32() && version == 2) || (!op.getAllowTF32() && version == 3);
+  }
+  if (aElemTy.isF32() && bElemTy.isF32()) {
+    
   }
   return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }
