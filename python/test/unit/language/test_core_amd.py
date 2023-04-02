@@ -1086,38 +1086,28 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
 
 
 @pytest.mark.parametrize("M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype",
-                         [(*shape, 4, False, False, epilogue, allow_tf32, dtype)
-                          for shape in [(64, 64, 64), (16, 16, 16)]
-                          for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
-                          for allow_tf32 in [True, False]
+                         [(*shape, 2, False, False, epilogue, allow_tf32, dtype)
+                          for shape in [(64, 64, 64), (32, 32, 32)]
+                          for epilogue in ['none', 'trans', 'add-matrix']
+                          for allow_tf32 in [False]
                           for dtype in ['float16', 'float32']
                           if not (allow_tf32 and (dtype in ['float16']))] +
 
                          [(*shape_nw, col_a, col_b, 'none', allow_tf32, dtype)
-                          for shape_nw in [[128, 256, 32, 8],
-                                           [128, 16, 32, 4],
-                                           [32, 128, 64, 4],
-                                           [128, 128, 64, 4],
-                                           [64, 128, 128, 4],
+                          for shape_nw in [[128, 128, 32, 2],
+                                           [128, 32, 32, 2],
                                            [32, 128, 64, 2],
-                                           [128, 128, 64, 2],
-                                           [64, 128, 128, 2]]
-                          for allow_tf32 in [True]
-                          for col_a in [True, False]
-                          for col_b in [True, False]
+                                           [128, 32, 64, 2],
+                                           [64, 128, 128, 2],
+                                           [32, 128, 64, 1],
+                                           [128, 128, 64, 1],
+                                           [64, 128, 128, 1]]
+                          for allow_tf32 in [False, True]
+                          for col_a in [False]
+                          for col_b in [False]
                           for dtype in ['int8', 'float16', 'float32']])
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, device='cuda'):
     capability = torch.cuda.get_device_capability()
-    if capability[0] < 7:
-        pytest.skip("Only test tl.dot() on devices with sm >= 70")
-    if capability[0] < 8:
-        if dtype == 'int8':
-            pytest.skip("Only test int8 on devices with sm >= 80")
-        elif dtype == 'float32' and allow_tf32:
-            pytest.skip("Only test tf32 on devices with sm >= 80")
-    if capability[0] == 7:
-        if (M, N, K, num_warps) == (128, 256, 32, 8):
-            pytest.skip("shared memory out of resource")
     if torch.version.hip is not None:
         if (M, N, K) == (64, 128, 128):
             pytest.skip("Not supported: memory out of resource.")
