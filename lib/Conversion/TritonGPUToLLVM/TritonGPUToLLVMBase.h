@@ -604,6 +604,10 @@ public:
         return emitOffsetForMmaLayoutV1(mmaLayout, type);
       if (mmaLayout.isAmpere())
         return emitOffsetForMmaLayoutV2(mmaLayout, type);
+#ifdef USE_ROCM
+      if (mmaLayout.isMI200())
+        llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
+#endif
     }
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
       return emitOffsetForSliceLayout(sliceLayout, type);

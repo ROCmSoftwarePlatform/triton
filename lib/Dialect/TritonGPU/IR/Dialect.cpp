@@ -80,6 +80,10 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
       return {4, 8};
     if (mmaLayout.isAmpere())
       return {8, 4};
+#ifdef USE_ROCM
+    if (mmaLayout.isMI200())
+      return {32, 2};
+#endif
   }
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parent = sliceLayout.getParent();
@@ -175,6 +179,10 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
       return {2, 2};
     } else if (mmaLayout.isVolta()) {
       return {1, 2};
+#ifdef USE_ROCM
+    } else if (mmaLayout.isMI200()) {
+      return {4, 4};
+#endif
     } else {
       llvm_unreachable("Unexpected mma version");
     }
@@ -182,6 +190,21 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
     auto parentLayout = dotLayout.getParent();
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");
     if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingAttr>()) {
+#ifdef USE_ROCM
+      if (mmaLayout.isMI200()) {
+        auto parentShapePerCTA = getShapePerCTA(parentLayout);
+        auto opIdx = dotLayout.getOpIdx();
+        if (opIdx == 0) {
+          return {4, 1};
+        } else if (opIdx == 1) {
+          return {1, 4};
+        } else {
+          assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
+          return {};
+        }
+      }
+
+#endif
       assert(parentMmaLayout.isAmpere() &&
              "mmaLayout version = 1 is not implemented yet");
       auto parentShapePerCTA = getShapePerCTA(parentLayout);
@@ -207,6 +230,10 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
 
 SmallVector<unsigned> getContigPerThread(Attribute layout) {
   if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+#ifdef USE_ROCM
+    if (mmaLayout.isMI200())
+      return {1, 1};
+#endif
     assert(mmaLayout.isVolta() || mmaLayout.isAmpere());
     return {1, 2};
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
@@ -256,6 +283,9 @@ SmallVector<unsigned> getThreadsPerCTA(Attribute layout) {
     if (mmaLayout.isAmpere()) {
       threads = {8 * mmaLayout.getWarpsPerCTA()[0],
                  4 * mmaLayout.getWarpsPerCTA()[1]};
+    } else if (mmaLayout.getVersionMajor() == 3) {
+      threads = {32 * mmaLayout.getWarpsPerCTA()[0],
+                 2 * mmaLayout.getWarpsPerCTA()[1]};
     } else
       assert(0 && "Unimplemented usage of MmaEncodingAttr");
   } else {
@@ -293,6 +323,11 @@ SmallVector<unsigned> getShapePerCTA(Attribute layout,
       return {static_cast<unsigned>(tensorShape[0]),
               static_cast<unsigned>(tensorShape[1])};
     }
+#ifdef USE_ROCM
+    if (mmaLayout.isMI200())
+      return {32 * mmaLayout.getWarpsPerCTA()[0],
+              32 * mmaLayout.getWarpsPerCTA()[1]};
+#endif
     assert(0 && "Unexpected MMA layout version found");
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto parentLayout = dotLayout.getParent();
@@ -302,6 +337,17 @@ SmallVector<unsigned> getShapePerCTA(Attribute layout,
              "mmaLayout version = 1 is not implemented yet");
       auto parentShapePerCTA = getShapePerCTA(parentLayout, tensorShape);
       auto opIdx = dotLayout.getOpIdx();
+#ifdef USE_ROCM
+      if (mmaLayout.isMI200()) {
+        if (opIdx == 0) {
+          return {parentShapePerCTA[0], 32};
+        } else if (opIdx == 1) {
+          return {32, parentShapePerCTA[1]};
+        } else {
+          assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
+        }
+      }
+#endif
       if (opIdx == 0) {
         return {parentShapePerCTA[0], 16};
       } else if (opIdx == 1) {
@@ -492,9 +538,15 @@ SmallVector<unsigned>
 MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   size_t rank = shape.size();
   assert(rank == 2 && "Unexpected rank of mma layout");
+#ifdef USE_ROCM
+  assert((isVolta() || isAmpere() || isMI200()) &&
+         "Only versions 1, 2 or 3 are supported");
+#else
   assert((isVolta() || isAmpere()) && "Only version 1 and 2 is supported");
+#endif
 
   SmallVector<unsigned> elemsPerThread(rank);
+  int res = 0;
   if (isVolta()) {
     auto [isARow, isBRow, isAVec4, isBVec4, id] = decodeVoltaLayoutStates();
     static constexpr std::array<unsigned, 2> fpw{{2, 2}};
@@ -515,6 +567,15 @@ MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
     unsigned elemsCol = ceil<unsigned>(shape[1], 8 * getWarpsPerCTA()[1]) * 2;
     elemsPerThread[0] = elemsRow;
     elemsPerThread[1] = elemsCol;
+    unsigned elemsCol = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]) * 2;
+    unsigned elemsRow = ceil<unsigned>(shape[1], 8 * getWarpsPerCTA()[1]) * 2;
+    res = elemsCol * elemsRow;
+#ifdef USE_ROCM
+  } else if (isMI200()) {
+    unsigned elemsCol = ceil<unsigned>(shape[0], 32 * getWarpsPerCTA()[0]);
+    unsigned elemsRow = ceil<unsigned>(shape[1], 32 * getWarpsPerCTA()[1]);
+    res = elemsCol * elemsRow * 16;
+#endif
   } else {
     llvm_unreachable("Unexpected mma version");
   }
@@ -850,7 +911,9 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
 bool MmaEncodingAttr::isVolta() const { return getVersionMajor() == 1; }
 
 bool MmaEncodingAttr::isAmpere() const { return getVersionMajor() == 2; }
-
+#ifdef USE_ROCM
+bool MmaEncodingAttr::isMI200() const { return getVersionMajor() == 3; }
+#endif
 // Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
 std::tuple<bool, bool, bool, bool, int>
 MmaEncodingAttr::decodeVoltaLayoutStates() const {
