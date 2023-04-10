@@ -1,9 +1,6 @@
 #include "ConvertLayoutOpToLLVM.h"
 #include "Utility.h"
 
-using ::mlir::LLVM::DotOpFMAConversionHelper;
-using ::mlir::LLVM::DotOpMFMAConversionHelper;
-using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -512,8 +509,7 @@ private:
         if (isDstMmaV1)
           processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy,
                                  multiDimRepId, outVec, paddedRepShape, outOrd,
-                                 outVals, smemBase, shape,
-                                 /*isDestMma=*/true);
+                                 outVals, smemBase, shape, /*isDestMma=*/true);
         else
           processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
                          outNumCTAsEachRep, multiDimRepId, outVec,
@@ -631,9 +627,9 @@ private:
       // so they can be consumed by tensor core operations
       SmallVector<Value> vecVals;
       SmallVector<Type> types;
-      // For some reasons, LLVM's NVPTX backend inserts unnecessary (?)
-      // integer instructions to pack & unpack sub-word integers. A workaround
-      // is to store the results of ldmatrix in i32
+      // For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
+      // instructions to pack & unpack sub-word integers. A workaround is to
+      // store the results of ldmatrix in i32
       auto elemSize = elemTy.getIntOrFloatBitWidth();
       if (auto intTy = elemTy.dyn_cast<IntegerType>() && elemSize <= 16) {
         auto fold = 32 / elemSize;
@@ -676,11 +672,12 @@ private:
                                                       rewriter, dstTy);
       rewriter.replaceOp(op, view);
       return success();
-#endif
+#else
       Value view =
           getTypeConverter()->packLLElements(loc, vecVals, rewriter, dstTy);
       rewriter.replaceOp(op, view);
       return success();
+#endif
     }
     return failure();
   }
