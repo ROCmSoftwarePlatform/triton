@@ -79,7 +79,7 @@ index a5007ffc..8ae66f28 100644
  static int parse_one_line(struct amdgpu_device *dev, const char *line)
  {
  	char *buf, *saveptr;
-@@ -113,6 +136,34 @@ void amdgpu_parse_asic_ids(struct amdgpu_device *dev)
+@@ -113,6 +135,33 @@ void amdgpu_parse_asic_ids(struct amdgpu_device *dev)
  	int line_num = 1;
  	int r = 0;
  
@@ -93,7 +93,6 @@ index a5007ffc..8ae66f28 100644
 +
 +	rc = dladdr( "amdgpu_parse_asic_ids", &info );
 +	count = strlen(info.dli_fname);
-+	fprintf(stderr, "I found myself at %s %d\n", info.dli_fname, count);
 +	strcpy(self_path, info.dli_fname);
 +	for (i=count; i>0; --i) {
 +		if (self_path[i] == '/') break;
@@ -174,4 +173,4 @@ if [[ -n "${TRITON_ROCM_DIR}" ]]; then
   cp drm/data/amdgpu.ids $TRITON_ROCM_DIR/lib/data/
 fi
 
-rm -rf drm
+#rm -rf drm
