@@ -283,14 +283,12 @@ SmallVector<unsigned> getThreadsPerCTA(Attribute layout) {
     if (mmaLayout.isAmpere()) {
       threads = {8 * mmaLayout.getWarpsPerCTA()[0],
                  4 * mmaLayout.getWarpsPerCTA()[1]};
-    }
 #ifdef USE_ROCM
-    else if (mmaLayout.getVersionMajor() == 3) {
+    } else if (mmaLayout.getVersionMajor() == 3) {
       threads = {32 * mmaLayout.getWarpsPerCTA()[0],
                  2 * mmaLayout.getWarpsPerCTA()[1]};
-    }
 #endif
-    else
+    } else
       assert(0 && "Unimplemented usage of MmaEncodingAttr");
   } else {
     assert(0 && "Unimplemented usage of getShapePerCTA");
