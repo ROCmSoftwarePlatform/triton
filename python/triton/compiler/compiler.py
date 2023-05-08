@@ -71,7 +71,7 @@ def optimize_ttgir(mod, num_stages, arch):
     if _is_cuda(arch):
         pm.add_tritongpu_accelerate_matmul_pass(arch)
     # TODO change interface of accelerate_matmul_pass
-    if torch.version.hip is not None:
+    if torch.version.hip is not None and "USE_MFMA" in os.environ:
         pm.add_tritongpu_accelerate_matmul_pass(80)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()

@@ -1218,16 +1218,17 @@ def dot(lhs: tl.tensor,
 
     # Cast operands of types f16 and i8 since only FMA implemented yet for ROCM.
     # So we always perform dot(f32,f32,f32)->f32 here with FMA.
-    # TODO: remove the case for MMA/MFMA implemented cases
-    # if is_hip():
-    #     ret_cast_scalar_ty = tl.float32 if lhs.type.scalar.is_int() else ret_scalar_ty
-    #     lhs = cast(lhs, ret_cast_scalar_ty, builder)
-    #     rhs = cast(rhs, ret_cast_scalar_ty, builder)
-    #     _0 = builder.create_splat(builder.get_fp32(0), [M, N])
-    #     ret_ty = tl.block_type(ret_cast_scalar_ty, [M, N])
-    #     ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
-    #                     ret_ty)
-    #     return cast(ret, ret_scalar_ty, builder)
+    # TODO replace USE_MFMA with appropriate check
+    import os
+    if is_hip() and "USE_MFMA" not in os.environ:
+        ret_cast_scalar_ty = tl.float32 if lhs.type.scalar.is_int() else ret_scalar_ty
+        lhs = cast(lhs, ret_cast_scalar_ty, builder)
+        rhs = cast(rhs, ret_cast_scalar_ty, builder)
+        _0 = builder.create_splat(builder.get_fp32(0), [M, N])
+        ret_ty = tl.block_type(ret_cast_scalar_ty, [M, N])
+        ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
+                        ret_ty)
+        return cast(ret, ret_scalar_ty, builder)
 
     _0 = builder.create_splat(_0, [M, N])
     ret_ty = tl.block_type(ret_scalar_ty, [M, N])
