@@ -1203,7 +1203,7 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                          [(*shape, 2, False, False, epilogue, allow_tf32, dtype)
                           for shape in [(64, 64, 64), (32, 32, 32)]
                           for epilogue in ['none', 'trans', 'add-matrix']
-                          for allow_tf32 in [False]
+                          for allow_tf32 in [True, False]
                           for dtype in ['float16', 'float32']
                           if not (allow_tf32 and (dtype in ['float16']))] +
 
