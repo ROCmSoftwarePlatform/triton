@@ -34,32 +34,41 @@ Value getWaveN(ConversionPatternRewriter &rewriter, Location loc, Value wave,
 
 namespace SharedToDotOperandMMAv3 {
 
+// Computes offsets for operand A or transposed operand B
+// @param rewriter
+// @param loc
+// @param elemsPerThread operand tile shape consumed by one MFMA instruction
+// @param waveM wave id for the "non K" axis
+// @param laneId
+// @param wptA
+// @param numOfElems
+// @param reps number of instructions repretition to fully cover dot operand
+// @param cSwizzleOffset
 llvm::SmallVector<Value>
-computeOffsetsA(ConversionPatternRewriter &rewriter, Location loc,
-                const ArrayRef<int64_t> &aElemsPerThread, Value waveM,
+computeOffsetsTy1(ConversionPatternRewriter &rewriter, Location loc,
+                const ArrayRef<int64_t> &elemsPerThread, Value waveM,
                 Value laneId, int wptA, int numOfElems, ArrayRef<int64_t> reps,
                 Value cSwizzleOffset) {
   auto numM = reps[0];
   auto numK = reps[1];
   SmallVector<Value> offsets(numM * numK * numOfElems);
-  int lineSize = aElemsPerThread[1] * numK;
-  int blockSize = aElemsPerThread[0] * numM * lineSize;
+  int lineSize = elemsPerThread[1] * numK;
+  int blockSize = elemsPerThread[0] * numM * lineSize;
   Value _0 = i32_val(0);
   Value _32 = i32_val(32);
   Value waveHalf = udiv(laneId, _32);
 
-  // Value waveOffset = mul(waveM, i32_val(blockSize));
   Value waveOffset = wptA > 1
-                         ? mul(waveM, i32_val(aElemsPerThread[0] * lineSize))
+                         ? mul(waveM, i32_val(elemsPerThread[0] * lineSize))
                          : mul(waveM, i32_val(blockSize));
   Value colOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
 
   for (int block = 0; block < numM; ++block) {
     Value blockOffset = wptA > 1
                             ? i32_val(block * blockSize)
-                            : i32_val(block * aElemsPerThread[0] * lineSize);
+                            : i32_val(block * elemsPerThread[0] * lineSize);
     for (int tile = 0; tile < numK; ++tile) {
-      Value tileOffset = i32_val(tile * aElemsPerThread[1]);
+      Value tileOffset = i32_val(tile * elemsPerThread[1]);
       for (int elem = 0; elem < numOfElems; ++elem) {
         Value rowOffset =
             add(mul(urem(laneId, _32), i32_val(lineSize)), i32_val(elem));
@@ -73,29 +82,38 @@ computeOffsetsA(ConversionPatternRewriter &rewriter, Location loc,
   return offsets;
 }
 
+// Computes offsets for operand B or transposed operand A
+// @param rewriter
+// @param loc
+// @param elemsPerThread operand tile shape consumed by one MFMA instruction
+// @param warpsPerGroupN number of warps per horizontal axis
+// @param waveM wave id for the "non K" axis
+// @param laneId
+// @param wptA
+// @param numOfElems number of accessed elements per repetition
+// @param reps number of instructions repretition to fully cover dot operand
+// @param cSwizzleOffset
 llvm::SmallVector<Value>
-computeOffsetsB(ConversionPatternRewriter &rewriter, Location loc,
-                const ArrayRef<int64_t> &bElemsPerThread, int warpsPerGroupN,
+computeOffsetsTy2(ConversionPatternRewriter &rewriter, Location loc,
+                const ArrayRef<int64_t> &elemsPerThread, int warpsPerGroupN,
                 Value waveN, Value laneId, int wptB, int numOfElems,
                 ArrayRef<int64_t> reps, Value cSwizzleOffset) {
   auto numK = reps[0];
   auto numN = reps[1];
   SmallVector<Value> offsets(numK * numN * numOfElems);
 
-  int lineSize = warpsPerGroupN * bElemsPerThread[1] * numN;
+  int lineSize = warpsPerGroupN * elemsPerThread[1] * numN;
   Value _0 = i32_val(0);
   Value _32 = i32_val(32);
-  Value waveOffset = wptB > 1 ? mul(waveN, i32_val(bElemsPerThread[1]))
-                              : mul(waveN, i32_val(bElemsPerThread[1] * numN));
-  // Value waveOffset = mul(waveN, i32_val(mfmaShape[1] * numN));
+  Value waveOffset = wptB > 1 ? mul(waveN, i32_val(elemsPerThread[1]))
+                              : mul(waveN, i32_val(elemsPerThread[1] * numN));
   Value colOffset = urem(laneId, _32);
 
   for (int block = 0; block < numN; ++block) {
-    // Value blockOffset = i32_val(block * mfmaShape[1]);
-    Value blockOffset = wptB > 1 ? i32_val(block * bElemsPerThread[1] * numN)
-                                 : i32_val(block * bElemsPerThread[1]);
+    Value blockOffset = wptB > 1 ? i32_val(block * elemsPerThread[1] * numN)
+                                 : i32_val(block * elemsPerThread[1]);
     for (int tile = 0; tile < numK; ++tile) {
-      Value tileOffset = i32_val(tile * bElemsPerThread[0] * lineSize);
+      Value tileOffset = i32_val(tile * elemsPerThread[0] * lineSize);
       for (int elem = 0; elem < numOfElems; ++elem) {
         Value halfOffset =
             select(icmp_uge(laneId, _32), i32_val(numOfElems * lineSize), _0);
@@ -108,6 +126,11 @@ computeOffsetsB(ConversionPatternRewriter &rewriter, Location loc,
     }
   }
   return offsets;
+}
+
+bool isTransposed(::llvm::ArrayRef<unsigned> order) {
+  assert(order.size() == 2 && (order[0] & ~1ul) == 0 && order[0] + order[1] == 1);
+  return order[0] == 0;
 }
 
 Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
@@ -148,8 +171,19 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
       std::max<int>(shape[1] / (mmaLayout.getWarpsPerCTA()[1] * 32), 1);
   int wptN = std::min<int>(mmaLayout.getWarpsPerCTA()[1], macroTileN);
   int wpt = std::max<int>(wptM, wptN);
-  auto offsets = computeOffsetsA(rewriter, loc, aElemsPerThread, waveM, lane,
-                                 wpt, numOfElems, numReps, cSwizzleOffset);
+
+  SmallVector<Value> offsets;
+  if (isTransposed(order)) {
+    SmallVector<int64_t> elemsPerThread{aElemsPerThread[1], aElemsPerThread[0]};
+    SmallVector<int64_t> reps{numReps[1], numReps[0]};
+    int warpsPerGroupM = mmaLayout.getWarpsPerCTA()[0];
+    offsets =
+        computeOffsetsTy2(rewriter, loc, elemsPerThread, warpsPerGroupM, waveM,
+                          lane, wpt, numOfElems, reps, cSwizzleOffset);
+  } else {
+    offsets = computeOffsetsTy1(rewriter, loc, aElemsPerThread, waveM, lane,
+                                   wpt, numOfElems, numReps, cSwizzleOffset);
+  }
 
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
@@ -220,10 +254,19 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
   int wptN = std::min<int>(mmaLayout.getWarpsPerCTA()[1], macroTileN);
   int wpt = std::max<int>(wptM, wptN);
 
-  int warpsPerGroupN = mmaLayout.getWarpsPerCTA()[1];
-  auto offsets =
-      computeOffsetsB(rewriter, loc, bElemsPerThread, warpsPerGroupN, waveN,
-                      lane, wpt, numOfElems, numReps, cSwizzleOffset);
+  llvm::SmallVector<Value> offsets;
+  if (isTransposed(order)) {
+    SmallVector<int64_t> elemsPerThread{bElemsPerThread[1], bElemsPerThread[0]};
+    SmallVector<int64_t> reps{numReps[1], numReps[0]};
+    offsets =
+        computeOffsetsTy1(rewriter, loc, elemsPerThread, waveN,
+                        lane, wpt, numOfElems, reps, cSwizzleOffset);
+  } else {
+    int warpsPerGroupN = mmaLayout.getWarpsPerCTA()[1];
+    offsets =
+        computeOffsetsTy2(rewriter, loc, bElemsPerThread, warpsPerGroupN, waveN,
+                        lane, wpt, numOfElems, numReps, cSwizzleOffset);
+  }
 
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
