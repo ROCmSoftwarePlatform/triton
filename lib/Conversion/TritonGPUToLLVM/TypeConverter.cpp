@@ -9,6 +9,7 @@ using namespace mlir::triton;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
+using ::mlir::triton::gpu::MfmaEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -101,15 +102,9 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   auto dotOpLayout = layout.dyn_cast<DotOperandEncodingAttr>();
   if (!dotOpLayout)
     return elemTy;
-  auto mmaParent = dotOpLayout.getParent().dyn_cast<MmaEncodingAttr>();
-  if (!mmaParent)
-    return elemTy;
-  if (mmaParent.isAmpere()) {
-    int bitwidth = elemTy.getIntOrFloatBitWidth();
-    assert(bitwidth <= 32);
-    return IntegerType::get(ctx, 32);
+
 #ifdef USE_ROCM
-  } else if (mmaParent.isMI200()) {
+  if (auto mfmaParent = dotOpLayout.getParent().dyn_cast<MfmaEncodingAttr>()) {
     const llvm::DenseMap<int, Type> targetTyMap = {
         {32, elemTy},
         {16, vec_ty(elemTy, 4)},
@@ -117,7 +112,16 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
     };
     Type targetTy = targetTyMap.lookup(elemTy.getIntOrFloatBitWidth());
     return targetTy;
+  }
 #endif
+
+  auto mmaParent = dotOpLayout.getParent().dyn_cast<MmaEncodingAttr>();
+  if (!mmaParent)
+    return elemTy;
+  if (mmaParent.isAmpere()) {
+    int bitwidth = elemTy.getIntOrFloatBitWidth();
+    assert(bitwidth <= 32);
+    return IntegerType::get(ctx, 32);
   } else {
     assert(mmaParent.isVolta());
     return vec_ty(elemTy, 2);

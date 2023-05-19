@@ -18,6 +18,7 @@ using namespace mlir::triton;
 using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::MfmaEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
@@ -577,6 +578,10 @@ public:
           result = emitBaseIndexForMmaLayoutV1(loc, rewriter, mmaLayout, type);
         if (mmaLayout.isAmpere())
           result = emitBaseIndexForMmaLayoutV2(loc, rewriter, mmaLayout, type);
+#ifdef USE_ROCM
+      } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+        llvm_unreachable("MfmaEncodingAttr is not implemented yet");
+#endif
       } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
         auto parentLayout = sliceLayout.getParent();
         auto parentShape = sliceLayout.paddedShape(type.getShape());
@@ -604,11 +609,12 @@ public:
         return emitOffsetForMmaLayoutV1(mmaLayout, type);
       if (mmaLayout.isAmpere())
         return emitOffsetForMmaLayoutV2(mmaLayout, type);
-#ifdef USE_ROCM
-      if (mmaLayout.isMI200())
-        llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
-#endif
     }
+#ifdef USE_ROCM
+    if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+      llvm_unreachable("MfmaEncodingAttr is not implemented yet");
+    }
+#endif
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
       return emitOffsetForSliceLayout(sliceLayout, type);
     llvm_unreachable("unsupported emitOffsetForLayout");

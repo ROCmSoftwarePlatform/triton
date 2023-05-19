@@ -140,26 +140,30 @@ bool supportMMA(triton::DotOp op, int version) {
   auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
   auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
 
-#ifdef USE_ROCM
-  auto aOrder = triton::gpu::getOrder(
-      op.getA().getType().cast<RankedTensorType>().getEncoding());
-  auto bOrder = triton::gpu::getOrder(
-      op.getB().getType().cast<RankedTensorType>().getEncoding());
-  if (aOrder[0] == 0 || bOrder[0] == 0)
-    return false;
-#endif
-
   if (aElemTy.isF32() && bElemTy.isF32()) {
     return (op.getAllowTF32() && version == 2) || version == 3;
   }
   return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }
 
+#ifdef USE_ROCM
+bool supportMFMA(triton::DotOp op) {
+  auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
+  auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
+
+  if (aElemTy != bElemTy)
+    return false;
+
+  return aElemTy.isF16() || aElemTy.isBF16() || aElemTy.isF32() ||
+         aElemTy.isInteger(8);
+}
+#endif
+
 bool supportMMA(Value value, int version) {
   // Tell whether a DotOp support HMMA by the operand type(either $a or $b).
   // We cannot get both the operand types(in TypeConverter), here we assume the
   // types of both the operands are identical here.
-  assert((version == 1 || version == 2 || version == 3) &&
+  assert((version == 1 || version == 2) &&
          "Unexpected MMA layout version found");
 
   auto elemTy = value.getType().cast<RankedTensorType>().getElementType();

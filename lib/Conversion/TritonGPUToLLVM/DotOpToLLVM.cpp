@@ -51,14 +51,19 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
         return convertMMA884(op, adaptor, getTypeConverter(), rewriter);
       if (mmaLayout.isAmpere())
         return convertMMA16816(op, adaptor, getTypeConverter(), rewriter);
-#ifdef USE_ROCM
-      if (mmaLayout.isMI200()) {
-        return convertMFMA(op, adaptor, getTypeConverter(), rewriter);
-      }
-#endif
       llvm::report_fatal_error(
           "Unsupported MMA kind found when converting DotOp to LLVM.");
     }
+
+#ifdef USE_ROCM
+    MfmaEncodingAttr mfmaLayout = D.getType()
+                                      .cast<RankedTensorType>()
+                                      .getEncoding()
+                                      .dyn_cast<MfmaEncodingAttr>();
+    if (!isOuter && mfmaLayout && supportMFMA(op)) {
+      return convertMFMA(op, adaptor, getTypeConverter(), rewriter);
+    }
+#endif
 
     if (D.getType()
             .cast<RankedTensorType>()

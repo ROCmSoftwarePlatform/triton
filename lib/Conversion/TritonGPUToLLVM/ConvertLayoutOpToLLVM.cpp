@@ -41,13 +41,13 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 }
 
 #ifdef USE_ROCM
-namespace SharedToDotOperandMMAv3 {
+namespace SharedToDotOperandMFMA {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
                     DotOperandEncodingAttr bEncoding,
                     const SharedMemoryObject &smemObj,
                     TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
-} // namespace SharedToDotOperandMMAv3
+} // namespace SharedToDotOperandMFMA
 #endif
 
 namespace SharedToDotOperandFMA {
@@ -143,34 +143,20 @@ private:
     }
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
       SmallVector<Value> mmaColIdx(4);
-#ifdef USE_ROCM
-      SmallVector<Value> mmaRowIdx(16);
-#else
       SmallVector<Value> mmaRowIdx(2);
-#endif
       Value threadId = getThreadId(rewriter, loc);
-#ifdef USE_ROCM
-      Value warpSize = i32_val(64);
-#else
       Value warpSize = i32_val(32);
-#endif
       Value laneId = urem(threadId, warpSize);
       Value warpId = udiv(threadId, warpSize);
       // TODO: fix the bug in MMAEncodingAttr document
       SmallVector<Value> multiDimWarpId(2);
       multiDimWarpId[0] = urem(warpId, i32_val(mmaLayout.getWarpsPerCTA()[0]));
       multiDimWarpId[1] = udiv(warpId, i32_val(mmaLayout.getWarpsPerCTA()[0]));
-#ifdef USE_ROCM
-      Value _0 = i32_val(0);
-#endif
       Value _1 = i32_val(1);
       Value _2 = i32_val(2);
       Value _4 = i32_val(4);
       Value _8 = i32_val(8);
       Value _16 = i32_val(16);
-#ifdef USE_ROCM
-      Value _32 = i32_val(32);
-#endif
       if (mmaLayout.isAmpere()) {
         multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(shape[0] / 16));
         multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(shape[1] / 8));
@@ -187,24 +173,6 @@ private:
         mmaColIdx[1] = add(mmaThreadIdInGrpM2P1, colWarpOffset);
       } else if (mmaLayout.isVolta()) {
         // Volta doesn't follow the pattern here."
-#ifdef USE_ROCM
-      } else if (mmaLayout.isMI200()) {
-        multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(shape[0] / 32));
-        multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(shape[1] / 32));
-        Value halfOffset = select(icmp_uge(laneId, _32), _4, _0);
-        Value mfmaGroup32 = urem(laneId, _32);
-        Value rowWarpOffset = mul(multiDimWarpId[0], _32);
-        for (unsigned block = 0; block < 4; ++block) {
-          mmaRowIdx[4 * block] = block == 0
-                                     ? add(halfOffset, rowWarpOffset)
-                                     : add(mmaRowIdx[4 * (block - 1)], _8);
-          for (int r = 1; r < 4; ++r) {
-            mmaRowIdx[4 * block + r] = add(mmaRowIdx[4 * block + r - 1], _1);
-          }
-        }
-        Value colWarpOffset = mul(multiDimWarpId[1], _32);
-        mmaColIdx[0] = add(mfmaGroup32, colWarpOffset);
-#endif
       } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
@@ -225,21 +193,57 @@ private:
             threadId, rewriter, mmaLayout.getWarpsPerCTA(), mmaLayout, shape,
             isARow, isBRow, isAVec4, isBVec4);
         return coords[elemId];
-#ifdef USE_ROCM
-      } else if (mmaLayout.isMI200()) {
-        multiDimOffset[0] = mmaRowIdx[elemId % 16];
-
-        multiDimOffset[1] = mmaColIdx[0];
-        multiDimOffset[0] = add(
-            multiDimOffset[0], i32_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
-        multiDimOffset[1] = add(
-            multiDimOffset[1], i32_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
-#endif
       } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
       return multiDimOffset;
     }
+#ifdef USE_ROCM
+    if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+      SmallVector<Value> mfmaColIdx(4);
+      SmallVector<Value> mfmaRowIdx(16);
+      Value threadId = getThreadId(rewriter, loc);
+      Value warpSize = i32_val(64);
+      Value laneId = urem(threadId, warpSize);
+      Value warpId = udiv(threadId, warpSize);
+      // TODO: fix the bug in MMAEncodingAttr document
+      SmallVector<Value> multiDimWarpId(2);
+      multiDimWarpId[0] = urem(warpId, i32_val(mfmaLayout.getWarpsPerCTA()[0]));
+      multiDimWarpId[1] = udiv(warpId, i32_val(mfmaLayout.getWarpsPerCTA()[0]));
+      Value _0 = i32_val(0);
+      Value _1 = i32_val(1);
+      Value _4 = i32_val(4);
+      Value _8 = i32_val(8);
+      Value _32 = i32_val(32);
+      multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(shape[0] / 32));
+      multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(shape[1] / 32));
+      Value halfOffset = select(icmp_uge(laneId, _32), _4, _0);
+      Value mfmaGroup32 = urem(laneId, _32);
+      Value rowWarpOffset = mul(multiDimWarpId[0], _32);
+      for (unsigned block = 0; block < 4; ++block) {
+        mfmaRowIdx[4 * block] = block == 0
+                                    ? add(halfOffset, rowWarpOffset)
+                                    : add(mfmaRowIdx[4 * (block - 1)], _8);
+        for (int r = 1; r < 4; ++r) {
+          mfmaRowIdx[4 * block + r] = add(mfmaRowIdx[4 * block + r - 1], _1);
+        }
+      }
+      Value colWarpOffset = mul(multiDimWarpId[1], _32);
+      mfmaColIdx[0] = add(mfmaGroup32, colWarpOffset);
+
+      assert(rank == 2);
+      SmallVector<Value> multiDimOffset(rank);
+
+      multiDimOffset[0] = mfmaRowIdx[elemId % 16];
+
+      multiDimOffset[1] = mfmaColIdx[0];
+      multiDimOffset[0] = add(multiDimOffset[0],
+                              i32_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
+      multiDimOffset[1] = add(multiDimOffset[1],
+                              i32_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
+      return multiDimOffset;
+    }
+#endif
     llvm_unreachable("unexpected layout in getMultiDimOffset");
   }
 
@@ -502,6 +506,9 @@ private:
         barrier();
       if (srcLayout.isa<BlockedEncodingAttr>() ||
           srcLayout.isa<SliceEncodingAttr>() ||
+#ifdef USE_ROCM
+          srcLayout.isa<MfmaEncodingAttr>() ||
+#endif
           srcLayout.isa<MmaEncodingAttr>()) {
         if (isSrcMmaV1)
           processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ true, srcTy,
@@ -519,6 +526,9 @@ private:
       barrier();
       if (dstLayout.isa<BlockedEncodingAttr>() ||
           dstLayout.isa<SliceEncodingAttr>() ||
+#ifdef USE_ROCM
+          dstLayout.isa<MfmaEncodingAttr>() ||
+#endif
           dstLayout.isa<MmaEncodingAttr>()) {
         if (isDstMmaV1)
           processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy,
@@ -606,6 +616,12 @@ private:
             dotOperandLayout.getParent().dyn_cast_or_null<MmaEncodingAttr>()) {
       res = lowerSharedToDotOperandMMA(op, adaptor, rewriter, mmaLayout,
                                        dotOperandLayout, isOuter);
+#ifdef USE_ROCM
+    } else if (auto mfmaLayout = dotOperandLayout.getParent()
+                                     .dyn_cast_or_null<MfmaEncodingAttr>()) {
+      res = lowerSharedToDotOperandMFMA(op, adaptor, rewriter, mfmaLayout,
+                                        dotOperandLayout, isOuter);
+#endif
     } else if (auto blockedLayout =
                    dotOperandLayout.getParent()
                        .dyn_cast_or_null<BlockedEncodingAttr>()) {
@@ -688,6 +704,7 @@ private:
       rewriter.replaceOp(op, view);
       return success();
 #else
+      // TODO check if this is needed
       Value view =
           getTypeConverter()->packLLElements(loc, vecVals, rewriter, dstTy);
       rewriter.replaceOp(op, view);
@@ -696,6 +713,31 @@ private:
     }
     return failure();
   }
+
+#ifdef USE_ROCM
+  // shared -> dot_operand if the result layout is mma
+  Value lowerSharedToDotOperandMFMA(
+      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter, const MfmaEncodingAttr &mfmaLayout,
+      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
+    auto loc = op.getLoc();
+    Value src = op.getSrc();
+    Value dst = op.getResult();
+
+    auto smemObj =
+        getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), rewriter);
+    Value res;
+
+    if (!isOuter) {
+      res = SharedToDotOperandMFMA::convertLayout(
+          dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
+          smemObj, getTypeConverter(), tid_val());
+    } else {
+      assert(false && "unsupported layout found");
+    }
+    return res;
+  }
+#endif
 
   // shared -> dot_operand if the result layout is mma
   Value lowerSharedToDotOperandMMA(
@@ -734,13 +776,6 @@ private:
       res = SharedToDotOperandMMAv1::convertLayout(
           dotOperandLayout.getOpIdx(), src, smemObj, getThreadId(rewriter, loc),
           loc, getTypeConverter(), rewriter, dst.getType());
-#ifdef USE_ROCM
-      // AMD MI200 matrix cores
-    } else if (!isOuter && mmaLayout.isMI200() && isHMMA) {
-      res = SharedToDotOperandMMAv3::convertLayout(
-          dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
-          smemObj, getTypeConverter(), tid_val());
-#endif
     } else {
       assert(false && "Unsupported mma layout found");
     }

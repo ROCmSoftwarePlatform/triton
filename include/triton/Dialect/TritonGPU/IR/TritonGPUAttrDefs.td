@@ -78,6 +78,15 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
                      "Type":$eltTy), [{
+
+#ifdef USE_ROCM
+        // ---- begin MI200 ----
+        auto mfmaEnc = dotOpEnc.getParent().dyn_cast<MfmaEncodingAttr>();
+        if (mfmaEnc) {
+          // Swizzling is currently disabled for MFMA
+          return $_get(context, 1, 1, 1, order);
+        }
+#endif
         auto mmaEnc = dotOpEnc.getParent().dyn_cast<MmaEncodingAttr>();
 
         if(!mmaEnc)
@@ -131,14 +140,6 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
 
           llvm_unreachable("invalid operand index");
         }
-
-#ifdef USE_ROCM
-        // ---- begin MI200 ----
-        if (mmaEnc.isMI200()) {
-          // Swizzling is currently disabled for MFMA
-          return $_get(context, 1, 1, 1, order);
-        }
-#endif
 
         // ---- not implemented ----
         llvm_unreachable("unsupported swizzling for provided MMA version");
@@ -435,7 +436,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       return $_get(context, versionMajor, versionMinor, wpt);
     }]>,
 
-
     AttrBuilder<(ins "int":$versionMajor,
                      "int":$numWarps,
                      "ArrayRef<int64_t>":$shapeA,
@@ -454,15 +454,27 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   let extraClassDeclaration = extraBaseClassDeclaration # [{
     bool isVolta() const;
     bool isAmpere() const;
-#ifdef USE_ROCM
-    bool isMI200() const;
-#endif
     // Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
     std::tuple<bool, bool, bool, bool, int> decodeVoltaLayoutStates() const;
     // Number of bits in versionMinor to hold the ID of the MMA encoding instance.
     // Here 5 bits can hold 32 IDs in a single module.
     static constexpr int numBitsToHoldMmaV1ID{5};
   }];
+
+  let hasCustomAssemblyFormat = 1;
+}
+
+def MfmaEncodingAttr : DistributedEncoding<"MfmaEncoding"> {
+  let mnemonic = "mfma";
+
+  let description = [{
+    An encoding for tensors that have been produced by MI100 && MI200 tensor cores.
+}];
+
+  let parameters = (
+    ins
+    ArrayRefParameter<"unsigned">:$warpsPerCTA
+  );
 
   let hasCustomAssemblyFormat = 1;
 }
@@ -550,9 +562,9 @@ section 9.7.13.4.1 for more details.
     SmallVector<int64_t> getMMAv2Rep(ArrayRef<int64_t> shape,
                                      int bitwidth) const;
 #ifdef USE_ROCM
-    SmallVector<int64_t> getMMAv3ElemsPerThread(Type elemTy) const;
-    SmallVector<int64_t> getMMAv3Rep(ArrayRef<int64_t> operandShape,
-                                     Type elemType) const;
+    SmallVector<int64_t> getMFMAElemsPerThread(Type elemTy) const;
+    SmallVector<int64_t> getMFMARep(ArrayRef<int64_t> operandShape,
+                                    Type elemType) const;
 #endif
   }];
 }

@@ -11,7 +11,7 @@ using namespace mlir::triton;
 namespace {
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::MfmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 enum class MatrixCoreType : uint8_t {
@@ -27,7 +27,7 @@ enum class MatrixCoreType : uint8_t {
 using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
 
 struct DotOpMFMAConversionHelper {
-  MmaEncodingAttr mmaLayout;
+  MfmaEncodingAttr mfmaLayout;
 
   ConversionPatternRewriter &rewriter;
   TritonGPUToLLVMTypeConverter *typeConverter;
@@ -35,10 +35,10 @@ struct DotOpMFMAConversionHelper {
   MLIRContext *ctx{};
 
   explicit DotOpMFMAConversionHelper(
-      MmaEncodingAttr mmaLayout, ConversionPatternRewriter &rewriter,
+      MfmaEncodingAttr mfmaLayout, ConversionPatternRewriter &rewriter,
       TritonGPUToLLVMTypeConverter *typeConverter, Location loc)
-      : mmaLayout(mmaLayout), rewriter(rewriter), typeConverter(typeConverter),
-        loc(loc), ctx(mmaLayout.getContext()) {}
+      : mfmaLayout(mfmaLayout), rewriter(rewriter),
+        typeConverter(typeConverter), loc(loc), ctx(mfmaLayout.getContext()) {}
 
   Value getThreadId() const {
     auto llvmIndexTy = typeConverter->getIndexType();
@@ -96,7 +96,7 @@ struct DotOpMFMAConversionHelper {
 
   // Conduct the Dot conversion.
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
-    auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
+    auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
     auto mfmaTy = getMatrixCoreTypeFromDot(op);
 
     Value a = op.getA();
@@ -110,8 +110,8 @@ struct DotOpMFMAConversionHelper {
     auto aEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     auto bEncoding = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
 
-    auto repA = aEncoding.getMMAv3Rep(aTensorTy.getShape(), elemTy);
-    auto repB = bEncoding.getMMAv3Rep(bTensorTy.getShape(), elemTy);
+    auto repA = aEncoding.getMFMARep(aTensorTy.getShape(), elemTy);
+    auto repB = bEncoding.getMFMARep(bTensorTy.getShape(), elemTy);
 
     assert(repA[1] == repB[0]);
 
@@ -187,21 +187,21 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   auto cTensorTy = rankedTType(op.getC());
   auto dTensorTy = rankedTType(op.getD());
-  assert(cTensorTy.getEncoding().isa<MmaEncodingAttr>() &&
-         "Currently, we only support $c with a mma layout.");
+  assert(cTensorTy.getEncoding().isa<MfmaEncodingAttr>() &&
+         "Currently, we only support $c with a mfma layout.");
 
   assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
          "DotOp's $c operand should pass the same number of values as $d");
 
   auto loc = op.getLoc();
-  auto mmaLayout = op.getResult()
-                       .getType()
-                       .cast<RankedTensorType>()
-                       .getEncoding()
-                       .cast<MmaEncodingAttr>();
+  auto mfmaLayout = op.getResult()
+                        .getType()
+                        .cast<RankedTensorType>()
+                        .getEncoding()
+                        .cast<MfmaEncodingAttr>();
 
-  DotOpMFMAConversionHelper helper(mmaLayout, rewriter, typeConverter, loc);
+  DotOpMFMAConversionHelper helper(mfmaLayout, rewriter, typeConverter, loc);
 
   return helper.convertDot(op, adaptor);
 }
