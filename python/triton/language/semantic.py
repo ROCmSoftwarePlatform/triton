@@ -6,6 +6,9 @@ from typing import List, Optional, Sequence, Tuple, TypeVar
 from . import core as tl
 from triton._C.libtriton.triton import ir
 
+import triton._C.libtriton.triton as _triton
+import re
+
 T = TypeVar('T')
 
 # Create custom exception that prints message "hello"
@@ -1188,6 +1191,17 @@ def is_hip():
         raise ImportError("Triton requires PyTorch to be installed")
     return torch.version.hip is not None
 
+def gpu_has_mfma() -> bool:
+    arch_info = _triton.get_arch_info()
+    gfx_arch_details = re.search('amd.*', arch_info).group(0).strip().split('--')
+    return gfx_arch_details[1] in ['gfx908', 'gfx90a']
+
+def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
+    if not gpu_has_mfma():
+        return False
+    # TODO: Add check for configurations and types.
+    return True
+
 def dot(lhs: tl.tensor,
         rhs: tl.tensor,
         allow_tf32: bool,
@@ -1216,11 +1230,8 @@ def dot(lhs: tl.tensor,
     M = lhs.type.shape[0]
     N = rhs.type.shape[1]
 
-    # Cast operands of types f16 and i8 since only FMA implemented yet for ROCM.
-    # So we always perform dot(f32,f32,f32)->f32 here with FMA.
-    # TODO replace USE_MFMA with appropriate check
-    import os
-    if is_hip() and "USE_MFMA" not in os.environ:
+    # Cast operands of types f16 and i8 for configurations where FMA only supported.
+    if is_hip() and not mfma_supported(M, N, lhs.type.shape[1], allow_tf32, ret_scalar_ty):
         ret_cast_scalar_ty = tl.float32 if lhs.type.scalar.is_int() else ret_scalar_ty
         lhs = cast(lhs, ret_cast_scalar_ty, builder)
         rhs = cast(rhs, ret_cast_scalar_ty, builder)
