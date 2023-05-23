@@ -1192,7 +1192,7 @@ def is_hip():
     return torch.version.hip is not None
 
 def gpu_has_mfma() -> bool:
-    if torch.version.hip is None:
+    if not is_hip():
         return False
     arch_info = _triton.get_arch_info()
     gfx_arch_details = re.search('amd.*', arch_info)

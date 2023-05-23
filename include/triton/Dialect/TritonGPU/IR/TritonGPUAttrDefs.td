@@ -547,6 +547,14 @@ section 9.7.13.4.1 for more details.
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
       unsigned MMAv2kWidth = 32 / bitwidth;
       return $_get(context, opIdx, parent, MMAv2kWidth);
+    }]>,
+
+    // Specially for MFMA(MI100/MI200)
+    AttrBuilder<(ins "unsigned":$opIdx,
+                     "Attribute":$parent), [{
+      assert(llvm::isa<MmaEncodingAttr>(parent));
+      unsigned MMAv2kWidth = 0; // unused for MFMA ops
+      return $_get(context, opIdx, parent, MMAv2kWidth);
     }]>
   ];
 
