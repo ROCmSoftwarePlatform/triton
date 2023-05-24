@@ -662,15 +662,8 @@ struct AtomicRMWOpConversion
     SmallVector<Value> resultVals(elemsPerThread);
     const bool f16v2 = vec == 2 && valueElemTy.isF16();
     for (size_t i = 0; i < elemsPerThread; i += vec) {
-      Value rmwVal = undef(vecTy);
-      for (int ii = 0; ii < vec; ++ii) {
-        Value iiVal = createIndexAttrConstant(
-            rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        rmwVal = insert_element(vecTy, rmwVal, valElements[i + ii], iiVal);
-      }
-
       Value rmwPtr = ptrElements[i];
-      // TODO: in case !llMask we can create only one branch for all
+      // TODO: in case llMask is zero we can create only one branch for all
       // elemsPerThread.
       Value rmwMask = llMask ? and_(mask, maskElements[i]) : mask;
 
