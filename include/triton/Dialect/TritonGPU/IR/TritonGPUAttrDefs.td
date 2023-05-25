@@ -552,7 +552,7 @@ section 9.7.13.4.1 for more details.
     // Specially for MFMA(MI100/MI200)
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent), [{
-      assert(llvm::isa<MmaEncodingAttr>(parent));
+      assert(llvm::isa<MfmaEncodingAttr>(parent));
       unsigned MMAv2kWidth = 0; // unused for MFMA ops
       return $_get(context, opIdx, parent, MMAv2kWidth);
     }]>
