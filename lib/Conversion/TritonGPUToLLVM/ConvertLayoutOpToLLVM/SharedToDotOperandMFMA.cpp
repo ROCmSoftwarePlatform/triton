@@ -262,7 +262,8 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
     offsets = computeOffsetsTy1(rewriter, loc, elemsPerThread, waveN, lane, wpt,
                                 numOfElems, reps, cSwizzleOffset);
   } else {
-    int warpsPerGroupN = mfmaLayout.getWarpsPerCTA()[1];
+    unsigned int maxNumWarps = shape[1] / mfmaInstrN;
+    int warpsPerGroupN = std::min(warpsPerCTA[1], maxNumWarps);
     offsets =
         computeOffsetsTy2(rewriter, loc, bElemsPerThread, warpsPerGroupN, waveN,
                           lane, wpt, numOfElems, numReps, cSwizzleOffset);
