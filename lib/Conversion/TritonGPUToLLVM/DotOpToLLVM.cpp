@@ -26,7 +26,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    assert(false);
+    assert(true);
     // D = A * B + C
     Value A = op.getA();
     Value D = op.getResult();
