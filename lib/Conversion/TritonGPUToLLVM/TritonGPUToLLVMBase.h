@@ -578,10 +578,8 @@ public:
           result = emitBaseIndexForMmaLayoutV1(loc, rewriter, mmaLayout, type);
         if (mmaLayout.isAmpere())
           result = emitBaseIndexForMmaLayoutV2(loc, rewriter, mmaLayout, type);
-#ifdef USE_ROCM
       } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
         llvm_unreachable("MfmaEncodingAttr is not implemented yet");
-#endif
       } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
         auto parentLayout = sliceLayout.getParent();
         auto parentShape = sliceLayout.paddedShape(type.getShape());
@@ -610,11 +608,9 @@ public:
       if (mmaLayout.isAmpere())
         return emitOffsetForMmaLayoutV2(mmaLayout, type);
     }
-#ifdef USE_ROCM
     if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
       llvm_unreachable("MfmaEncodingAttr is not implemented yet");
     }
-#endif
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
       return emitOffsetForSliceLayout(sliceLayout, type);
     llvm_unreachable("unsupported emitOffsetForLayout");
@@ -792,11 +788,7 @@ private:
     Value _2 = i32_val(2);
     Value _4 = i32_val(4);
     Value _16 = i32_val(16);
-#ifdef USE_ROCM
-    Value warpSize = i32_val(64);
-#else
     Value warpSize = i32_val(32);
-#endif
     Value _fpw0 = i32_val(fpw[0]);
     Value _fpw1 = i32_val(fpw[1]);
 
@@ -912,11 +904,7 @@ private:
     SmallVector<Value> warpsPerCTA = {i32_val(_warpsPerCTA[0]),
                                       i32_val(_warpsPerCTA[1])};
     Value threadId = getThreadId(rewriter, loc);
-#ifdef USE_ROCM
-    Value warpSize = i32_val(64);
-#else
     Value warpSize = i32_val(32);
-#endif
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
     Value warpId0 = urem(urem(warpId, warpsPerCTA[0]), i32_val(shape[0] / 16));
@@ -995,7 +983,6 @@ private:
     return resultOffsets;
   }
 
-#ifdef USE_ROCM
 private:
   static SmallString<16> getUniqueFormatGlobalName(mlir::ModuleOp moduleOp) {
     const char formatStringPrefix[] = "printfFormat_";
@@ -1137,9 +1124,7 @@ protected:
       printfDesc = call.getResult();
     }
   }
-#endif // USE_ROCM
 
-protected:
   TritonGPUToLLVMTypeConverter *converter;
   ModuleAllocation *allocation;
   IndexCacheInfo indexCacheInfo;

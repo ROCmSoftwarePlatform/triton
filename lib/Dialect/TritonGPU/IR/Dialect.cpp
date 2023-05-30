@@ -30,10 +30,8 @@ unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
     return sliceLayout.getTotalElemsPerThread(shape, eltTy);
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     return mmaLayout.getTotalElemsPerThread(shape, eltTy);
-#ifdef USE_ROCM
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
     return mfmaLayout.getTotalElemsPerThread(shape, eltTy);
-#endif
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
     return sharedLayout.getTotalElemsPerThread(shape, eltTy);
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
@@ -85,11 +83,9 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
     if (mmaLayout.isAmpere())
       return {8, 4};
   }
-#ifdef USE_ROCM
   if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
     return {32, 2};
   }
-#endif
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parent = sliceLayout.getParent();
     auto parentThreadsPerWarp = getThreadsPerWarp(parent);
@@ -187,10 +183,8 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
     } else {
       llvm_unreachable("Unexpected mma version");
     }
-#ifdef USE_ROCM
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
     return {4, 4};
-#endif
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto parentLayout = dotLayout.getParent();
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");
@@ -207,7 +201,6 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
         assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
         return {};
       }
-#ifdef USE_ROCM
     } else if (parentLayout.isa<MfmaEncodingAttr>()) {
       auto parentShapePerCTA = getShapePerCTA(parentLayout);
       auto opIdx = dotLayout.getOpIdx();
@@ -219,7 +212,6 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
         assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
         return {};
       }
-#endif
     } else {
       assert(0 && "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
                   "supported yet");
@@ -235,10 +227,8 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
   if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(mmaLayout.isVolta() || mmaLayout.isAmpere());
     return {1, 2};
-#ifdef USE_ROCM
   } else if (layout.isa<MfmaEncodingAttr>()) {
     return {1, 1};
-#endif
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
     return getContigPerThread(parentLayout);
@@ -288,11 +278,9 @@ SmallVector<unsigned> getThreadsPerCTA(Attribute layout) {
                  4 * mmaLayout.getWarpsPerCTA()[1]};
     } else
       assert(0 && "Unimplemented usage of MmaEncodingAttr");
-#ifdef USE_ROCM
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
     threads = {32 * mfmaLayout.getWarpsPerCTA()[0],
                2 * mfmaLayout.getWarpsPerCTA()[1]};
-#endif
   } else {
     assert(0 && "Unimplemented usage of getShapePerCTA");
   }
@@ -329,11 +317,9 @@ SmallVector<unsigned> getShapePerCTA(Attribute layout,
               static_cast<unsigned>(tensorShape[1])};
     }
     assert(0 && "Unexpected MMA layout version found");
-#ifdef USE_ROCM
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
     return {32 * mfmaLayout.getWarpsPerCTA()[0],
             32 * mfmaLayout.getWarpsPerCTA()[1]};
-#endif
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto parentLayout = dotLayout.getParent();
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");
@@ -350,7 +336,6 @@ SmallVector<unsigned> getShapePerCTA(Attribute layout,
       } else {
         assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
       }
-#ifdef USE_ROCM
     } else if (auto parentMfmaLayout =
                    parentLayout.dyn_cast<MfmaEncodingAttr>()) {
       auto parentShapePerCTA = getShapePerCTA(parentLayout, tensorShape);
@@ -363,7 +348,6 @@ SmallVector<unsigned> getShapePerCTA(Attribute layout,
       } else {
         assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
       }
-#endif
     } else {
       assert(0 && "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
                   "supported yet");
@@ -380,10 +364,8 @@ SmallVector<unsigned> getOrder(Attribute layout) {
                                  blockedLayout.getOrder().end());
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     return {1, 0};
-#ifdef USE_ROCM
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
     return {1, 0};
-#endif
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     return {1, 0};
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
@@ -634,7 +616,6 @@ DotOperandEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
   }
 }
 
-#ifdef USE_ROCM
 static SmallVector<int64_t> getMFMAInstrShape(Type abElemType) {
   if (abElemType.isF16())
     return {32l, 32l, 8l}; // FP32_FP16_FP16_FP32
@@ -675,7 +656,6 @@ DotOperandEncodingAttr::getMFMARep(ArrayRef<int64_t> operandShape,
                                      (instrSize[1] * warpsPerCTA[1]))};
   }
 }
-#endif
 
 SmallVector<unsigned>
 DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
@@ -686,7 +666,6 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
 
 unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                         Type eltTy) const {
-#ifdef USE_ROCM
   if (auto mfmaParent = getParent().dyn_cast<MfmaEncodingAttr>()) {
     int warpsPerCTAM = mfmaParent.getWarpsPerCTA()[0];
     int warpsPerCTAN = mfmaParent.getWarpsPerCTA()[1];
@@ -695,7 +674,6 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
     auto rep = getMFMARep(shape, eltTy);
     return rep[0] * rep[1];
   }
-#endif
   if (auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>()) {
     int warpsPerCTAM = mmaParent.getWarpsPerCTA()[0];
     int warpsPerCTAN = mmaParent.getWarpsPerCTA()[1];
