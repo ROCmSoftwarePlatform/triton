@@ -184,7 +184,7 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
       llvm_unreachable("Unexpected mma version");
     }
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
-    return {4, 4};
+    return {16, 1};
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto parentLayout = dotLayout.getParent();
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");
@@ -535,8 +535,8 @@ MfmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   assert(rank == 2 && "Unexpected rank of mma layout");
 
   SmallVector<unsigned> elemsPerThread(rank);
-  unsigned elemsCol = ceil<unsigned>(shape[0], 32 * getWarpsPerCTA()[0]);
-  unsigned elemsRow = ceil<unsigned>(shape[1], 32 * getWarpsPerCTA()[1]) * 16;
+  unsigned elemsCol = ceil<unsigned>(shape[1], 32 * getWarpsPerCTA()[1]);
+  unsigned elemsRow = ceil<unsigned>(shape[0], 32 * getWarpsPerCTA()[0]) * 16;
   elemsPerThread[0] = elemsRow;
   elemsPerThread[1] = elemsCol;
   return elemsPerThread;
