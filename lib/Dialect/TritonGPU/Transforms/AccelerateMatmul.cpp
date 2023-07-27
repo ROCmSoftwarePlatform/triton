@@ -89,15 +89,6 @@ SmallVector<unsigned, 2> warpsPerTileMI200(triton::DotOp dotOp,
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp = {32, 32};
   bool changed = false;
-  // TODO (@daadaada): double-check.
-  // original logic in
-  // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
-  // seems buggy for shape = [32, 16] ?
-
-  // TODO(@B1tway): the comment above is also true for AMDGPU for shape =
-  // [64,32], as a temporary solution the dims have been swapped
-  if (shape[0] == 2 * shape[1])
-    tensorShape = {shape[1], shape[0]};
 
   do {
     changed = false;
