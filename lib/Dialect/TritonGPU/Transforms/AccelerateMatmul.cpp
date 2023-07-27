@@ -103,8 +103,8 @@ SmallVector<unsigned, 2> warpsPerTileMI200(triton::DotOp dotOp,
     changed = false;
     if (ret[0] * ret[1] >= numWarps)
       break;
-    if (tensorShape[0] / shapePerWarp[0] / ret[0] >=
-        tensorShape[1] / (shapePerWarp[1]) / ret[1]) {
+    if (tensorShape[0] / (shapePerWarp[0] *2 )  / ret[0] >=
+        tensorShape[1] / shapePerWarp[1] / ret[1]) {
       if (ret[0] < tensorShape[0] / shapePerWarp[0]) {
         ret[0] *= 2;
       } else
