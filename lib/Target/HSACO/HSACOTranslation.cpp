@@ -150,7 +150,6 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
     bitcode_path = (dump_path / bitcode_filename ).string();
   else
     bitcode_path = (kernel_dir / bitcode_filename ).string();
-  llvm::errs() << "bitcode_path:" << bitcode_path << '\n';
   std::unique_ptr<llvm::raw_fd_ostream> bitecode_fs(
       new llvm::raw_fd_ostream(bitcode_path, ec, llvm::sys::fs::OF_Text));  
   llvm::WriteBitcodeToFile(*module, *bitecode_fs);  
