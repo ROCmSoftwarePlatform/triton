@@ -110,7 +110,8 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
                            const std::string &proc,
                            const std::string &features) {
   auto machine = initialize_module(module, triple, proc, features);
-
+  std::string dump_path = ::triton::tools::getenv("AMDGCN_DUMP_PATH");
+  
   // create unique dir for kernel's binary and hsaco
   std::error_code ec;
   std::string kernel_name_base = "amd_triton_kernel";
@@ -126,7 +127,7 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
   std::filesystem::path kernel_dir(unique_dir.data());
   std::string kernel_name = kernel_dir.stem();
 
-  std::string dump_path = ::triton::tools::getenv("AMDGCN_DUMP_PATH");
+
 
   // Save GCN ISA binary.
   std::filesystem::path isa_binary(kernel_name + ".o");  
@@ -152,6 +153,12 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
     bitcode_path = (kernel_dir / bitcode_filename ).string();
   std::unique_ptr<llvm::raw_fd_ostream> bitecode_fs(
       new llvm::raw_fd_ostream(bitcode_path, ec, llvm::sys::fs::OF_Text));  
+  if (ec) {
+    llvm::errs() << bitcode_path
+                 << " was not created. error code: " << ec.category().name()
+                 << ':' << ec.value() << '\n';
+  }
+  
   llvm::WriteBitcodeToFile(*module, *bitecode_fs);  
 
   // emit
