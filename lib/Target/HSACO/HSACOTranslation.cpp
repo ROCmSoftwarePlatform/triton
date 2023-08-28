@@ -130,7 +130,7 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
 
   // Save GCN ISA binary.
   std::filesystem::path isa_binary(kernel_name + ".o");  
-  std::string isabin_path
+  std::string isabin_path;
   if (!dump_path.empty())
     isabin_path = (dump_path / isa_binary).string();
   else
