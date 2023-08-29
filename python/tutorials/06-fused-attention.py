@@ -573,7 +573,7 @@ configs = [triton.testing.Benchmark(
     ylabel='ms',
     plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
     args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode, 'causal': causal}
-) for mode in ['fwd'] for causal in [False]]
+) for mode in ['fwd', 'bwd'] for causal in [True, False]]
 
 
 @triton.testing.perf_report(configs)
@@ -581,8 +581,11 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype
     assert mode in ['fwd', 'bwd']
     warmup = 25
     rep = 100
-    causal = True
-    split_kernel = True
+    split_kernel = False
+    # Bwd pass only supports causal=True right now
+    if mode == 'bwd':
+        causal = True
+        split_kernel = True
     if provider == "triton":
         q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
         k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
