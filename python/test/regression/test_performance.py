@@ -1,5 +1,7 @@
 import subprocess
 import sys
+import json
+import re
 
 import pytest
 import torch
@@ -7,9 +9,10 @@ import torch
 import triton
 import triton.language as tl
 import triton.ops
-from triton.testing import get_dram_gbps, get_max_tensorcore_tflops
+from triton.testing import get_dram_gbps, get_max_tensorcore_tflops, get_max_tensorcore_tflops_rocm
 
-DEVICE_NAME = {7: 'v100', 8: 'a100'}[torch.cuda.get_device_capability()[0]]
+
+DEVICE_NAME = {7: 'v100', 8: 'a100', 9: 'mi100'}[torch.cuda.get_device_capability()[0]]
 
 #######################
 # Utilities
@@ -19,6 +22,26 @@ DEVICE_NAME = {7: 'v100', 8: 'a100'}[torch.cuda.get_device_capability()[0]]
 def print_perf(cur_ms, cur_util, ref_util):
     # print on the same line cur_ms, cur_util and ref_util with 3 decimal places
     print(f'{cur_ms:.3f} ms \t cur: {cur_util:.3f} \t ref: {ref_util:.3f} \t dif={cur_util - ref_util:.3f}', end='\t')
+
+
+def extract_clock_from_string(clock_str):
+    match = re.search(r'\((\d+)Mhz\)', clock_str)
+    if match:
+        return int(match.group(1))
+    else:
+        return None
+
+
+def get_rocm_clock(clock, card=0):
+    assert clock in ['fclk', 'mclk', 'sclk', 'socclk', 'pcie']
+    card_str = str(card)
+    cmd = ['rocm-smi', '-d', card_str, '--showclocks', '--json']
+    out = subprocess.check_output(cmd)
+    json_out = json.loads(out.decode(sys.stdout.encoding))
+    clk_str = json_out['card'+card_str][clock + ' clock speed:']
+    clk = extract_clock_from_string(clk_str)
+    assert clk is not None
+    return clk
 
 
 def nvsmi(attrs):
@@ -38,6 +61,9 @@ sm_clocks = {'v100': 1350, 'a100': 1350}
 mem_clocks = {'v100': 877, 'a100': 1215}
 
 matmul_data = {
+    'mi100' : {
+    # TODO: fill in data.
+    },
     'v100': {
         # square
         (512, 512, 512): {'float16': 0.158},
@@ -125,6 +151,9 @@ def _add(x_ptr, y_ptr, output_ptr, n_elements,
 
 
 elementwise_data = {
+    'mi100': {
+    # TODO: fill in data.
+    },
     'v100': {
         1024 * 16: 0.0219,
         1024 * 64: 0.0791,
@@ -171,6 +200,9 @@ flash_attention_data = {
     "a100": {
         (4, 48, 4096, 64, 'forward', 'float16'): 0.37,
         (4, 48, 4096, 64, 'backward', 'float16'): 0.25,
+    },
+    "mi100": {
+        (4, 48, 4096, 64, 'forward', 'float16'): 0.1,
     }
 }
 
@@ -180,6 +212,10 @@ flash_attention_data = {
 @pytest.mark.parametrize("dtype_str", ['float16'])
 def test_flash_attention(Z, H, N_CTX, D_HEAD, mode, dtype_str):
     is_backward = mode == 'backward'
+
+    if torch.version.hip is not None and is_backward:
+        pytest.skip("Backward pass not supported for mi100.")
+
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
         pytest.skip("Flash attention only supported for compute capability < 80")
@@ -204,8 +240,13 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, mode, dtype_str):
         total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
     cur_gpu_perf = total_flops / ms * 1e-9
     # maximum flops
-    cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
-    max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
+    if torch.version.hip is not None:
+        cur_sm_clock = get_rocm_clock('sclk')
+        max_gpu_perf = get_max_tensorcore_tflops_rocm(dtype, clock_rate=cur_sm_clock * 1e3)
+    else:
+        cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
+        max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
+
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     ref_gpu_util = flash_attention_data[DEVICE_NAME][(Z, H, N_CTX, D_HEAD, mode, dtype_str)]
     print_perf(ms, cur_gpu_util, ref_gpu_util)

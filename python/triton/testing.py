@@ -289,6 +289,40 @@ def get_dram_gbps(backend=None, device=None):
     bw_gbps = mem_clock_khz * bus_width * 2 / 1e6 / 8  # In GB/s
     return bw_gbps
 
+def get_max_tensorcore_tflops_rocm(dtype, backend=None, device=None, clock_rate=None):
+    import torch
+    from .runtime import driver
+    if not backend:
+        backend = _triton.runtime.backend.CUDA
+    if not device:
+        device = torch.cuda.current_device()
+
+    num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"]
+    capability = torch.cuda.get_device_capability(device)
+    assert(capability[0] > 8)
+    if capability[0] > 9: # mi200 has 4 matrix cores per CU
+        num_subcores *= 4
+
+    if not clock_rate:
+        clock_rate = driver.utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
+
+    if dtype == torch.float32:
+        ops_per_sub_core = 256
+    elif dtype == torch.float16:
+        ops_per_sub_core = 1024
+    elif dtype == torch.bfloat16:
+        if capability[0] > 9: # mi200
+            ops_per_sub_core = 1024
+        else:
+            ops_per_sub_core = 512
+    elif dtype == torch.int8:
+        ops_per_sub_core = 1024
+    else:
+        raise RuntimeError("dtype not supported")
+
+    tflops = num_subcores * clock_rate * ops_per_sub_core * 1e-9
+    return tflops
+
 
 def get_max_tensorcore_tflops(dtype, backend=None, device=None, clock_rate=None):
     import torch
