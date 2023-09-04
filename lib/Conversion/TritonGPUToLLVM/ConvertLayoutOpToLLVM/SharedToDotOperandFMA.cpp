@@ -57,25 +57,12 @@ Value getStructFromValueTable(ArrayRef<Value> vals,
                               ConversionPatternRewriter &rewriter, Location loc,
                               TritonGPUToLLVMTypeConverter *typeConverter,
                               Type elemTy) {
-#ifdef USE_ROCM
-  Type resElemTy = elemTy.isBF16() ? i16_ty : elemTy;
-  SmallVector<Type> elemTypes(vals.size(), resElemTy);
-  SmallVector<Value> elems;
-  elems.reserve(vals.size());
-  for (auto &val : vals) {
-    if (resElemTy == elemTy)
-      elems.push_back(val);
-    else
-      elems.push_back(bitcast(val, resElemTy));
-  }
-#else
   SmallVector<Type> elemTypes(vals.size(), elemTy);
   SmallVector<Value> elems;
   elems.reserve(vals.size());
   for (auto &val : vals) {
     elems.push_back(val);
   }
-#endif
   MLIRContext *ctx = elemTy.getContext();
   Type structTy = struct_ty(elemTypes);
   return typeConverter->packLLElements(loc, elems, rewriter, structTy);
@@ -138,7 +125,8 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
   for (int i = 0; i < aNumPtr; ++i) {
     aOff[i] = add(mul(offA0, strideA0), mul(offA1, strideA1));
   }
-  auto elemTy = A.getType().cast<RankedTensorType>().getElementType();
+  auto elemTy = typeConverter->convertType(
+      A.getType().cast<RankedTensorType>().getElementType());
 
   Type ptrTy = ptr_ty(elemTy, 3);
   SmallVector<Value> aPtrs(aNumPtr);
@@ -202,7 +190,8 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
   for (int i = 0; i < bNumPtr; ++i) {
     bOff[i] = add(mul(offB0, strideB0), mul(offB1, strideB1));
   }
-  auto elemTy = B.getType().cast<RankedTensorType>().getElementType();
+  auto elemTy = typeConverter->convertType(
+      B.getType().cast<RankedTensorType>().getElementType());
 
   Type ptrTy = ptr_ty(elemTy, 3);
   SmallVector<Value> bPtrs(bNumPtr);
