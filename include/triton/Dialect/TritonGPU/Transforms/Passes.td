@@ -28,8 +28,8 @@ def TritonGPUStreamPipeline : Pass<"tritongpu-stream-pipeline", "mlir::ModuleOp"
   let summary = "pipeline";
 
   let description = [{
-    Replace `LoadOp` in loops by `InsertSliceAsyncOp` instructions that asynchronously construct the data
-    needed at the next iteration
+    Pipeline global loads through registers to shared memory while computing on previous
+    tile
   }];
 
   let constructor = "mlir::createTritonGPUStreamPipelinePass()";
