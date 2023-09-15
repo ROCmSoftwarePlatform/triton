@@ -12,9 +12,28 @@
 #B = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 
 // CHECK: tt.func @matmul_loop
-// CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_b0:.*]] = %[[B0]], {{.*}}, {{.*}}, {{.*}}, %[[PIPELINE_IDX:.*]] = %[[CONSTANT_2]], %[[LOOP_IDX:.*]] = %[[CONSTANT_1]]
-// CHECK:   tt.dot %[[arg_a0_dot_op]], %[[arg_b0_dot_op_1]], {{.*}}
-// CHECK:   scf.yield {{.*}}, {{.*}}, {{.*}}, %[[NEXT_A_BUFFER]], %[[NEXT_B_BUFFER]], %[[NEXT_A]], %[[NEXT_B]], {{.*}}, {{.*}}, {{.*}}, %[[NEXT_PIPELINE_IDX]], %[[NEXT_LOOP_IDX]]
+// Prologue
+// CHECK: %[[A0_LOAD:.*]] = tt.load
+// CHECK: %[[A0_SHARED:.*]] = triton_gpu.convert_layout %[[A0_LOAD]]
+// CHECK: %[[B0_LOAD:.*]] = tt.load
+// CHECK: %[[B0_SHARED:.*]] = triton_gpu.convert_layout %[[B0_LOAD]]
+// Restructured for-loop
+// CHECK: %[[FOR_OUTPUT:.*]]:{{.*}} = scf.for {{.*}} iter_args({{.*}}, %[[AC_ARG:.*]] = %[[A0_SHARED]], %[[BC_ARG:.*]] = %[[B0_SHARED]], %[[AN_ARG:.*]] = %{{.*}}, %[[BN_ARG:.*]] = %{{.*}})
+// CHECK:   %[[AN_LOAD:.*]] = tt.load %[[AN_ARG]]
+// CHECK:   %[[BN_LOAD:.*]] = tt.load %[[BN_ARG]]
+// CHECK:   %[[AC_CVT:.*]] = triton_gpu.convert_layout %[[AC_ARG]]
+// CHECK:   %[[BC_CVT:.*]] = triton_gpu.convert_layout %[[BC_ARG]]
+// CHECK:   %[[BC_CVT_0:.*]] = arith.mulf %[[BC_CVT]], %{{.*}}
+// CHECK:   tt.dot %[[AC_CVT]], %[[BC_CVT_0]], {{.*}}
+// CHECK:   %[[AN_SHARED:.*]] = triton_gpu.convert_layout %[[AN_LOAD]]
+// CHECK:   %[[BN_SHARED:.*]] = triton_gpu.convert_layout %[[BN_LOAD]]
+// CHECK:   scf.yield {{.*}}, %[[AN_SHARED]], %[[BN_SHARED]],
+// Epilogue
+// CHECK: %[[AO_SHARED:.*]] = triton_gpu.convert_layout %[[FOR_OUTPUT]]#1
+// CHECK: %[[BO_SHARED:.*]] = triton_gpu.convert_layout %[[FOR_OUTPUT]]#2
+// CHECK: %[[BO_SHARED_0:.*]] = arith.mulf %[[BO_SHARED]], %{{.*}}
+// CHECK-NEXT: tt.dot %[[AO_SHARED]], %[[BO_SHARED_0]], {{.*}}
+
 tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
                   %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                   %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C> {
@@ -61,8 +80,26 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 
 // CHECK: tt.func @matmul_loop_nested
 // CHECK: scf.for
-// CHECK:   scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_b0:.*]] = %[[B0]], {{.*}}, {{.*}}, {{.*}}, %[[PIPELINE_IDX:.*]] = %[[CONSTANT_2]], %[[LOOP_IDX:.*]] = %[[CONSTANT_1]]
-// CHECK:     scf.yield {{.*}}, {{.*}}, {{.*}}, %[[NEXT_A_BUFFER]], %[[NEXT_B_BUFFER]], %[[NEXT_A]], %[[NEXT_B]], {{.*}}, {{.*}}, {{.*}}, %[[NEXT_PIPELINE_IDX]], %[[NEXT_LOOP_IDX]]
+// Prologue
+// CHECK: %[[A0_LOAD:.*]] = tt.load
+// CHECK: %[[A0_SHARED:.*]] = triton_gpu.convert_layout %[[A0_LOAD]]
+// CHECK: %[[B0_LOAD:.*]] = tt.load
+// CHECK: %[[B0_SHARED:.*]] = triton_gpu.convert_layout %[[B0_LOAD]]
+// Restructured for-loop
+// CHECK: %[[FOR_OUTPUT:.*]]:{{.*}} = scf.for {{.*}} iter_args({{.*}}, %[[AC_ARG:.*]] = %[[A0_SHARED]], %[[BC_ARG:.*]] = %[[B0_SHARED]], %[[AN_ARG:.*]] = %{{.*}}, %[[BN_ARG:.*]] = %{{.*}})
+// CHECK:   %[[AN_LOAD:.*]] = tt.load %[[AN_ARG]]
+// CHECK:   %[[BN_LOAD:.*]] = tt.load %[[BN_ARG]]
+// CHECK:   %[[AC_CVT:.*]] = triton_gpu.convert_layout %[[AC_ARG]]
+// CHECK:   %[[BC_CVT:.*]] = triton_gpu.convert_layout %[[BC_ARG]]
+// CHECK:   tt.dot %[[AC_CVT]], %[[BC_CVT]], {{.*}}
+// CHECK:   %[[AN_SHARED:.*]] = triton_gpu.convert_layout %[[AN_LOAD]]
+// CHECK:   %[[BN_SHARED:.*]] = triton_gpu.convert_layout %[[BN_LOAD]]
+// CHECK:   scf.yield {{.*}}, %[[AN_SHARED]], %[[BN_SHARED]],
+// Epilogue
+// CHECK: %[[AO_SHARED:.*]] = triton_gpu.convert_layout %[[FOR_OUTPUT]]#1
+// CHECK: %[[BO_SHARED:.*]] = triton_gpu.convert_layout %[[FOR_OUTPUT]]#2
+// CHECK-NEXT: tt.dot %[[AO_SHARED]], %[[BO_SHARED]], {{.*}}
+
 tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
                          %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                          %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C>{
@@ -110,10 +147,22 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 
 
 // CHECK: tt.func @matmul_loop_single_pipeline
-// CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, %[[arg_b0:.*]] = %{{.*}}
-// CHECK:   %[[arg_b0_dot_op:.*]] = triton_gpu.convert_layout %[[arg_b0]]
-// CHECK:   tt.dot {{.*}}, %[[arg_b0_dot_op]], {{.*}}
-// CHECK:   scf.yield {{.*}}, {{.*}}, %[[NEXT_B_BUFFER]], %[[NEXT_B]], {{.*}}, {{.*}}, %[[NEXT_PIPELINE_IDX]], %[[NEXT_LOOP_IDX]]
+// Prologue
+// CHECK: %[[A0_LOAD:.*]] = tt.load
+// CHECK: %[[A0_SHARED:.*]] = triton_gpu.convert_layout %[[A0_LOAD]]
+// CHECK: %[[B0_LOAD:.*]] = tt.load
+// CHECK: %[[B0_SHARED:.*]] = triton_gpu.convert_layout %[[B0_LOAD]]
+// Restructured for-loop
+// CHECK: %[[FOR_OUTPUT:.*]]:{{.*}} = scf.for {{.*}} iter_args({{.*}}, %[[BC_ARG:.*]] = %[[B0_SHARED]], %[[BN_ARG:.*]] = %{{.*}})
+// CHECK:   %[[BN_LOAD:.*]] = tt.load %[[BN_ARG]]
+// CHECK:   %[[BC_DOT:.*]] = triton_gpu.convert_layout %[[BC_ARG]]
+// CHECK:   tt.dot %[[A0_SHARED]], %[[BC_DOT]], {{.*}}
+// CHECK:   %[[BN_SHARED:.*]] = triton_gpu.convert_layout %[[BN_LOAD]]
+// CHECK:   scf.yield {{.*}}, %[[BN_SHARED]],
+// Epilogue
+// CHECK: %[[BO_SHARED:.*]] = triton_gpu.convert_layout %[[FOR_OUTPUT]]#1
+// CHECK-NEXT: tt.dot %[[A0_SHARED]], %[[BO_SHARED]], {{.*}}
+
 tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
                                   %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                                   %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C> {
@@ -153,11 +202,26 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 }
 
 // CHECK: tt.func @lut_bmm_scalar
-// CHECK: %[[LUT_BUFFER_0:.*]] = tt.load %arg15, {{.*}}
-// CHECK: %[[LUT_BUFFER_1:.*]] = arith.muli {{.*}}, %[[LUT_BUFFER_0]]
-// CHECK: %[[LUT_BUFFER_2:.*]] = tt.splat %[[LUT_BUFFER_1]]
-// CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[LUT_BUFFER_2]]
-// CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %arg14, {{.*}}
+// Prologue
+// CHECK: %[[A0_LOAD:.*]] = tt.load
+// CHECK: %[[A0_SHARED:.*]] = triton_gpu.convert_layout %[[A0_LOAD]]
+// Restructured for-loop
+// CHECK: scf.for
+// CHECK:   %[[AN_LOAD:.*]] = tt.load
+// CHECK:   tt.load
+// CHECK:   tt.load
+// CHECK:   triton_gpu.convert_layout
+// CHECK:   triton_gpu.convert_layout
+// CHECK:   tt.dot 
+// CHECK:   %[[AN_SHARED:.*]] = triton_gpu.convert_layout %[[AN_LOAD]]
+// CHECK:   scf.yield {{.*}}, %[[AN_SHARED]]
+// Epilogue
+// CHECK: tt.load
+// CHECK: tt.load
+// CHECK: triton_gpu.convert_layout
+// CHECK: triton_gpu.convert_layout
+// CHECK: tt.dot
+
 tt.func @lut_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
                    %76: index,
                    %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
@@ -188,12 +252,25 @@ tt.func @lut_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
 }
 
 // CHECK: tt.func @lut_bmm_vector
-// CHECK: %[[LUT_BUFFER_0:.*]] = tt.load %arg15, {{.*}}
-// CHECK: %[[LUT_BUFFER_1:.*]] = tt.expand_dims %[[LUT_BUFFER_0]] {axis = 1 : i32}
-// CHECK: %[[LUT_BUFFER_2:.*]] = tt.broadcast %[[LUT_BUFFER_1]]
-// CHECK: %[[LUT_BUFFER_3:.*]] = arith.muli {{.*}}, %[[LUT_BUFFER_2]]
-// CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[LUT_BUFFER_3]]
-// CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %arg14, {{.*}}
+// Prologue
+// CHECK: %[[A0_LOAD:.*]] = tt.load
+// CHECK: %[[A0_SHARED:.*]] = triton_gpu.convert_layout %[[A0_LOAD]]
+// Restructured for-loop
+// CHECK: scf.for
+// CHECK:   %[[AN_LOAD:.*]] = tt.load
+// CHECK:   tt.load
+// CHECK:   tt.load
+// CHECK:   triton_gpu.convert_layout
+// CHECK:   triton_gpu.convert_layout
+// CHECK:   tt.dot 
+// CHECK:   %[[AN_SHARED:.*]] = triton_gpu.convert_layout %[[AN_LOAD]]
+// CHECK:   scf.yield {{.*}}, %[[AN_SHARED]]
+// Epilogue
+// CHECK: tt.load
+// CHECK: tt.load
+// CHECK: triton_gpu.convert_layout
+// CHECK: triton_gpu.convert_layout
+// CHECK: tt.dot
 tt.func @lut_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
                    %76: index,
                    %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
@@ -227,10 +304,12 @@ tt.func @lut_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt
 
 // CHECK: tt.func @post_load_inv
 // CHECK: scf.for
-// CHECK: arith.index_cast
-// CHECK-DAG: %[[IV:.*]] = arith.index_cast
-// CHECK: %[[NEXT_IV:.*]] = arith.addi %[[IV]], %c1_i32 : i32
-// CHECK-NOT: arith.addi %[[NEXT_IV]]
+// CHECK:   scf.yield
+// CHECK-NEXT: }
+// CHECK-NEXT: triton_gpu.convert_layout
+// CHECK-NEXT: triton_gpu.convert_layout
+// CHECK-NEXT: tt.dot
+
 tt.func @post_load_inv(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
                        %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32},
                        %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32},
@@ -281,13 +360,12 @@ tt.func @post_load_inv(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
   tt.return %85#0 : tensor<32x32xf32, #C>
 }
 
+// No stream pipeline
 // CHECK: tt.func @cross_iter_dep
-// CHECK: %[[PTR0:.*]] = tt.addptr
-// CHECK: %[[PTR1:.*]] = tt.addptr
-// CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[BUF0:.*]] = %[[PTR0]], {{.*}}, %[[BUF1:.*]] = %[[PTR1]]
-// CHECK: scf.yield
-// CHECK-SAME: %[[BUF0]]
-// CHECK-SAME: %[[BUF1]]
+// CHECK: scf.for
+// CHECK:   scf.yield
+// CHECK-NEXT: }
+// CHECK-NEXT: tt.return
 tt.func @cross_iter_dep(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
                         %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32},
                         %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32},
@@ -341,17 +419,26 @@ tt.func @cross_iter_dep(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
 }
 
 // CHECK: tt.func @matmul_mixed_kernel
-// CHECK: %[[PTR0:.*]] = tt.addptr
-// CHECK: %[[PTR1:.*]] = tt.addptr
-// CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[BUF0:.*]] = %[[PTR0]], {{.*}}, %[[BUF1:.*]] = %[[PTR1]]
-// CHECK: scf.yield
-// CHECK-SAME: %[[BUF0]]
-// CHECK-SAME: %[[BUF1]]
+// Prologue
+// CHECK: %[[A0_LOAD:.*]] = tt.load
+// CHECK: %[[A0_SHARED:.*]] = triton_gpu.convert_layout %[[A0_LOAD]]
+// Restructured for-loop
+// CHECK: scf.for
+// CHECK:   %[[AN_LOAD:.*]] = tt.load
+// CHECK:   tt.load
+// CHECK:   triton_gpu.convert_layout
+// CHECK:   tt.dot 
+// CHECK:   %[[AN_SHARED:.*]] = triton_gpu.convert_layout %[[AN_LOAD]]
+// CHECK:   scf.yield {{.*}}, %[[AN_SHARED]]
+// Epilogue
+// CHECK: tt.load
+// CHECK: triton_gpu.convert_layout
+// CHECK: tt.dot
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 2], warpsPerCTA = [2, 1], order = [1, 0]}>
 #blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
-tt.func public @matmul_mixed_kernel(%arg0: !tt.ptr<f8E4M3FNUZ> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+tt.func @matmul_mixed_kernel(%arg0: !tt.ptr<f8E4M3FNUZ> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #blocked>
     %cst_0 = arith.constant dense<32> : tensor<64x32xi32, #blocked1>
     %cst_1 = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #blocked1>
