@@ -100,9 +100,6 @@ class LoopPipeliner {
   /// operations that loads depend on
   SetVector<Operation *> depOps;
 
-  /// Collect all pipelinable ops
-  LogicalResult collectOps(SetVector<Operation *> &ops);
-
   /// Collect values that `v` depends on and are defined inside the loop
   void collectValueDep(Value v, int stage, SetVector<Operation*> &deps,
                        SetVector<BlockArgument> &args);
@@ -113,8 +110,8 @@ class LoopPipeliner {
 
   void collectDepChain(Operation *op, SetVector<Operation*> &ops);
   
-  /// Check if none of the ops has valid uses
-  LogicalResult checkOpUses(SetVector<Operation *> &ops);
+  /// Check if none of the for-ops has valid uses
+  LogicalResult checkOpUses();
 
   /// Check if ops have dependencies that are not pipelinable
   LogicalResult checkOpDeps();
@@ -182,25 +179,6 @@ public:
   friend struct PipelinePass;
 };
 
-/// Collect loads to pipeline. Return success if we can pipeline this loop
-LogicalResult LoopPipeliner::collectOps(SetVector<Operation *> &ops) {
-  ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
-  ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
-
-  // We cannot use forOp.walk(...) here because we only want to visit the
-  // operations in the loop body block. Nested blocks are handled separately.
-  for (Operation &op : forOp)
-    if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
-      // pipeline all loads
-      ops.insert(loadOp);
-    }
-
-  if (ops.empty())
-    return failure();
-  else
-    return success();
-}
-
 void LoopPipeliner::collectValueDep(Value v, int stage,
                                     SetVector<Operation*> &deps,
                                     SetVector<BlockArgument> &args) {
@@ -241,57 +219,64 @@ void LoopPipeliner::collectDeps(
   }
 }
 
-LogicalResult LoopPipeliner::checkOpUses(SetVector<Operation *> &ops) {
+LogicalResult LoopPipeliner::checkOpUses() {
+  SetVector<Operation *> ops;
+  // We cannot use forOp.walk(...) here because we only want to visit the
+  // operations in the loop body block. Nested blocks are handled separately.
+  for (Operation &op : forOp) {
+    if (auto loadOp = dyn_cast<triton::LoadOp>(&op))
+      ops.insert(&op);
+  }
+
   // Collect all ops' dependencies
   MapVector<Operation *, SetVector<Operation*>> opDeps;
   collectDeps(ops, opDeps);
 
   for (Operation *op : ops) {
-    if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
-      // Don't pipeline valid loads that depend on other valid loads
-      // (Because if a valid load depends on another valid load, this load needs
-      // to wait on the other load in the prologue, which is against the point
-      // of the pipeline pass)
-      bool isCandidate = true;
-      for (Operation *other : ops)
-        if (isa<triton::LoadOp>(other))
-          if (opDeps[op].contains(other)) {
-            isCandidate = false;
-            break;
-          }
-      // We only pipeline loads that have one covert_layout (to dot_op) use
-      // TODO: lift this constraint in the future
-      if (isCandidate && loadOp.getResult().hasOneUse()) {
-        isCandidate = false;
-        Operation *use = *loadOp.getResult().getUsers().begin();
-
-        // Advance to the first conversion as long as the use resides in shared
-        // memory and it has a single use itself
-        while (use) {
-          if (use->getNumResults() != 1 || !use->getResult(0).hasOneUse())
-            break;
-          auto tensorType =
-              use->getResult(0).getType().dyn_cast<RankedTensorType>();
-          if (!tensorType || !tensorType.getEncoding().isa<ttg::SharedEncodingAttr>())
-            break;
-          use = *use->getResult(0).getUsers().begin();
+    // Don't pipeline valid loads that depend on other valid loads
+    // (Because if a valid load depends on another valid load, this load needs
+    // to wait on the other load in the prologue, which is against the point
+    // of the pipeline pass)
+    bool isCandidate = true;
+    for (Operation *other : ops)
+      if (isa<triton::LoadOp>(other))
+        if (opDeps[op].contains(other)) {
+          isCandidate = false;
+          break;
         }
+    // We only pipeline loads that have one covert_layout (to dot_op) use
+    // TODO: lift this constraint in the future
+    if (isCandidate && loadOp.getResult().hasOneUse()) {
+      isCandidate = false;
+      Operation *use = *loadOp.getResult().getUsers().begin();
 
-        if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use))
-          if (auto tensorType = convertLayout.getResult()
-                                    .getType()
-                                    .dyn_cast<RankedTensorType>())
-            if (auto dotOpEnc = tensorType.getEncoding()
-                                    .dyn_cast<ttg::DotOperandEncodingAttr>()) {
-              isCandidate = true;
-              convertMapping[loadOp] = convertLayout;
-            }
-      } else
-        isCandidate = false;
+      // Advance to the first conversion as long as the use resides in shared
+      // memory and it has a single use itself
+      while (use) {
+        if (use->getNumResults() != 1 || !use->getResult(0).hasOneUse())
+          break;
+        auto tensorType =
+          use->getResult(0).getType().dyn_cast<RankedTensorType>();
+        if (!tensorType || !tensorType.getEncoding().isa<ttg::SharedEncodingAttr>())
+          break;
+        use = *use->getResult(0).getUsers().begin();
+      }
 
-      if (isCandidate)
-        validLoads.insert(op);
-    }
+      // TODO: handle fp_to_fp conversions in between
+      if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use))
+        if (auto tensorType = convertLayout.getResult()
+            .getType()
+            .dyn_cast<RankedTensorType>())
+          if (auto dotOpEnc = tensorType.getEncoding()
+              .dyn_cast<ttg::DotOperandEncodingAttr>()) {
+            isCandidate = true;
+            convertMapping[loadOp] = convertLayout;
+          }
+    } else
+      isCandidate = false;
+
+    if (isCandidate)
+      validLoads.insert(op);
   }
 
   return validLoads.empty() ? failure() : success();
@@ -467,13 +452,7 @@ int LoopPipeliner::getValueDefStage(Value v, int stage) {
 }
 
 LogicalResult LoopPipeliner::initialize() {
-  // All ops that maybe pipelined
-  SetVector<Operation *> ops;
-
-  if (collectOps(ops).failed())
-    return failure();
-
-  if (checkOpUses(ops).failed())
+  if (checkOpUses().failed())
     return failure();
 
   if (checkOpDeps().failed())
