@@ -52,7 +52,7 @@ class LoopPipeliner {
   scf::ForOp pplForOp;
   
   /// Loads to be pipelined
-  SetVector<Value> validLoads;
+  SetVector<Operation *> validLoads;
   /// The value that each load will be mapped to (after layout conversion)
   DenseMap<Value, Value> convertMapping;
   /// load => buffer
@@ -117,7 +117,7 @@ class LoopPipeliner {
   LogicalResult checkOpUses(SetVector<Operation *> &ops);
 
   /// Check if ops have dependencies that are not pipelinable
-  LogicalResult checkOpDeps(SetVector<Operation *> &ops);
+  LogicalResult checkOpDeps();
 
   void createBufferTypes();
 
@@ -242,7 +242,6 @@ void LoopPipeliner::collectDeps(
 }
 
 LogicalResult LoopPipeliner::checkOpUses(SetVector<Operation *> &ops) {
-  DenseSet<Operation *> invalidOps;
   // Collect all ops' dependencies
   MapVector<Operation *, SetVector<Operation*>> opDeps;
   collectDeps(ops, opDeps);
@@ -290,28 +289,20 @@ LogicalResult LoopPipeliner::checkOpUses(SetVector<Operation *> &ops) {
       } else
         isCandidate = false;
 
-      if (!isCandidate)
-        invalidOps.insert(loadOp);
-      else
-        validLoads.insert(loadOp);
+      if (isCandidate)
+        validLoads.insert(op);
     }
   }
 
-  for (Operation *op : invalidOps)
-    ops.remove(op);
-
-  if (ops.empty())
-    return failure();
-  else
-    return success();
+  return validLoads.empty() ? failure() : success();
 }
 
-LogicalResult LoopPipeliner::checkOpDeps(SetVector<Operation *> &ops) {
+LogicalResult LoopPipeliner::checkOpDeps() {
   /// arg => source operand defined stages
   DenseMap<BlockArgument, DenseSet<int>> immediateArgStages;
   SetVector<BlockArgument> nonImmediateDepArgs;
   SetVector<Operation *> nonImmediateOps;
-  for (Operation *op : ops) {
+  for (Operation *op : validLoads) {
     for (Value v : op->getOperands()) {
       SetVector<Operation*> deps;
       SetVector<BlockArgument> args;
@@ -438,7 +429,7 @@ void LoopPipeliner::createOrderedDeps() {
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (depOps.contains(&op))
       orderedDeps.push_back(&op);
-    else if (op.getNumResults() > 0 && validLoads.contains(op.getResult(0)))
+    else if (op.getNumResults() > 0 && validLoads.contains(&op))
       orderedDeps.push_back(&op);
   }
   assert(depOps.size() + validLoads.size() == orderedDeps.size() &&
@@ -446,7 +437,7 @@ void LoopPipeliner::createOrderedDeps() {
 }
 
 void LoopPipeliner::collectDepChain(Operation *op, SetVector<Operation*> &ops) {
-  if (op->getNumResults() == 1 && validLoads.contains(op->getResult(0)))
+  if (op->getNumResults() == 1 && validLoads.contains(op))
     return;
   if (!ops.contains(op)) {
     ops.insert(op);
@@ -485,7 +476,7 @@ LogicalResult LoopPipeliner::initialize() {
   if (checkOpUses(ops).failed())
     return failure();
 
-  if (checkOpDeps(ops).failed())
+  if (checkOpDeps().failed())
     return failure();
 
   createBufferTypes();
@@ -530,7 +521,7 @@ bool LoopPipeliner::isLoadChain(Operation *op) const {
     Value loadVal = cvtOp.getSrc();
     if (auto f2fOp = dyn_cast<triton::FpToFpOp>(op))
       loadVal = f2fOp.getFrom();
-    if (validLoads.contains(loadVal)) {
+    if (validLoads.contains(loadVal.getDefiningOp())) {
       auto cvtDstTy = cvtOp.getResult().getType().cast<RankedTensorType>();
       if (cvtDstTy.getEncoding().isa<ttg::DotOperandEncodingAttr>())
         return true;
@@ -557,7 +548,7 @@ void LoopPipeliner::emitPrologue() {
   // Emit Iteration 0 loads, etc
   for (Operation *op : orderedDeps) {
     Operation *newOp = nullptr;
-    if (validLoads.contains(op->getResult(0))) {
+    if (validLoads.contains(op)) {
       auto loadOp = cast<triton::LoadOp>(op);
       // Load from global -> regs
       auto newLoadOp = cloneWithInferType(builder, op, prologueMap);
@@ -589,8 +580,8 @@ void LoopPipeliner::emitEpilogue(DenseMap<Value, Value> &newResults) {
   auto args = forOp.getRegionIterArgs();
   for (uint32_t i = 0; i < args.size(); ++i)
     epilogueMap.map(args[i], pplForOp.getResult(i));
-  for (uint32_t i = 0; i < validLoads.size(); ++i)
-    epilogueMap.map(validLoads[i], pplForOp.getResult(bufferIdx + i));
+  for (auto load : llvm::enumerate(validLoads))
+    epilogueMap.map(load.value()->getResult(0), pplForOp.getResult(bufferIdx + load.index()));
   // Map IV to original upper bound (ie. last iteration)
   epilogueMap.map(forOp.getInductionVar(), forOp.getUpperBound());
 
@@ -632,8 +623,8 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
 
   // Shared mem locations from iteration 0
   bufferIdx = newLoopArgs.size();
-  for (auto loadOp : validLoads)
-    newLoopArgs.push_back(loadsBuffer[loadOp]);
+  for (auto *loadOp : validLoads)
+    newLoopArgs.push_back(loadsBuffer[loadOp->getResult(0)]);
 
   // Loop carried vals
   depArgsBeginIdx = newLoopArgs.size();
@@ -664,8 +655,8 @@ scf::ForOp LoopPipeliner::cloneForOp(ArrayRef<Value> newLoopArgs,
   for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
     curMapping.map(arg.value(), pplForOp.getRegionIterArgs()[arg.index()]);
   uint32_t bufIdx = bufferIdx;
-  for (auto loadOp : validLoads)
-    curMapping.map(loadOp, pplForOp.getRegionIterArgs()[bufIdx++]);
+  for (auto *loadOp : validLoads)
+    curMapping.map(loadOp->getResult(0), pplForOp.getRegionIterArgs()[bufIdx++]);
   curMapping.map(forOp.getInductionVar(), pplForOp.getInductionVar());
 
   nextMapping = curMapping;
@@ -705,7 +696,7 @@ void LoopPipeliner::prefetchNextBuffer(OpBuilder &builder) {
   // Emit prefetch loads of next buffer before compute of current buffer
   for (Operation *op : orderedDeps) {
     Operation *nextOp = nullptr;
-    if (validLoads.contains(op->getResult(0))) {
+    if (validLoads.contains(op)) {
       // Update loading mask
       auto loadOp = llvm::cast<triton::LoadOp>(op);
       auto mask = loadOp.getMask();
@@ -757,7 +748,7 @@ void LoopPipeliner::cloneCurrentBody(OpBuilder &builder) {
 void LoopPipeliner::storeNextBuffer(OpBuilder &builder) {
   // Store the next buffer at the end of the loop body for the next iteration
   for (Operation *op : orderedDeps) {
-    if (!validLoads.contains(op->getResult(0))) {
+    if (!validLoads.contains(op)) {
       if (immediateOpStages[op].contains(numStages - 2)) {
         Operation *nextOp = builder.clone(*op, nextMapping);
         if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
@@ -775,12 +766,12 @@ void LoopPipeliner::storeNextBuffer(OpBuilder &builder) {
   }
   
   // PL loads -> store next to shared
-  for (auto loadOp : validLoads) {
-    Value loadVal = nextMapping.lookup(loadOp);
+  for (auto *loadOp : validLoads) {
+    Value loadVal = nextMapping.lookup(loadOp->getResult(0));
     // then store regs -> shared
     Value storeBuf = pplForOp.getRegionIterArgs()[bufferIdx + nextBuffers.size()];
     auto cvt = builder.create<ttg::ConvertLayoutOp>(
-          loadOp.getLoc(), storeBuf.getType(), loadVal);
+          loadOp->getLoc(), storeBuf.getType(), loadVal);
     nextBuffers.push_back(cvt);
   }
 
