@@ -233,6 +233,7 @@ LogicalResult LoopPipeliner::checkOpUses() {
   collectDeps(ops, opDeps);
 
   for (Operation *op : ops) {
+    auto loadOp = dyn_cast<triton::LoadOp>(op);
     // Don't pipeline valid loads that depend on other valid loads
     // (Because if a valid load depends on another valid load, this load needs
     // to wait on the other load in the prologue, which is against the point
