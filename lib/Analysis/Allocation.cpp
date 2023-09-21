@@ -186,6 +186,15 @@ private:
       if (!addAdjacent(id))
         push_back(IntervalT(id));
     }
+    IntervalT unionize() const {
+      IntervalT res;
+      if (size()) {
+        res = front();
+        for (auto &I : *this)
+          res = res.merge(I);
+      }
+      return res;
+    }
   };
   
   typedef function_ref<LivenessR(Value value)> LivenessF;
@@ -342,8 +351,7 @@ private:
       auto value = valueBufferIter.first;
       auto *buffer = valueBufferIter.second;
       auto ranges = getLiveness(value);
-      assert(ranges.size() == 1);
-      bufferRange[buffer] = ranges[0];
+      bufferRange[buffer] = ranges.unionize();
     }
   }
 
