@@ -1,6 +1,6 @@
 // RUN: triton-opt --convert-triton-gpu-to-llvm %s | FileCheck %s
 
-// CHECK: module attributes {{{.*}}, "triton_gpu.shared" = 9216, 
+// CHECK: module attributes {{{.*}}, triton_gpu.shared = 9216 : i32
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #triton_gpu.shared<{vec = 4, perPhase = 2, maxPhase = 8, order = [1, 0]}>
