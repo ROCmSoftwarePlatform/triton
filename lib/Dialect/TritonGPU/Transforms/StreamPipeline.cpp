@@ -712,8 +712,14 @@ void LoopPipeliner::cloneCurrentBody(OpBuilder &builder) {
         newOp = cloneWithInferType(builder, &op, curMapping);
     } else {
       // hack for yield operands
-      if (auto ttadd = dyn_cast<triton::AddPtrOp>(op)) {
-        curMapping.map(ttadd.getResult(), curMapping.lookup(ttadd.getPtr()));
+      if (op.getNumResults() == 1) {
+        auto res = op.getResult(0);
+        for (auto opr : op.getOperands()) {
+          if (curMapping.contains(opr) && opr.getType() == res.getType()) {
+            curMapping.map(res, curMapping.lookup(opr));
+            break;
+          }
+        }
       }
     }
   }
