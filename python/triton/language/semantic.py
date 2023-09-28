@@ -1324,6 +1324,7 @@ def dot(lhs: tl.tensor,
                 assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
 
     assert lhs.type.is_block() and rhs.type.is_block()
+    assert lhs.dtype == rhs.dtype or (lhs.type.scalar.is_fp8() and rhs.type.scalar.is_fp16()) or (lhs.type.scalar.is_fp16() and rhs.type.scalar.is_fp8()), f"First input ({lhs.dtype}) and second input ({rhs.dtype}) must have the same dtype!"
 
     assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.arch)
 
@@ -1333,6 +1334,12 @@ def dot(lhs: tl.tensor,
     assert lhs.shape[0].value >= 16 and lhs.shape[1].value >= 16 \
         and rhs.shape[1].value >= 16, \
         f"All values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 16!"
+
+    if lhs.type.scalar.is_fp8():
+        lhs = cast(lhs, tl.float16, builder)
+    elif rhs.type.scalar.is_fp8():
+        rhs = cast(rhs, tl.float16, builder)
+
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"
         # TODO: This is CUDA specific, check if ROCm has the same limitation

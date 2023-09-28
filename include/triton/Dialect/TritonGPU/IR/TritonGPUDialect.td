@@ -52,6 +52,14 @@ def TritonGPU_Dialect : Dialect {
       }
       return threadsPerWarp.cast<IntegerAttr>().getInt();
     }
+    static int getSharedSize(ModuleOp mod) {
+      Attribute sharedAttr = mod->getDiscardableAttr("triton_gpu.shared");
+      if(!sharedAttr) {
+        return 0;
+      }
+      return sharedAttr.cast<IntegerAttr>().getInt();
+    }
+
   }];
 
   let useDefaultAttributePrinterParser = 1;

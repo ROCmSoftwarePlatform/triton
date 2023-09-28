@@ -157,8 +157,13 @@ public:
     return false;
   }
 
+  /// @brief Choose MFMA instruction parameters
+  /// @param dot target dot operation
+  /// @param mfmaVersion
+  /// @return pair {nonKDim, kDim} sizes of one MFMA instruction arguments
   std::pair<int64_t, int64_t> chooseMfmaDimensions(tt::DotOp dot, int mfmaVersion) const {
     int64_t nonKDim = 32;
+    // number of matrix elements along k dim per one MFMA intruction
     int64_t kDim = -1;
     auto opType = dot.getA().getType().cast<RankedTensorType>();
     auto elemType = opType.getElementType();
@@ -233,12 +238,14 @@ public:
                          .cast<ttg::BlockedEncodingAttr>()
                          .getOrder();
 
+    // kWidth is a number of consecutive elements per one instruction per one thread
+    auto kWidth = kDim / 2;
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(),
-        ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kDim));
+        ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth));
     auto newBType = RankedTensorType::get(
         oldBType.getShape(), oldBType.getElementType(),
-        ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kDim));
+        ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth));
     a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);
     auto newDot = rewriter.create<tt::DotOp>(
