@@ -70,10 +70,11 @@ public:
     if (!cvtOp)
       return mlir::failure();
 
-    auto encoding =
-        cvtOp.getSrc().getType().cast<RankedTensorType>().getEncoding();
-    if (!encoding.isa<triton::gpu::MmaEncodingAttr>() &&
-        !encoding.isa<triton::gpu::MfmaEncodingAttr>())
+    if (!cvtOp.getSrc()
+             .getType()
+             .cast<RankedTensorType>()
+             .getEncoding()
+             .isa<triton::gpu::MmaEncodingAttr>())
       return mlir::failure();
 
     if (!cvtOp.getResult().hasOneUse())
