@@ -379,20 +379,50 @@ bool isMmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
 }
 
 #ifdef USE_ROCM
-bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+/// @brief Type of layout orientation
+///
+/// There are three possible orientation types:
+/// 1 - elements are oriented like in non transposed A operand
+/// 2 - elements are oriented like in non transposed B operand or dot output
+///
+/// @param enc
+/// @return 1 or 2
+static int getMfmaOrientation(triton::gpu::MfmaEncodingAttr enc){
+  return enc.getIsTransposed() ? 1 : 2;
+}
+
+/// @brief Type of layout orientation
+///
+/// There are three possible orientation types:
+/// 0 - encoding is not mfma compatible
+/// 1 - elements are oriented like in non transposed A operand
+/// 2 - elements are oriented like in non transposed B operand or dot output
+///
+/// @param enc
+/// @return 0, 1 or 2
+static int getMfmaDotOpOrientation(triton::gpu::DotOperandEncodingAttr enc){
+  auto mfmaLayout = dyn_cast_or_null<triton::gpu::MfmaEncodingAttr>(enc.getParent());
+  if (!mfmaLayout)
+    return 0;
+  bool isAOperand = enc.getOpIdx() == 0;
+  return isAOperand ? 1 : 2;
+}
+
+bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy, bool isSrcTransposedToDst) {
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-  auto mfmaLayout = srcLayout.cast<triton::gpu::MfmaEncodingAttr>();
+  auto srcMfmaLayout = srcLayout.cast<triton::gpu::MfmaEncodingAttr>();
   auto dotOperandLayout = dstLayout.cast<triton::gpu::DotOperandEncodingAttr>();
-  // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
-  // improved. In addition, we can enable this shortcut for regular MFMA
-  // layout when opIdx == 1.
-  return mfmaLayout.getWarpsPerCTA()[1] == 1 &&
-         dotOperandLayout.getOpIdx() == 0 &&
-         dotOperandLayout.getKWidth() == 4 &&
-         dotOperandLayout.getParent() == mfmaLayout &&
-         mfmaLayout.getIsTransposed() &&
-         (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
+  auto dstMfmaLayout = dyn_cast_or_null<triton::gpu::MfmaEncodingAttr>(dotOperandLayout.getParent());
+  if (!dstMfmaLayout)
+    return false;
+
+  bool orientationCompatible = getMfmaOrientation(srcMfmaLayout) == getMfmaDotOpOrientation(dotOperandLayout);
+  bool kWidthCompatible = dotOperandLayout.getKWidth() == 4;
+  bool nonKDimCompatible = (srcMfmaLayout.getNonKDim() == 32) && (dstMfmaLayout.getNonKDim() == 32);
+  bool warpsCompatible = (srcMfmaLayout.getWarpsPerCTA() == dstMfmaLayout.getWarpsPerCTA());
+  bool layoutsCompatible = orientationCompatible && kWidthCompatible && nonKDimCompatible && warpsCompatible;
+  return layoutsCompatible;
 }
 #endif
 

@@ -119,15 +119,27 @@ public:
   BlockedToMFMA(mlir::MLIRContext *context, int mfmaVersion)
       : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context), mfmaVersion(mfmaVersion) {}
 
-  bool isChainDot(triton::DotOp &dotOp) const {
+  bool needTransposeChainDot(triton::DotOp &dotOp) const {
     auto filter = [&dotOp](Operation *op) {
       return op->getParentRegion() == dotOp->getParentRegion();
     };
     auto slices = mlir::getSlice(dotOp, filter);
+    bool foundOtherDot = false;
+    bool foundTranspose = false;
     for (Operation *op : slices) {
       if (isa<triton::DotOp>(op) && (op != dotOp))
-        return true;
+        foundOtherDot = true;
+      if (isa<triton::TransOp>(op))
+        foundTranspose = true;
     }
+    // TODO add operand analysis
+    //
+    // Need to transpose only if second chained dot uses result of first chained dot as A operand:
+    // c = dot(a, b)
+    // c1 = some_elementwise_operations(c)
+    // e = dot(c1, d)
+    if (foundOtherDot && !foundTranspose)
+      return true;
     return false;
   }
 
@@ -188,7 +200,8 @@ public:
 
     auto warpsPerTile = warpsPerTileMI200(dotOp, retShape, numWarps);
 
-    bool isTransposed = isChainDot(dotOp);
+    bool isTransposed = needTransposeChainDot(dotOp);
+
     mfmaEnc = triton::gpu::MfmaEncodingAttr::get(
         oldRetType.getContext(), nonKDim, warpsPerTile, isTransposed);
 

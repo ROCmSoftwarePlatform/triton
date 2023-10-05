@@ -175,7 +175,7 @@ template <typename T> T nextPowOf2(T n) {
 }
 
 #ifdef USE_ROCM
-bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
+bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy, bool isSrcTransposedToDst = false);
 #endif
 
 /// Multi-root DAG topological sort.

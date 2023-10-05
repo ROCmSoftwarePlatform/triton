@@ -17,6 +17,10 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
+#ifdef USE_ROCM
+#include "triton/Analysis/Utility.h"
+#endif
+
 #include <memory>
 
 using namespace mlir;

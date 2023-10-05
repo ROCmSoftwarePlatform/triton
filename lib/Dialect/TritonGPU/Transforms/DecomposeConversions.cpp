@@ -51,10 +51,7 @@ public:
 #ifdef USE_ROCM
       if (auto srcMfmaEncoding =
               srcEncoding.dyn_cast<triton::gpu::MfmaEncodingAttr>()) {
-
-        if (srcMfmaEncoding.getWarpsPerCTA()[1] == 1 &&
-            srcMfmaEncoding.getIsTransposed() &&
-            dstDotOp.getParent() == srcMfmaEncoding)
+        if (isMfmaToDotShortcut(srcType, dstType))
           return;
       }
 #endif

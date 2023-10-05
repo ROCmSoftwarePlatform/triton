@@ -1811,6 +1811,72 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
 
     triton.testing.assert_close(c, golden.to(torch.float32), rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err))
 
+@pytest.mark.parametrize("M, N, K, num_warps, z_first",
+                         [(*shape, num_warps, z_first)
+                          for shape in [(128, 128, 128), (64, 64, 64), (32, 32, 32), (16, 16, 16)]
+                          for num_warps in [1, 2, 4]
+                          for z_first in [False, True]])
+def test_advanced_chained_dot(M, N, K, num_warps, z_first, device='cuda'):
+    if M == 128 and N == 128 and K == 128 and num_warps == 4:
+        pytest.skip("Out of resources")
+
+    # triton kernel
+    @triton.jit
+    def kernel(X, stride_xm, stride_xk,
+               Y, stride_yk, stride_yn,
+               W, stride_wn, stride_wl,
+               Z, stride_zm, stride_zn,
+               BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+               Z_IS_FIRST_ARGUMENT: tl.constexpr):
+        off_m = tl.arange(0, BLOCK_M)
+        off_n = tl.arange(0, BLOCK_N)
+        off_l = tl.arange(0, BLOCK_N)
+        off_k = tl.arange(0, BLOCK_K)
+        Xs = X + off_m[:, None] * stride_xm + off_k[None, :] * stride_xk
+        Ys = Y + off_k[:, None] * stride_yk + off_n[None, :] * stride_yn
+        Ws = W + off_n[:, None] * stride_wn + off_l[None, :] * stride_wl
+        Zs = Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
+        x = tl.load(Xs)
+        y = tl.load(Ys)
+        z = tl.dot(x, y)
+        z = tl.trans(z)
+        w = tl.load(Ws)
+        if Z_IS_FIRST_ARGUMENT:
+            z = tl.dot(z.to(w.dtype), w)
+        else:
+            z = tl.dot(w, z.to(w.dtype))
+        tl.store(Zs, z)
+    # input
+    rs = RandomState(17)
+    in_dtype="float16"
+    x = numpy_random((M, K), dtype_str=in_dtype, rs=rs) * 0.1
+    y = numpy_random((K, N), dtype_str=in_dtype, rs=rs) * 0.1
+    w = numpy_random((N, N), dtype_str=in_dtype, rs=rs) * 0.1
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    w_tri = to_triton(w, device=device)
+    # triton result
+    z = numpy_random((M, N), dtype_str=in_dtype, rs=rs)
+
+    z_tri = to_triton(z, device=device)
+
+    pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1),
+                         y_tri, y_tri.stride(0), y_tri.stride(1),
+                         w_tri, w_tri.stride(0), w_tri.stride(1),
+                         z_tri, z_tri.stride(0), z_tri.stride(1),
+                         BLOCK_M=M, BLOCK_K=K, BLOCK_N=N,
+                         Z_IS_FIRST_ARGUMENT=z_first,
+                         num_warps=num_warps)
+    z_ref = np.matmul(x, y)
+    z_ref = z_ref.transpose()
+    if z_first:
+        z_ref = np.matmul(z_ref, w)
+    else:
+        z_ref = np.matmul(w, z_ref)
+    # compare
+    # print(z_ref[:,0], z_tri[:,0])
+    np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
+
 # ---------------
 # test arange
 # ---------------
