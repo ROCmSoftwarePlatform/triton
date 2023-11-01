@@ -402,6 +402,13 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     slice.insert(currentValue);
     layout[currentValue] = encoding;
     if (auto *definingOp = currentValue.getDefiningOp()) {
+#ifdef USE_ROCM
+      if (auto reduceOp = dyn_cast<triton::ReduceOp>(definingOp)) {
+        for (auto res: reduceOp.getResults()) {
+          layout[res] = encoding;
+        }
+      }
+#endif
       if (canFoldIntoConversion(definingOp, encoding))
         continue;
       if (stopPropagation && stopPropagation(definingOp))

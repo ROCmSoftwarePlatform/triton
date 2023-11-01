@@ -918,8 +918,7 @@ static void rewriteSlice(SetVector<Value> &slice,
     Operation *newOp = builder.clone(*op, mapping);
     for (auto [old, newV] : llvm::zip(op->getResults(), newOp->getResults())) {
       auto it = layout.find(old);
-      if (it == layout.end())
-        continue;
+      assert(it != layout.end());
       auto newType = RankedTensorType::get(
           old.getType().cast<RankedTensorType>().getShape(),
           old.getType().cast<RankedTensorType>().getElementType(), it->second);
