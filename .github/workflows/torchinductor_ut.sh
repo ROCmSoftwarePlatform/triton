@@ -8,7 +8,7 @@ on:
       - triton-mlir
 
 jobs:
-  Triton-Inductor-Tests:
+  Integration-Tests:
     runs-on: ubuntu-latest
     
     container:
