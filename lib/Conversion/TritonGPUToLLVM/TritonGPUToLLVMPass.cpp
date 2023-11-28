@@ -323,6 +323,7 @@ public:
 #endif
     decomposeBlockedToDotOperand(mod);
     decomposeInsertSliceAsyncOp(mod);
+    decomposeMixedModeDotOp(mod);
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
@@ -674,6 +675,76 @@ private:
         asyncWaitOp.erase();
       }
 #endif
+    });
+  }
+
+static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
+                              Type promotedType) {
+    Type tensorPromotedType =
+        operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
+                                                             promotedType);
+    return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
+  }
+
+  // promote operands of dot op if the existing combination is not natively
+  // supported.
+  void decomposeMixedModeDotOp(ModuleOp mod) const {
+    mod.walk([](triton::DotOp dotOp) -> void {
+      Value D = dotOp.getResult();
+      OpBuilder builder(dotOp);
+      Type AElType =
+          dotOp.getA().getType().cast<RankedTensorType>().getElementType();
+      Type promoteType;
+      MmaEncodingAttr mmaLayout = D.getType()
+                                      .cast<RankedTensorType>()
+                                      .getEncoding()
+                                      .dyn_cast<MmaEncodingAttr>();
+      if (mmaLayout) {
+        bool isNativeHopperFP8 =
+            AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
+        bool isFP8 = isNativeHopperFP8 || AElType.isFloat8E5M2FNUZ() ||
+                     AElType.isFloat8E4M3FN();
+        if (!isFP8)
+          return;
+        promoteType = builder.getF16Type();
+#ifdef USE_ROCM
+      } else if (MfmaEncodingAttr mfmaLayout =
+                     D.getType()
+                         .cast<RankedTensorType>()
+                         .getEncoding()
+                         .dyn_cast<MfmaEncodingAttr>()) {
+        Type BElType =
+            dotOp.getB().getType().cast<RankedTensorType>().getElementType();
+
+        auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
+                                    BElType.getIntOrFloatBitWidth());
+
+        // TODO check mfma tensor core version compatibility
+        if (maxBitWidth == 8)
+          return;
+
+        if (AElType == BElType)
+          return;
+
+        if (maxBitWidth < 16)
+          promoteType = builder.getF16Type();
+        else if (maxBitWidth <= 32)
+          promoteType = builder.getF32Type();
+#endif
+      } else {
+        // FMA case.
+        Type AElType =
+            dotOp.getA().getType().cast<RankedTensorType>().getElementType();
+        Type DElType = D.getType().cast<RankedTensorType>().getElementType();
+        if (AElType == DElType)
+          return;
+        promoteType = DElType;
+      }
+      Location loc = dotOp.getLoc();
+      Value promotedA = promoteOperand(builder, loc, dotOp.getA(), promoteType);
+      Value promotedB = promoteOperand(builder, loc, dotOp.getB(), promoteType);
+      dotOp.setOperand(0, promotedA);
+      dotOp.setOperand(1, promotedB);
     });
   }
 };
