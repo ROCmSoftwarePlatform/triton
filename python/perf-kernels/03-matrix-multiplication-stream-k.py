@@ -17,15 +17,16 @@ import triton
 import triton.language as tl
 import random
 
-from triton.runtime.driver import CudaUtils
+#from triton.runtime.driver import CudaUtils
 import json
 
 torch.manual_seed(123)
 random.seed(123)
 
-device = torch.cuda.current_device()
-cuda_utils = CudaUtils()
-total_sm = cuda_utils.get_device_properties(device)["multiprocessor_count"]
+#device = torch.cuda.current_device()
+#cuda_utils = CudaUtils()
+#total_sm = cuda_utils.get_device_properties(device)["multiprocessor_count"]
+total_sm = 110 # for MI250
 print(f"total SMs: {total_sm}")
 
 # ---------------------------------------------------------------------------
@@ -299,8 +300,9 @@ class matmul(torch.autograd.Function):
 # Example and Benchmark
 # ---------------------------------------------------------------------------
 
+perf = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
 
-m, n, k = 1536, 1792, 6016  # some problem size to test
+m, n, k = 8192, 8192, 8192  # some problem size to test
 A = torch.randn(m, k, device="cuda", dtype=torch.float16)
 B = torch.randn(k, n, device="cuda", dtype=torch.float16)
 
@@ -315,17 +317,20 @@ assert torch.allclose(C, expected, atol=1), f"max: {(C - expected).abs().max().i
 # exit(0)
 
 triton_ms = triton.testing.do_bench(lambda: torch.matmul(A, B))
-print("PyTorch", triton_ms)
+print(f"PyTorch: {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
 triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm, 128, 128, 32, True, 4, 4))
-print(f"hybrid stream-k (grid={total_sm})", triton_ms)
+print(f"hybrid stream-k (grid={total_sm}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
 triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm * 2, 128, 128, 32, True, 4, 4))
-print(f"hybrid stream-k (grid={total_sm * 2})", triton_ms)
+print(f"hybrid stream-k (grid={total_sm * 2}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
 triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, 0, 128, 128, 32, True, 4, 4))
-print("tile matmul (grid=0)", triton_ms)
+print(f"tile matmul (grid=0): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
+
+
+exit(0)
 # ---------------------------------------------------------------------------
 # Log-sampled benchmark
 # ---------------------------------------------------------------------------
