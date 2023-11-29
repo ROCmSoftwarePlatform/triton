@@ -83,8 +83,8 @@ def mac_loop(A, B, C,
     rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     rk = tl.arange(0, BLOCK_K)
-    A = A + (rm[:, None] * stride_am + rk[None, :] * stride_ak) + BLOCK_K * stride_ak * (start_iter % iters_per_tile)
-    B = B + (rk[:, None] * stride_bk + rn[None, :] * stride_bn) + BLOCK_K * stride_bk * (start_iter % iters_per_tile)
+    A = A + rm[:, None] * stride_am + rk[None, :] * stride_ak + BLOCK_K * stride_ak * (start_iter % iters_per_tile)
+    B = B + rk[:, None] * stride_bk + rn[None, :] * stride_bn + BLOCK_K * stride_bk * (start_iter % iters_per_tile)
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_TYPE)
 
     for current_iter in range(start_iter, end_iter):
@@ -95,14 +95,14 @@ def mac_loop(A, B, C,
         B += BLOCK_K * stride_bk
 
     if end_iter % iters_per_tile == 0:  # last iteration of the tile always happens before its start on another SM
-        C_ = C + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)  # compute inside the if/else to avoid spilling!
+        C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
         tl.store(C_, acc)
         if start_iter % iters_per_tile != 0:  # only if tile has been partially processed
             tl.atomic_xchg(locks + tile_id, 1)
     else:
         while tl.atomic_cas(locks + tile_id, 1, 1) != 1:
             pass
-        C_ = C + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)  # compute inside the if/else to avoid spilling!
+        C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
         tl.atomic_add(C_, acc)
 
 
@@ -157,8 +157,8 @@ def full_tiles(
     rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     rk = tl.arange(0, BLOCK_K)
     # pointers
-    A = A + (rm[:, None] * stride_am + rk[None, :] * stride_ak)
-    B = B + (rk[:, None] * stride_bk + rn[None, :] * stride_bn)
+    A = A + rm[:, None] * stride_am + rk[None, :] * stride_ak
+    B = B + rk[:, None] * stride_bk + rn[None, :] * stride_bn
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_TYPE)
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         a = tl.load(A)
@@ -170,7 +170,7 @@ def full_tiles(
     # rematerialize rm and rn to save registers
     rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    C = C + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)
+    C = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn
     tl.store(C, acc)
 
 
