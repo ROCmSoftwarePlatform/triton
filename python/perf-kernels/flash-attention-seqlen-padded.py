@@ -69,6 +69,11 @@ def _attn_fwd_inner(
         lo = tl.multiple_of(lo, BLOCK_N)
         K_block_ptr = tl.advance(K_block_ptr, (0, lo))
         V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
+        if bias_ptr is not None:
+            if bias_ptr.type.element_ty.is_block():
+                bias_ptr = tl.advance(bias_ptr, (0, lo))
+            else:
+                bias_ptr += lo
     # causal = False
     else:
         lo, hi = 0, N_CTX
@@ -97,13 +102,16 @@ def _attn_fwd_inner(
                 if bias_ptr.type.element_ty.is_block():
                     bias = tl.load(bias_ptr,boundary_check=(1,), padding_option="zero")
                 else:
-                    size_n = start_n + offs_n[None,:]
+                    size_n = start_n + offs_n
                     boundary_n = tl.full([BLOCK_N], total_tokens, dtype=tl.float32)
                     bias_padding = tl.full([BLOCK_N], 0, dtype=tl.float32)
                     bias = tl.load(bias_ptr, mask=size_n < boundary_n, other=bias_padding)
             else:
                 bias = tl.load(bias_ptr)
-            qk += bias
+            # While bias is added after multiplying qk with sm_scale,
+            # our optimization to use 2^x instead of e^x results in an additional
+            # scale factor of log2(e) which we must also multiply the bias with.
+            qk += (bias * 1.44269504)
         if padded_block:
             boundary_m = tl.full([BLOCK_M], total_tokens, dtype=tl.float32)
             size_n = start_n + offs_n[None,:]
@@ -218,7 +226,7 @@ def _attn_fwd(
     # don't work as expected with `exp` in the loop
     qk_scale = sm_scale * 1.44269504
     # load q: it will stay in SRAM throughout on NV GPUs but in VGPRs on AMD GPUs
-    q = tl.load(Q_block_ptr, boundary_check=(0,1), padding_option="zero")
+    q = tl.load(Q_block_ptr, boundary_check=(0,), padding_option="zero")
     q = (q * qk_scale).to(q.dtype)
     # stage 1: off-band
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
@@ -226,9 +234,9 @@ def _attn_fwd(
     if STAGE & 1:
         # We don't currently support causal masking and padding.
         tl.static_assert((STAGE != 3) or not need_padding)
+        # equal to N_CTX if N_CTX is already a multiple of block_M
+        seqlen_aligned = N_CTX - extra_tokens_n
         if N_CTX >= BLOCK_N:
-            # equal to N_CTX if N_CTX is already a multiple of block_M
-            seqlen_aligned = N_CTX - extra_tokens_n
             acc, l_i, m_i = _attn_fwd_inner(
                 acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
                 start_m,
@@ -522,8 +530,8 @@ class _attention(torch.autograd.Function):
         assert seqlen == k.shape[-2] and seqlen == v.shape[-2]
 
         # We've derived these previously from tuning the kernel
-        BLOCK_M = 64
-        BLOCK_N = 64 #128 if Lq == 128 else 64
+        BLOCK_M = 256
+        BLOCK_N = 128 if Lq == 128 else 64
         waves_per_eu = 2 if Lq == 128 else 3
         num_warps = 8 if Lq == 128 else 4
         pre_load_v = False if Lq == 128 else True
@@ -553,13 +561,6 @@ class _attention(torch.autograd.Function):
             bias_strides = (bias.stride(0), bias.stride(1), bias.stride(2), bias.stride(3))
         else: 
             bias, bias_type, bias_strides = None, None, (0,0,0,0)
-
-        print(f"bias strides = {bias.stride()}")
-        print(f"bias shape = {bias.shape}")
-        print(f"bias[1] = {bias.stride(1)}")
-        print(f"bias type = {bias_type}")
-        print(f"padding = {need_padding}")
-        print(f"extra tokens = {extra_tokens_n}")
 
         _attn_fwd[grid](
             q, k, v, bias, sm_scale, M, o,
@@ -668,25 +669,29 @@ attention = _attention.apply
 
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD',
-                         [(4, 48, 64, 64),
-                          #(4, 48, 997, 64),
-                          #(4, 48, 2048, 64),
-                          #(4, 48, 4096, 64),
-                          #(4, 48, 3989, 64),
-                          #(4, 48, 1024, 128),
-                          #(4, 48, 1021, 128),
-                          #(4, 48, 2048, 128),
-                          #(4, 48, 4096, 128),
-                          #(4, 16, 8192, 64),
-                          #(4, 16, 8080, 64),
-                          #(4, 48, 16384, 64)
+                         [(4, 48, 63, 64),
+                          (4, 48, 987, 64),
+                          (4, 48, 2048, 64),
+                          (4, 48, 4096, 64),
+                          (4, 48, 3989, 64),
+                          (4, 48, 1024, 128),
+                          (4, 48, 1021, 128),
+                          (4, 48, 2048, 128),
+                          (4, 48, 4096, 128),
+                          (4, 16, 8192, 64),
+                          (4, 16, 8080, 64),
+                          (1, 48, 16384, 64)
                           ])
 @pytest.mark.parametrize('causal', [False])
-@pytest.mark.parametrize('use_bias', [True])
-def test_op_fwd(Z, H, N_CTX, D_HEAD, causal, use_bias, dtype=torch.float16):
+@pytest.mark.parametrize('use_bias', [False, True])
+@pytest.mark.parametrize('bias_type', ["vector", "matrix"])
+def test_op_fwd(Z, H, N_CTX, D_HEAD, causal, use_bias, bias_type, dtype=torch.float16):
     torch.manual_seed(20)
     if use_bias:
-        bias = torch.randn((1, H, 1, N_CTX), dtype=torch.float32, device="cuda")
+        if bias_type == "vector":
+            bias = torch.randn((1, H, 1, N_CTX), dtype=torch.float32, device="cuda")
+        elif bias_type == "matrix":
+            bias = torch.randn((1, H, N_CTX, N_CTX), dtype=torch.float32, device="cuda")
     else:
         bias = None
     q = torch.randn((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
@@ -695,7 +700,7 @@ def test_op_fwd(Z, H, N_CTX, D_HEAD, causal, use_bias, dtype=torch.float16):
     if TORCH_HAS_FP8E5:
         q = q.to(torch_dtype)
         k = k.to(torch_dtype)
-    sm_scale = 0.5
+    sm_scale = D_HEAD ** -0.5
     dout = torch.randn_like(q, dtype=torch.float16)
     # reference implementation
     M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
@@ -710,8 +715,7 @@ def test_op_fwd(Z, H, N_CTX, D_HEAD, causal, use_bias, dtype=torch.float16):
     # triton implementation
     tri_out = attention(q, k, v, causal, bias, sm_scale)
     # compare
-    print(f"err out = {torch.max(torch.abs(tri_out) - torch.abs(ref_out))}")
-    #torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=1e-2)
+    torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD',
@@ -862,5 +866,5 @@ def bench_flash_attention(
 
 
 # only works on post-Ampere GPUs right now
-#bench_flash_attention.run(save_path=".", print_data=True)
+bench_flash_attention.run(save_path=".", print_data=True)
 
