@@ -824,9 +824,17 @@ def bench_flash_attention(
     warmup = 25
     rep = 100
     split_kernel = False
+    bias_type = "vector"
     if use_bias:
-        bias = torch.randn((1, H, 1, N_CTX), dtype=torch.float32, device="cuda")
-        #bias = torch.randn((1, H, N_CTX, N_CTX), dtype=torch.float32, device="cuda")
+        if bias_type == "vector":
+            bias = torch.randn((1, H, 1, N_CTX), dtype=torch.float32, device="cuda")
+        elif bias_type == "matrix":
+            bias = torch.randn((1, H, N_CTX, N_CTX), dtype=torch.float32, device="cuda")
+        else:
+            raise RuntimeError(
+                f"Got unsupported bias type: {bias_type}. Supported types are vector and matrix."
+            )
+            
     else: bias = None
     # Bwd pass only supports causal=True right now
     if mode == 'bwd':
