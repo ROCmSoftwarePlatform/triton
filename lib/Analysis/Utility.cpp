@@ -98,7 +98,7 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
     auto dim = sliceLayout.getDim();
     auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(sliceLayout.getParent());
     if (CTAsPerCGA[dim] != 1)
-      assert(0 && "Layout conversion to be implemented");
+      llvm::report_fatal_error("Layout conversion to be implemented");
   }
 
   // Case where CTAsPerCGA of dstLayout in the sliced dim is not 1 is supported
@@ -426,7 +426,7 @@ bool supportMMA(triton::DotOp op, int version) {
 #ifdef USE_ROCM
 static bool supportMFMAGranularity(int m, int n, int k) {
   // these limitations are dtype dependent, in future we may relax them
-  const static std::pair<int, int> mfmaTypes[2] = {{32, 8}, {16, 16}};
+  const static std::pair<int, int> mfmaTypes[] = {{32, 8}, {16, 16}, {4, 64}};
   for (const auto &mfmaType : mfmaTypes) {
     auto [granularityMN, granularityK] = mfmaType;
     if (m % granularityMN != 0 || n % granularityMN != 0)

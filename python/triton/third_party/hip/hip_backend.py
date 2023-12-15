@@ -8,8 +8,8 @@ from typing import Any, Tuple
 
 
 from triton.common import _build
-from triton.common.backend import BaseBackend, register_backend
-from triton.compiler.make_launcher import get_cache_manager, version_key, make_so_cache_key
+from triton.common.backend import BaseBackend, register_backend, compute_core_version_key
+from triton.compiler.make_launcher import get_cache_manager, make_so_cache_key
 from triton.compiler.utils import generate_cu_signature
 from triton.runtime import jit
 from triton.runtime.driver import HIPDriver
@@ -25,7 +25,7 @@ else:
 
 def make_stub(name, signature, constants, ids, **kwargs):
     # name of files that are cached
-    so_cache_key = make_so_cache_key(version_key(), signature, constants, ids, **kwargs)
+    so_cache_key = make_so_cache_key(compute_core_version_key(), signature, constants, ids, **kwargs)
     so_cache_manager = get_cache_manager(so_cache_key)
     so_name = f"{name}.so"
     # retrieve stub from cache if it exists
@@ -273,6 +273,30 @@ def get_amdgcn_bitcode_paths(gfx_arch: str):
     return amdgcn_bitcode_paths
 
 
+def gpu_matrix_core_version() -> int:
+    """ Determine matrix core type available on current GPU.
+
+        0 means no tensor cores are available
+        1 corresponds to MFMA in CDNA 1 architecture
+        2 corresponds to MFMA in CDNA 2 architecture
+        3 corresponds to MFMA in CDNA 3 architecture
+    """
+
+    arch_info = _triton.get_arch_info()
+    gfx_arch_details = re.search('amd.*', arch_info)
+    if gfx_arch_details is None:
+        return 0
+    gfx_arch_details = gfx_arch_details.group(0).strip().split('--')
+    gpu_name = gfx_arch_details[1].split(':')[0]
+    if gpu_name in ['gfx908']:
+        return 1
+    if gpu_name in ['gfx90a']:
+        return 2
+    if gpu_name in ['gfx940', 'gfx941', 'gfx942']:
+        return 3
+    return 0
+
+
 def get_amdgpu_arch_fulldetails():
     # print("get_amdgpu_arch_fulldetails")
     """
@@ -294,7 +318,11 @@ def get_amdgpu_arch_fulldetails():
         if gfx_arch is None:
             raise RuntimeError('gfx_arch is None (not specified)')
 
-        return {"gfx_triple": arch_triple, "gfx_arch": gfx_arch, "gfx_features": arch_features}
+        mat_core_ver = gpu_matrix_core_version()
+        capability = gpu_matrix_core_version() * 100
+
+        return {"gfx_triple": arch_triple, "gfx_arch": gfx_arch, "gfx_features": arch_features,\
+                 "capability": capability, "matrix_core_version": mat_core_ver}
     except BaseException:
         return None
 
@@ -386,10 +414,20 @@ def llir_to_amdgcn_and_hsaco(mod: Any, gfx_arch: str, gfx_triple: str, gfx_featu
 
 
 class HIPBackend(BaseBackend):
+    _cached_rocm_version_key = None
+
     def __init__(self, device_type: str) -> None:
         super(HIPBackend, self).__init__(device_type)
         self.driver = HIPDriver()
         self.stub_so_path = ""
+
+    def get_version_key(self):
+        if self._cached_rocm_version_key is None:
+            key = compute_core_version_key()
+            ### TODO: Append ROCM version here if needed
+
+            self._cached_rocm_version_key = key
+        return self._cached_rocm_version_key
 
     def is_standalone(self):
         return not HIP_BACKEND_MODE
@@ -472,7 +510,6 @@ class HIPBackend(BaseBackend):
         return arch
 
     def make_launcher_stub(self, name, signature, constants, ids):
-        # print("HIPBackend.make_launcher_stub")
         self.stub_so_path = make_stub(name, signature, constants, ids)
         return self.stub_so_path
 
@@ -487,3 +524,6 @@ class HIPBackend(BaseBackend):
             return _triton.get_num_warps(module)
         else:
             return _triton.get_num_warps(module)
+
+    def get_matrix_core_version(self):
+        return gpu_matrix_core_version()
