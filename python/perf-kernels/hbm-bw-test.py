@@ -20,24 +20,20 @@ def copy_kernel(
     n_elements: tl.constexpr,  # Total elements to move.
     BLOCK_SIZE: tl.constexpr,  # Elements to load / store per iteration
     vector_size: tl.constexpr, # Size of the entire vector being moved.
+    BOUNDS_CHECK: tl.constexpr, # Whether to use mask for loads.
 
 ):
-    # There are multiple 'programs' processing different data. We identify which program
-    # we are here:
-    pid = tl.program_id(axis=0)  # We use a 1D launch grid so axis is 0.
-    # This program will process inputs that are offset from the initial data.
-    # For instance, if you had a vector of length 256 and block_size of 64, the programs
-    # would each access the elements [0:64, 64:128, 128:192, 192:256].
-    # Note that offsets is a list of pointers:
+    pid = tl.program_id(axis=0)
     
     lo = pid * n_elements
     hi = lo + n_elements
     for idx in range(lo, hi, BLOCK_SIZE):
         offsets = idx + tl.arange(0, BLOCK_SIZE)
         # Create a mask to guard memory operations against out-of-bounds accesses.
-        #mask = offsets < vector_size
-        in_vals = tl.load(input_ptr + offsets)
-        tl.store(output_ptr + offsets, in_vals)
+        if BOUNDS_CHECK:
+            mask = offsets < vector_size
+        in_vals = tl.load(input_ptr + offsets, mask=mask if BOUNDS_CHECK else None)
+        tl.store(output_ptr + offsets, in_vals, mask=mask if BOUNDS_CHECK else None)
 
 
 # %%
@@ -50,41 +46,31 @@ def copy(x: torch.Tensor, wgs=512):
     output = torch.empty_like(x)
     assert x.is_cuda
     vector_size = output.numel()
-    BLOCK_SIZE = 4096
+    BLOCK_SIZE = 16384
     grid = (wgs, 1, 1)
+    BOUNDS_CHECK = True
     # Each WG will move these many elements
     n_elements = triton.cdiv(vector_size, wgs)
-    copy_kernel[grid](x, output, n_elements, BLOCK_SIZE=BLOCK_SIZE, vector_size=vector_size, num_warps=1)
-    # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
-    # running asynchronously at this point.
+    copy_kernel[grid](
+        x, output,
+        n_elements, BLOCK_SIZE=BLOCK_SIZE,
+        vector_size=vector_size, BOUNDS_CHECK=BOUNDS_CHECK,
+        num_warps=4
+    )
     return output
 
 
-# %%
-# We can now use the above function to compute the element-wise sum of two `torch.tensor` objects and test its correctness:
-
 torch.manual_seed(0)
 size = 2**30
-#x = torch.rand(size, device='cuda')
-#output_torch = x
-#output_triton = copy(x)
-#print(output_torch)
-#print(output_triton)
-#print(
-#    f'The maximum difference between torch and triton is '
-#    f'{torch.max(torch.abs(output_torch - output_triton))}'
-#)
-
-# %%
-# Seems like we're good to go!
-
-# %%
-# Benchmark
-# ---------
-#
-# We can now benchmark our custom op on vectors of increasing sizes to get a sense of how it does relative to PyTorch.
-# To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of our custom ops.
-# for different problem sizes.
+x = torch.rand(size, device='cuda')
+output_torch = x
+output_triton = copy(x)
+print(output_torch)
+print(output_triton)
+print(
+    f'The maximum difference between torch and triton is '
+    f'{torch.max(torch.abs(output_torch - output_triton))}'
+)
 
 configs = []
 for wgs in [2 ** i for i in range(0, 12)]:
@@ -117,7 +103,4 @@ def benchmark(size, provider, wgs):
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
-# %%
-# We can now run the decorated function above. Pass `print_data=True` to see the performance number, `show_plots=True` to plot them, and/or
-# `save_path='/path/to/results/' to save them to disk along with raw CSV data:
 benchmark.run(print_data=True, show_plots=True)
