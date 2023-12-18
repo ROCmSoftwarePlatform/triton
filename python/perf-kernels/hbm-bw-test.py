@@ -72,12 +72,12 @@ print(
     f'{torch.max(torch.abs(output_torch - output_triton))}'
 )
 
-configs = []
-for wgs in [2 ** i for i in range(0, 12)]:
-    configs.append(triton.testing.Benchmark(
-        x_names=['size'],  # Argument names to use as an x-axis for the plot.
+size = 2 ** 30
+
+configs = triton.testing.Benchmark(
+        x_names=['wgs'],  # Argument names to use as an x-axis for the plot.
         x_vals=[
-            2**30
+            (2**i) for i in range (0,12)
         ],  # Different possible values for `x_name`.
         x_log=True,  # x axis is logarithmic.
         line_arg='provider',  # Argument name whose value corresponds to a different line in the plot.
@@ -85,10 +85,9 @@ for wgs in [2 ** i for i in range(0, 12)]:
         line_names=['Triton', 'Torch'],  # Label name for the lines.
         styles=[('blue', '-'), ('green', '-')],  # Line styles.
         ylabel='GB/s',  # Label name for the y-axis.
-        plot_name=f'wgs={wgs}',  # Name for the plot. Used also as a file name for saving the plot.
-        args={'wgs':wgs},  # Values for function arguments not in `x_names` and `y_name`.
-    )
-    )
+        plot_name=f'size={size}',  # Name for the plot. Used also as a file name for saving the plot.
+        args={'size':size},  # Values for function arguments not in `x_names` and `y_name`.
+)
 
 @triton.testing.perf_report(configs)
 def benchmark(size, provider, wgs):
