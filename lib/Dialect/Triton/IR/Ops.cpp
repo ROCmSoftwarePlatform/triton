@@ -6,6 +6,7 @@
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 namespace mlir {
 namespace triton {
@@ -151,6 +152,7 @@ void StoreOp::print(OpAsmPrinter &printer) {
 
 // enum attribute definitions
 #include "triton/Dialect/Triton/IR/OpsEnums.cpp.inc"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 namespace mlir {
 namespace triton {
@@ -438,6 +440,31 @@ OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+LogicalResult MakeRangeOp::verify() {
+  int64_t start = getStartAttr().getInt();
+  int64_t end = getEndAttr().getInt();
+  if (start > end) {
+    return this->emitOpError() << "start must be less than or equal to end";
+  }
+  auto ty = getType().dyn_cast<RankedTensorType>();
+  if (!ty) {
+    return this->emitOpError() << "return type must be a ranked tensor";
+  }
+  if (ty.getShape().size() != 1) {
+    return this->emitOpError() << "return type must be a 1D tensor";
+  }
+  if (end - start != ty.getShape()[0]) {
+    return this->emitOpError()
+           << "number of elements in returned tensor, " << ty.getShape()[0]
+           << ", must match size of range [" << start << ", " << end
+           << "), which has " << end - start << " elements";
+  }
+  if (!ty.getElementType().isInteger(32)) {
+    return this->emitOpError() << "returned tensor must have i32 elements";
+  }
+  return success();
+}
+
 //-- ReduceOp --
 static mlir::LogicalResult
 inferReduceReturnShape(const RankedTensorType &argTy, const Type &retEltTy,
@@ -709,7 +736,7 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
   return foldViewLikeOp(*this, adaptor.getSrc());
 }
 
-//-- ViewOp --
+//-- ReshapeOp --
 template <typename OpType>
 LogicalResult canonicalizeViewOrBroadcast(OpType op,
                                           PatternRewriter &rewriter) {
@@ -719,9 +746,10 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op,
   }
 
   // view(view) -> view
-  if (auto parent_view = dyn_cast<OpType>(definingOp)) {
-    rewriter.replaceOpWithNewOp<OpType>(op, op.getType(),
-                                        parent_view.getOperand());
+  if (auto parentView = dyn_cast<OpType>(definingOp)) {
+    rewriter.replaceOpWithNewOp<OpType>(op, TypeRange({op.getType()}),
+                                        parentView->getOperands(),
+                                        parentView->getAttrs());
     return mlir::success();
   }
 
@@ -734,17 +762,42 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op,
 
   return mlir::failure();
 }
-LogicalResult ViewOp::canonicalize(ViewOp op, PatternRewriter &rewriter) {
+
+LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
+  if (!op.getAllowReorder() || op.getEfficientLayout().has_value())
+    return failure();
   return canonicalizeViewOrBroadcast(op, rewriter);
 }
 
-OpFoldResult ViewOp::fold(FoldAdaptor adaptor) {
+OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
   if (getType() == getOperand().getType()) {
     // no-op
     return getOperand();
   }
 
   return foldViewLikeOp(*this, adaptor.getSrc());
+}
+
+mlir::LogicalResult mlir::triton::ReshapeOp::verify() {
+  auto dstType = getType().cast<RankedTensorType>();
+  auto srcType = getSrc().getType().cast<RankedTensorType>();
+  if (dstType.getNumElements() != srcType.getNumElements()) {
+    return emitError(
+        "number of src and dst elements of reshape must be the same");
+  }
+  return mlir::success();
+}
+
+//-- FpToFpOp --
+mlir::LogicalResult mlir::triton::FpToFpOp::verify() {
+  auto dstType = getType().cast<RankedTensorType>().getElementType();
+  auto srcType =
+      getOperand().getType().cast<RankedTensorType>().getElementType();
+  if ((dstType.getIntOrFloatBitWidth() < srcType.getIntOrFloatBitWidth()) &&
+      (!getRounding().has_value())) {
+    return emitError("Rounding mode is required for FP downcast");
+  }
+  return mlir::success();
 }
 
 //-- BroadcastOp --
@@ -888,6 +941,85 @@ LogicalResult triton::ReturnOp::verify() {
                          << ") doesn't match function result type ("
                          << results[i] << ")"
                          << " in function @" << function.getName();
+
+  return success();
+}
+
+// -- ExperimentalInterleaveOp --
+LogicalResult triton::ExperimentalInterleaveOp::verify() {
+  // A built-in verifier already checked that LHS and RHS have the same shape
+  // (including same encoding).
+  assert(getLhs().getType().cast<RankedTensorType>().getShape() ==
+         getRhs().getType().cast<RankedTensorType>().getShape());
+
+  auto srcTy = getLhs().getType().cast<RankedTensorType>();
+  auto dstTy = getResult().getType().cast<RankedTensorType>();
+  if (srcTy.getRank() != dstTy.getRank()) {
+    return emitError("operands and result must have the same rank");
+  }
+
+  auto rank = srcTy.getRank();
+  if (rank == 0) {
+    return emitError("operands and result must be at least 1D");
+  }
+
+  for (int i = 0; i < rank - 1; ++i) {
+    if (srcTy.getShape()[i] != dstTy.getShape()[i]) {
+      return emitError("except in the last dimension, the shape of the "
+                       "operands and result must be the same.  Mismatch in "
+                       "dimension ")
+             << i << " (" << srcTy.getShape()[i] << " vs "
+             << dstTy.getShape()[i] << ")";
+    }
+  }
+
+  if (2 * srcTy.getShape()[rank - 1] != dstTy.getShape()[rank - 1]) {
+    return emitError("the last dimension of the result (")
+           << dstTy.getShape()[rank - 1]
+           << ") must be twice the size of the last dimension of the "
+              "operands ("
+           << srcTy.getShape()[rank - 1] << ")";
+  }
+
+  // If an encoding is present, it must be a blocked encoding.  The src and dst
+  // encodings must be the same, except for the last dimension, which must also
+  // be the most-minor dim.
+  auto srcEnc = srcTy.getEncoding();
+  auto dstEnc = dstTy.getEncoding();
+  if (!!srcEnc != !!dstEnc) {
+    return emitError("if an encoding is present on one operand or result, it "
+                     "must be present on all of them.");
+  }
+  if (srcEnc) {
+    if (!srcEnc.isa<triton::gpu::BlockedEncodingAttr>()) {
+      return emitError("operand encoding must be triton_gpu.blocked");
+    }
+    if (!dstEnc.isa<triton::gpu::BlockedEncodingAttr>()) {
+      return emitError("result encoding must be triton_gpu.blocked");
+    }
+
+    // Check that the src encoding has the correct order (namely, that the last
+    // dim is also the most minor dim).  This is a precondition for
+    // inferDstEncoding.
+    if (srcEnc.cast<triton::gpu::BlockedEncodingAttr>().getOrder()[0] !=
+        rank - 1) {
+      return emitError(
+          "the last dimension of the source encoding must be the "
+          "most-minor dimension (so it must appear first in `order`)");
+    }
+
+    std::optional<Attribute> expectedDstEnc = inferDstEncoding(*this, srcEnc);
+    if (!expectedDstEnc.has_value()) {
+      return emitError("internal error: unable to infer dst encoding from src "
+                       "encoding.  This is probably a bug in the verifier.");
+    }
+    if (dstEnc != *expectedDstEnc) {
+      return emitError("result encoding must be the same as the source "
+                       "encoding, except for the last dimension, which must be "
+                       "the most-minor dim.  Expected ")
+             << *expectedDstEnc << ", but got " << dstEnc;
+    }
+  }
 
   return success();
 }

@@ -39,7 +39,9 @@ def Source1IsSharedEncoding: NativeOpTrait<"Source1IsSharedEncoding">;
 def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
 
 class TTNG_Op<string mnemonic, list<Trait> traits = []> :
-    Op<TritonNvidiaGPU_Dialect, mnemonic, traits>;
+    Op<TritonNvidiaGPU_Dialect, mnemonic,
+       !listconcat(traits, [VerifyTensorLayoutsTrait])> {
+}
 
 // --------------------------------------------------------------------------------------------------
 // MBarrier related Ops:
@@ -197,6 +199,15 @@ def TTNG_GetClusterCTAIdOp : TTNG_Op<"get_cluster_cta_id", [Pure]> {
   let assemblyFormat = "attr-dict `:` type($result)";
 }
 
+def TTNG_GetCanonicalWarpId : TTNG_Op<"get_canonical_warp_id", [Pure]> {
+  let description = [{
+    Returns the one dimensional warpId when it's used for producing warp uniform values.
+  }];
+
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
 def TTNG_NamedBarrierArriveOp : TTNG_Op<"bar_arrive", []> {
   let summary = "named barrier arrive";
 
@@ -213,11 +224,11 @@ def TTNG_NamedBarrierWaitOp : TTNG_Op<"bar_wait", []> {
   let assemblyFormat = "$bar `,` $numThreads attr-dict `:` type(operands)";
 }
 
-def TTNG_InsertSliceAsyncV2Op : TTNG_Op<"insert_slice_async_v2",
-                                      [AttrSizedOperandSegments,
-                                       ResultsAreSharedEncoding,
-                                       // TODO: Check if MemWrite will degrade performance of non-warp-specialized kernel
-                                       MemoryEffects<[MemRead, MemWrite]>]> {
+def TTNG_InsertSliceTMAOp : TTNG_Op<"insert_slice_tma",
+                                     [AttrSizedOperandSegments,
+                                      ResultsAreSharedEncoding,
+                                      // TODO: Check if MemWrite will degrade performance of non-warp-specialized kernel
+                                      MemoryEffects<[MemRead, MemWrite]>]> {
 
   let arguments = (ins AnyTypeOf<[TT_Ptr, TT_PtrTensor]>:$src, TT_Tensor:$dst,
                        I32:$index, TT_Ptr:$mbar,

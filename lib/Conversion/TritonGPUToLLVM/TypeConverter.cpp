@@ -10,7 +10,7 @@ using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::MfmaEncodingAttr;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
@@ -64,13 +64,11 @@ Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(
     for (size_t i = 0; i < 2 * shape.size(); ++i)
       types.push_back(IntegerType::get(ctx, 64));
 
-    types.push_back(LLVM::LLVMPointerType::get(convertType(eleType),
-                                               type.getAddressSpace()));
+    types.push_back(LLVM::LLVMPointerType::get(ctx, type.getAddressSpace()));
 
     return LLVM::LLVMStructType::getLiteral(ctx, types);
   }
-  return LLVM::LLVMPointerType::get(convertType(type.getPointeeType()),
-                                    type.getAddressSpace());
+  return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
 }
 
 Value TritonGPUToLLVMTypeConverter::packLLElements(
@@ -168,8 +166,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
     return vec_ty(elemTy, dotOpLayout.getKWidth());
   }
 #endif
-
-  auto mmaParent = dotOpLayout.getParent().dyn_cast<MmaEncodingAttr>();
+  auto mmaParent = dotOpLayout.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
   if (!mmaParent || mmaParent.isHopper())
     return elemTy;
   int bitwidth = elemTy.getIntOrFloatBitWidth();
@@ -187,7 +184,7 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
   if (auto shared_layout = layout.dyn_cast<SharedEncodingAttr>()) {
     SmallVector<Type, 4> types;
     // base ptr
-    auto ptrType = LLVM::LLVMPointerType::get(eltType, 3);
+    auto ptrType = LLVM::LLVMPointerType::get(ctx, 3);
     types.push_back(ptrType);
     // shape dims
     auto rank = type.getRank();

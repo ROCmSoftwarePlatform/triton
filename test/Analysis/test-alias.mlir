@@ -5,9 +5,11 @@
 #A_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #A_SHARED_T = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #B_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-#C = #triton_gpu.mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
+#C = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
 #A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
 #B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
+
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.compute-capability" = 80} {
 
 // CHECK-LABEL: matmul_loop
 // There shouldn't be any aliasing with the dot op encoding.
@@ -75,8 +77,8 @@ tt.func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
   tt.return
 }
 
-// CHECK-LABEL: insert_slice_async_v2
-tt.func @insert_slice_async_v2(%A : !tt.ptr<f16>, %i1 : i1) {
+// CHECK-LABEL: insert_slice_tma
+tt.func @insert_slice_tma(%A : !tt.ptr<f16>, %i1 : i1) {
   %mbar = triton_nvidia_gpu.alloc_mbarrier { count = 128 : i32 } : !tt.ptr<i64, 3>
   %a_ptr = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>
   %mask = tt.splat %i1 : (i1) -> tensor<16x16xi1, #AL>
@@ -85,7 +87,7 @@ tt.func @insert_slice_async_v2(%A : !tt.ptr<f16>, %i1 : i1) {
   %tensor = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SHARED>
   %index = arith.constant 0 : i32
   // CHECK: %3 -> %cst_0
-  %a = triton_nvidia_gpu.insert_slice_async_v2 %a_ptr, %tensor, %index, %mbar, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operand_segment_sizes = array<i32: 1, 1, 1, 1, 1, 1>} : tensor<16x16x!tt.ptr<f16>, #AL>, tensor<1x16x16xf16, #A_SHARED>, i32, !tt.ptr<i64, 3>, tensor<16x16xi1, #AL>, tensor<16x16xf16, #AL> -> tensor<1x16x16xf16, #A_SHARED>
+  %a = triton_nvidia_gpu.insert_slice_tma %a_ptr, %tensor, %index, %mbar, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operand_segment_sizes = array<i32: 1, 1, 1, 1, 1, 1>} : tensor<16x16x!tt.ptr<f16>, #AL>, tensor<1x16x16xf16, #A_SHARED>, i32, !tt.ptr<i64, 3>, tensor<16x16xi1, #AL>, tensor<16x16xf16, #AL> -> tensor<1x16x16xf16, #A_SHARED>
   tt.return
 }
 
@@ -268,3 +270,5 @@ tt.func @cf_for(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16>, %
   %9 = tt.cat %0, %0 {axis = 0 : i64} : (tensor<256x32xf16, #A_SHARED>, tensor<256x32xf16, #A_SHARED>) -> tensor<512x32xf16, #A_SHARED>
   tt.return
 }
+
+}  // module

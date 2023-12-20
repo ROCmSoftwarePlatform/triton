@@ -3,7 +3,7 @@ from __future__ import annotations  # remove after python 3.11
 from functools import wraps
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
-from .._C.libtriton.triton import ir
+from .._C.libtriton import ir
 from ..common.build import is_hip
 from . import core as tl
 
@@ -11,16 +11,6 @@ import triton._C.libtriton.triton as _triton
 import re
 
 T = TypeVar('T')
-
-# TODO: redundant code -- remove after 3P backend refactor
-
-
-def _is_cuda(target):
-    from ..compiler.compiler import CudaTargetDescriptor
-    return isinstance(target, CudaTargetDescriptor)
-
-
-# Create custom exception that prints message "hello"
 
 
 class IncompatibleTypeErrorImpl(Exception):
@@ -512,21 +502,18 @@ def splat(value: tl.tensor, shape: List[int], builder: ir.builder) -> tl.tensor:
 
 
 def view(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tensor:
-    # TODO: disable when TritonToTritonGPU handles views properly
-
-    # assert len(input.shape) == len(dst_shape)
     numel = 1
     for s in dst_shape:
         numel *= s
     if input.type.numel != numel:
         raise ValueError("cannot view block of different shape")
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
-    return tl.tensor(builder.create_view(input.handle, dst_shape), ret_ty)
+    return tl.tensor(builder.create_reshape(input.handle, dst_shape, True), ret_ty)
 
 
 def reshape(input: tl.tensor, dst_shape: List[int], builder: ir.builder) -> tl.tensor:
-    raise ValueError("`reshape` is not supported yet. Please use `view` instead if applicable. "
-                     "Note that view may reorder elements in an implementation- and context- dependent way.")
+    ret_ty = tl.block_type(input.type.scalar, dst_shape)
+    return tl.tensor(builder.create_reshape(input.handle, dst_shape, False), ret_ty)
 
 
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
@@ -545,6 +532,19 @@ def cat(lhs: tl.tensor, rhs: tl.tensor, can_reorder: bool, builder: ir.builder) 
     assert len(lhs.shape) == 1
     ret_type = tl.block_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]])
     return tl.tensor(builder.create_cat(lhs.handle, rhs.handle), ret_type)
+
+
+def interleave(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
+    a, b = broadcast_impl_value(a, b, builder)
+
+    if isinstance(a.shape[-1], tl.constexpr):
+        two = tl.constexpr(2)
+    else:
+        two = 2
+    new_shape = a.shape[0:-1] + [two * a.shape[-1]]
+
+    ret_type = tl.block_type(a.type.scalar, new_shape)
+    return tl.tensor(builder.create_interleave(a.handle, b.handle), ret_type)
 
 
 def trans(input: tl.tensor, builder: ir.builder) -> tl.tensor:
@@ -632,6 +632,16 @@ def broadcast_impl_value(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) ->
 #######
 
 
+def _str_to_rounding_mode(rounding_mode: str):
+    if rounding_mode is None:
+        return None
+    if rounding_mode == 'rtne':
+        return ir.ROUNDING_MODE.RTNE
+    if rounding_mode == 'rtz':
+        return ir.ROUNDING_MODE.RTZ
+    raise ValueError(f"Invalid rounding mode: {rounding_mode}. Supported rounding modes are 'rtne' and 'rtz'.")
+
+
 def bitcast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tensor:
     src_ty = input.type
     if src_ty.is_block():
@@ -651,10 +661,12 @@ def bitcast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tenso
     return tl.tensor(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)), dst_ty)
 
 
-def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tensor:
+def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder, fp_downcast_rounding: str = None) -> tl.tensor:
     src_ty = input.type
     if isinstance(dst_ty, tl.constexpr):
         dst_ty = dst_ty.value
+    if isinstance(fp_downcast_rounding, tl.constexpr):
+        fp_downcast_rounding = fp_downcast_rounding.value
     if src_ty.is_block():
         dst_ty = tl.block_type(dst_ty.scalar, input.type.get_block_shapes())
     if src_ty == dst_ty:
@@ -663,14 +675,28 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tensor:
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
 
-    if _is_cuda(builder.target) and builder.target.capability < 89 and \
-       (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
-        assert False, "fp8e4nv data type is not supported on CUDA arch < 89"
+    # For fp downcasting default rounding mode should be RTNE, for all other conversions it should
+    # not be set
+    fp_downcast_rounding = _str_to_rounding_mode(fp_downcast_rounding)
+    use_custom_rounding = False
+    if dst_sca_ty.is_floating() and src_sca_ty.is_floating(
+    ) and dst_sca_ty.primitive_bitwidth < src_sca_ty.primitive_bitwidth:
+        if fp_downcast_rounding is None: fp_downcast_rounding = ir.ROUNDING_MODE.RTNE
+        elif fp_downcast_rounding != ir.ROUNDING_MODE.RTNE: use_custom_rounding = True
+    else:
+        if fp_downcast_rounding is not None:
+            raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions. "
+                             "Source scalar type is " + str(src_sca_ty) + " and destination type is " + str(dst_sca_ty))
+
+    if (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
+        assert builder.options.allow_fp8e4nv, "fp8e4nv data type is not supported on CUDA arch < 89"
 
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
+    # and non-default rounding modes for downcasting
     if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
-       (src_sca_ty.is_floating() and dst_sca_ty.is_fp8()):
-        return tl.tensor(builder.create_fp_to_fp(input.handle, dst_ty.to_ir(builder)), dst_ty)
+       (src_sca_ty.is_floating() and dst_sca_ty.is_fp8()) or \
+       use_custom_rounding:
+        return tl.tensor(builder.create_fp_to_fp(input.handle, dst_ty.to_ir(builder), fp_downcast_rounding), dst_ty)
 
     # bf16 <=> (not fp32)
     if (src_sca_ty.is_fp16() and not dst_sca_ty.is_fp32()) or \
@@ -960,6 +986,9 @@ def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builde
     # Check `boundary_check` argument
     boundary_check = _canonicalize_boundary_check(boundary_check, block_shape)
 
+    # Cast to target data type
+    val = cast(val, elt_ty, builder)
+
     # Build IR
     return tl.tensor(builder.create_tensor_pointer_store(ptr.handle, val.handle, boundary_check, cache, eviction),
                      tl.void)
@@ -1212,7 +1241,7 @@ def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty, target) -> bool:
 def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_num_imprecise_acc: int,
         out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
 
-    def assert_dtypes_valid(lhs_dtype, rhs_dtype, target):
+    def assert_dtypes_valid(lhs_dtype, rhs_dtype, options):
         # Checks for non-cuda archs
         if is_hip():
             assert lhs.dtype == rhs.dtype or (lhs.type.scalar.is_fp8() and rhs.type.scalar.is_fp16()) or \
@@ -1225,11 +1254,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
                     f"Only hip fp8 or f8e5 types are accepted for both inputs of fp8"
             return
 
-        if not _is_cuda(target):
-            return
-
-        # Checks for cuda archs
-        if target.capability < 90:
+        if not options.allow_fp8e4nv:
             assert not lhs_dtype.is_fp8e4nv() and not rhs_dtype.is_fp8e4nv(
             ), "Dot op does not support fp8e4nv on CUDA arch < 90"
             if lhs_dtype.is_fp8() and rhs_dtype.is_fp8():
@@ -1257,7 +1282,8 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
                 assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
 
     assert lhs.type.is_block() and rhs.type.is_block()
-    assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.target)
+
+    assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
 
     assert len(lhs.shape) == 2, f"First input shape ({lhs.shape}) is not two dimensional!"
     assert len(rhs.shape) == 2, f"Second input shape ({rhs.shape}) is not two dimensional!"
@@ -1352,11 +1378,10 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
         assert acc.type == ret_ty
 
     # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
-    if not (_is_cuda(builder.target) and builder.target.capability == 90 and lhs.dtype.is_fp8() and rhs.dtype.is_fp8()
-            and ret_scalar_ty.is_fp32()):
+    if lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and max_num_imprecise_acc is None:
+        max_num_imprecise_acc = builder.options.max_num_imprecise_acc_default
+    else:
         max_num_imprecise_acc = 0
-    if max_num_imprecise_acc is None:
-        max_num_imprecise_acc = 2**30
 
     return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, allow_tf32, max_num_imprecise_acc), ret_ty)
 
@@ -1395,9 +1420,11 @@ def reduction(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder
         axis = 0
     # get result shape
     shape = inputs[0].type.shape
+    rank = len(shape)
+    assert axis < rank, f"reduction axis must be < inputs rank ({rank})"
     ret_shape = [s for i, s in enumerate(shape) if i != axis]
     for t in inputs:
-        assert t.type.shape == shape
+        assert t.type.shape == shape, "all reduction inputs must have the same shape"
 
     def wrap_tensor(x, scalar_ty):
         if ret_shape:

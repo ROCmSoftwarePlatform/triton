@@ -29,7 +29,7 @@ using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
 SmallVector<CoordTy> getMNCoords(Value thread, Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  ArrayRef<unsigned int> wpt,
-                                 const MmaEncodingAttr &mmaLayout,
+                                 const NvidiaMmaEncodingAttr &mmaLayout,
                                  ArrayRef<int64_t> shape, bool isARow,
                                  bool isBRow, bool isAVec4, bool isBVec4);
 
@@ -89,7 +89,8 @@ public:
       return lowerSharedToDotOperand(op, adaptor, rewriter);
     }
     // forwarding on mma->mma shortcut, lower distributed->distributed otherwise
-    if (srcLayout.isa<MmaEncodingAttr>() && dstLayout.isa<MmaEncodingAttr>()) {
+    if (srcLayout.isa<NvidiaMmaEncodingAttr>() &&
+        dstLayout.isa<NvidiaMmaEncodingAttr>()) {
       if (isMmaToMmaShortcut(srcTy, dstTy)) {
         return lowerMmaToMma(op, adaptor, rewriter);
       }
@@ -97,7 +98,7 @@ public:
     if (isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout)) {
       return lowerDistributedToDistributed(op, adaptor, rewriter);
     }
-    if (srcLayout.isa<MmaEncodingAttr>() &&
+    if (srcLayout.isa<NvidiaMmaEncodingAttr>() &&
         dstLayout.isa<DotOperandEncodingAttr>()) {
       return lowerMmaToDotOperand(op, adaptor, rewriter);
     }
@@ -167,7 +168,7 @@ private:
       }
       return multiDimOffset;
     }
-    if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
       auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
       auto instrShape = mmaLayout.getInstrShape();
       SmallVector<Value> mmaColIdx(4);
@@ -340,10 +341,10 @@ private:
             shapePerCTA);
         Value offset = linearize(rewriter, loc, multiDimOffsetWrapped,
                                  paddedRepShape, outOrd);
-        auto elemPtrTy = ptr_ty(llvmElemTy, 3);
-        Value ptr = gep(elemPtrTy, smemBase, offset);
+        auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+        Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, offset);
         auto vecTy = vec_ty(llvmElemTy, vec);
-        ptr = bitcast(ptr, ptr_ty(vecTy, 3));
+        ptr = bitcast(ptr, ptr_ty(rewriter.getContext(), 3));
         if (stNotRd) {
           Value valVec = undef(vecTy);
           for (unsigned v = 0; v < vec; ++v) {
@@ -356,7 +357,7 @@ private:
           }
           store(valVec, ptr);
         } else {
-          Value valVec = load(ptr);
+          Value valVec = load(vecTy, ptr);
           for (unsigned v = 0; v < vec; ++v) {
             Value currVal = extract_element(llvmElemTy, valVec, i32_val(v));
             if (isInt1)
@@ -385,10 +386,10 @@ private:
                               bool isDestMma = false) const {
     unsigned accumNumCTAsEachRep = 1;
     auto layout = type.getEncoding();
-    MmaEncodingAttr mma = layout.dyn_cast<MmaEncodingAttr>();
+    NvidiaMmaEncodingAttr mma = layout.dyn_cast<NvidiaMmaEncodingAttr>();
     auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>();
     if (sliceLayout)
-      mma = sliceLayout.getParent().cast<MmaEncodingAttr>();
+      mma = sliceLayout.getParent().cast<NvidiaMmaEncodingAttr>();
 
     auto order = getOrder(layout);
     auto rank = type.getRank();
@@ -433,9 +434,7 @@ private:
 
       if (needTrans) {
         // do transpose
-        auto aEncoding =
-            DotOperandEncodingAttr::get(mma.getContext(), 0, mma, 0);
-        int numM = aEncoding.getMMAv1NumOuter(shapePerCTA);
+        int numM = mma.getMMAv1NumOuter(shapePerCTA, 0);
         int numN = accumSizePerThread / numM;
 
         for (int r = 0; r < numM; r++) {
@@ -453,10 +452,10 @@ private:
     for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
       auto coord = coord2valT[elemId].first;
       Value offset = linearize(rewriter, loc, coord, paddedRepShape, outOrd);
-      auto elemPtrTy = ptr_ty(elemTy, 3);
-      Value ptr = gep(elemPtrTy, smemBase, offset);
+      auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+      Value ptr = gep(elemPtrTy, elemTy, smemBase, offset);
       auto vecTy = vec_ty(elemTy, vec);
-      ptr = bitcast(ptr, ptr_ty(vecTy, 3));
+      ptr = bitcast(ptr, ptr_ty(rewriter.getContext(), 3));
       if (stNotRd) {
         Value valVec = undef(vecTy);
         for (unsigned v = 0; v < vec; ++v) {
@@ -465,7 +464,7 @@ private:
         }
         store(valVec, ptr);
       } else {
-        Value valVec = load(ptr);
+        Value valVec = load(vecTy, ptr);
         for (unsigned v = 0; v < vec; ++v) {
           Value currVal = extract_element(elemTy, valVec, i32_val(v));
           vals[elemId + v] = currVal;
@@ -492,7 +491,7 @@ private:
     unsigned rank = srcShapePerCTA.size();
 
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    auto elemPtrTy = ptr_ty(llvmElemTy, 3);
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
     Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
     smemBase = bitcast(smemBase, elemPtrTy);
@@ -510,7 +509,7 @@ private:
 
       for (unsigned i = 0; i < inIndices.size(); ++i) {
         Value offset = linearize(rewriter, loc, inIndices[i], smemShape);
-        Value ptr = gep(elemPtrTy, smemBase, offset);
+        Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, offset);
         store(inVals[i], ptr);
       }
     }
@@ -543,8 +542,8 @@ private:
             linearize(rewriter, loc, multiDimCTAId, srcCTAsPerCGA, srcCTAOrder);
         Value localOffset = linearize(rewriter, loc, localCoord, smemShape);
 
-        Value ptr = gep(elemPtrTy, smemBase, localOffset);
-        outVals.push_back(load_dsmem(ptr, remoteCTAId));
+        Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, localOffset);
+        outVals.push_back(load_dsmem(ptr, remoteCTAId, llvmElemTy));
       }
 
       Value result =
@@ -575,10 +574,8 @@ private:
 
     if (shouldUseDistSmem(srcLayout, dstLayout))
       return lowerDistToDistWithDistSmem(op, adaptor, rewriter);
-
-    auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
-    auto elemPtrTy = ptr_ty(llvmElemTy, 3);
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
     auto shape = dstTy.getShape();
     unsigned rank = dstTy.getRank();
@@ -593,19 +590,21 @@ private:
 
     // For Volta, all the coords for a CTA are calculated.
     bool isSrcMmaV1{}, isDstMmaV1{};
-    if (auto mmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>()) {
+    if (auto mmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
       isSrcMmaV1 = mmaLayout.isVolta();
     }
     if (auto sliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>()) {
-      isSrcMmaV1 = sliceLayout.getParent().isa<MmaEncodingAttr>() &&
-                   sliceLayout.getParent().cast<MmaEncodingAttr>().isVolta();
+      isSrcMmaV1 =
+          sliceLayout.getParent().isa<NvidiaMmaEncodingAttr>() &&
+          sliceLayout.getParent().cast<NvidiaMmaEncodingAttr>().isVolta();
     }
-    if (auto mmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>()) {
+    if (auto mmaLayout = dstLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
       isDstMmaV1 = mmaLayout.isVolta();
     }
     if (auto sliceLayout = dstLayout.dyn_cast<SliceEncodingAttr>()) {
-      isDstMmaV1 = sliceLayout.getParent().isa<MmaEncodingAttr>() &&
-                   sliceLayout.getParent().cast<MmaEncodingAttr>().isVolta();
+      isDstMmaV1 =
+          sliceLayout.getParent().isa<NvidiaMmaEncodingAttr>() &&
+          sliceLayout.getParent().cast<NvidiaMmaEncodingAttr>().isVolta();
     }
 
     for (unsigned d = 0; d < rank; ++d) {
@@ -666,7 +665,7 @@ private:
 #ifdef USE_ROCM
           srcLayout.isa<MfmaEncodingAttr>() ||
 #endif
-          srcLayout.isa<MmaEncodingAttr>()) {
+          srcLayout.isa<NvidiaMmaEncodingAttr>()) {
         if (isSrcMmaV1)
           processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ true, srcTy,
                                  multiDimRepId, inVec, paddedRepShape, outOrd,
@@ -703,7 +702,7 @@ private:
 #ifdef USE_ROCM
           dstLayout.isa<MfmaEncodingAttr>() ||
 #endif
-          dstLayout.isa<MmaEncodingAttr>()) {
+          dstLayout.isa<NvidiaMmaEncodingAttr>()) {
         if (isDstMmaV1)
           processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy,
                                  multiDimRepId, outVec, paddedRepShape, outOrd,
@@ -743,8 +742,9 @@ private:
     auto dstLayout = dstTy.getEncoding();
     auto inOrd = getOrder(srcSharedLayout);
 
-    auto smemObj =
-        getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), rewriter);
+    auto smemObj = getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSrc(),
+        getTypeConverter()->convertType(srcTy.getElementType()), rewriter);
     auto elemTy = getTypeConverter()->convertType(dstTy.getElementType());
 
     auto srcStrides =
@@ -782,11 +782,11 @@ private:
     auto outOrd = dstSharedLayout.getOrder();
     Value smemBase = getSharedMemoryBase(loc, rewriter, dst);
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    auto elemPtrTy = ptr_ty(getTypeConverter()->convertType(elemTy), 3);
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
 
     int32_t elemSize = elemTy.getIntOrFloatBitWidth();
-    auto mmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
+    auto mmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>();
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     if (mmaLayout && mmaLayout.isHopper() && elemSize == 16 &&
         inOrd == outOrd && numElems >= 16) {
@@ -809,8 +809,7 @@ private:
       unsigned leadingDimOffset =
           numElemsPerSwizzlingRow * srcShapePerCTA[outOrd[1]];
 
-      auto ptrI8SharedTy = LLVM::LLVMPointerType::get(
-          typeConverter->convertType(rewriter.getI8Type()), 3);
+      auto ptrSharedTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
 
       uint32_t rowsPerRep = getShapePerCTATile(mmaLayout)[0];
 
@@ -839,7 +838,8 @@ private:
               loc, i32_ty, threadId, rowOfWarp, i32_val(idx), leadingDimOffset,
               numElemsPerSwizzlingRow, true);
 
-          Value addr = gep(elemPtrTy, smemBase, offset);
+          Value addr = gep(elemPtrTy, getTypeConverter()->convertType(elemTy),
+                           smemBase, offset);
 
           Value words[4];
           for (unsigned i = 0; i < 8; ++i) {
@@ -850,7 +850,7 @@ private:
           }
 
           rewriter.create<triton::nvgpu::StoreMatrixOp>(
-              loc, bitcast(addr, ptrI8SharedTy),
+              loc, bitcast(addr, ptrSharedTy),
               ValueRange{bitcast(words[0], i32_ty), bitcast(words[1], i32_ty),
                          bitcast(words[2], i32_ty), bitcast(words[3], i32_ty)});
         }
@@ -879,8 +879,8 @@ private:
       storeDistributedToShared(src, adaptor.getSrc(), dstStrides, srcIndices,
                                dst, smemBase, elemTy, loc, rewriter);
     }
-    auto smemObj =
-        SharedMemoryObject(smemBase, dstShapePerCTA, outOrd, loc, rewriter);
+    auto smemObj = SharedMemoryObject(smemBase, elemTy, dstShapePerCTA, outOrd,
+                                      loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -908,8 +908,8 @@ private:
     isOuter = K == 1;
 
     Value res;
-    if (auto mmaLayout =
-            dotOperandLayout.getParent().dyn_cast_or_null<MmaEncodingAttr>()) {
+    if (auto mmaLayout = dotOperandLayout.getParent()
+                             .dyn_cast_or_null<NvidiaMmaEncodingAttr>()) {
       res = lowerSharedToDotOperandMMA(op, adaptor, rewriter, mmaLayout,
                                        dotOperandLayout, isOuter);
 #ifdef USE_ROCM
@@ -989,7 +989,7 @@ private:
     auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
     auto dstTy = op.getResult().getType().cast<RankedTensorType>();
     if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
-      rewriter.replaceOp(op, op.getSrc());
+      rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
 
@@ -1094,7 +1094,7 @@ private:
     auto dstTy = op.getResult().getType().cast<RankedTensorType>();
     if (triton::gpu::getTotalElemsPerThread(srcTy) ==
         triton::gpu::getTotalElemsPerThread(dstTy)) {
-      rewriter.replaceOp(op, op.getSrc());
+      rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
     // get source values
@@ -1123,24 +1123,29 @@ private:
   }
 
   // shared -> dot_operand if the result layout is mma
-  Value lowerSharedToDotOperandMMA(
-      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter, const MmaEncodingAttr &mmaLayout,
-      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
+  Value
+  lowerSharedToDotOperandMMA(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+                             ConversionPatternRewriter &rewriter,
+                             const NvidiaMmaEncodingAttr &mmaLayout,
+                             const DotOperandEncodingAttr &dotOperandLayout,
+                             bool isOuter) const {
     auto loc = op.getLoc();
     Value src = op.getSrc();
     Value dst = op.getResult();
     bool isMMA = supportMMA(dst, mmaLayout.getVersionMajor());
 
-    auto smemObj =
-        getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), rewriter);
+    auto llvmElemTy = getTypeConverter()->convertType(
+        src.getType().cast<RankedTensorType>().getElementType());
+
+    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                   llvmElemTy, rewriter);
     Value res;
     if (!isOuter && mmaLayout.isAmpere()) { // tensor core v2
       res = SharedToDotOperandMMAv2::convertLayout(
           dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
           smemObj, getTypeConverter(), getThreadId(rewriter, loc));
     } else if (!isOuter && mmaLayout.isVolta() && isMMA) { // tensor core v1
-      bool isMMAv1Row = dotOperandLayout.getMMAv1IsRow();
+      bool isMMAv1Row = mmaLayout.getMMAv1IsRow(dotOperandLayout.getOpIdx());
       auto srcSharedLayout = src.getType()
                                  .cast<RankedTensorType>()
                                  .getEncoding()

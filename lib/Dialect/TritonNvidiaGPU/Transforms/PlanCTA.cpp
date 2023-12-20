@@ -240,8 +240,16 @@ bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
   // TODO: This is a naive implementation and should be refactored
   auto getCTATiling = [](int64_t M, int64_t N, int64_t K,
                          unsigned numCTAs) -> std::pair<unsigned, unsigned> {
-    unsigned splitM = std::clamp<unsigned>(M / 64, 1, numCTAs);
-    unsigned splitN = numCTAs / splitM;
+    // perfer a larger chunk size, at most 128; first assign splitM.
+    unsigned chunk_m = 128;
+    auto isLegal = [](unsigned chunk) { return chunk >= 64; };
+    unsigned splitM, splitN;
+    for (; isLegal(chunk_m); chunk_m /= 2) {
+      splitM = std::clamp<unsigned>(M / chunk_m, 1, numCTAs);
+      splitN = numCTAs / splitM;
+      if (isLegal(N / splitN)) // chunk_n;
+        break;
+    }
     return {splitM, splitN};
   };
 
@@ -630,13 +638,13 @@ bool CTAPlanner::isElementwiseOp(Operation *op) const {
                 arith::CeilDivUIOp, arith::DivFOp, arith::DivSIOp,
                 arith::DivUIOp, arith::ExtFOp, arith::ExtSIOp, arith::ExtUIOp,
                 arith::FloorDivSIOp, arith::FPToSIOp, arith::FPToUIOp,
-                arith::MaximumFOp, arith::MaxSIOp, arith::MaxUIOp,
-                arith::MinimumFOp, arith::MinSIOp, arith::MinUIOp,
-                arith::MulFOp, arith::MulIOp, arith::NegFOp, arith::OrIOp,
-                arith::RemFOp, arith::RemSIOp, arith::RemUIOp, arith::ShLIOp,
-                arith::ShRSIOp, arith::ShRUIOp, arith::SIToFPOp, arith::SubFOp,
-                arith::SubIOp, arith::TruncFOp, arith::TruncIOp,
-                arith::UIToFPOp, arith::XOrIOp>(op))
+                arith::MaximumFOp, arith::MaxNumFOp, arith::MaxSIOp,
+                arith::MaxUIOp, arith::MinimumFOp, arith::MinNumFOp,
+                arith::MinSIOp, arith::MinUIOp, arith::MulFOp, arith::MulIOp,
+                arith::NegFOp, arith::OrIOp, arith::RemFOp, arith::RemSIOp,
+                arith::RemUIOp, arith::ShLIOp, arith::ShRSIOp, arith::ShRUIOp,
+                arith::SIToFPOp, arith::SubFOp, arith::SubIOp, arith::TruncFOp,
+                arith::TruncIOp, arith::UIToFPOp, arith::XOrIOp>(op))
     return true;
   if (llvm::isa<math::AbsFOp, math::AbsIOp, math::AtanOp, math::Atan2Op,
                 math::CeilOp, math::CopySignOp, math::CosOp, math::SinOp,

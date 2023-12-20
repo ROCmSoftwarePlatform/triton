@@ -22,7 +22,8 @@ include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 // Op Base
 //
 class TT_Op<string mnemonic, list<Trait> traits = []> :
-    Op<Triton_Dialect, mnemonic, !listconcat(traits, [TensorSizeTrait])> {
+    Op<Triton_Dialect, mnemonic,
+       !listconcat(traits, [TensorSizeTrait, VerifyTensorLayoutsTrait])> {
 }
 
 //
@@ -78,7 +79,6 @@ def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
     // TODO: Add verifier
 }
 
-// FIXME: Not elementwise because scalars are not supported
 def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding,
                                      Pure,
@@ -86,18 +86,18 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
     let summary = "Floating point casting for custom types";
 
     let description = [{
-        Floating point casting for custom types (F8).
+        Floating point casting for custom types (F8), and non-default rounding modes.
 
         F8 <-> FP16, BF16, FP32, FP64
     }];
 
-    let arguments = (ins TT_FloatLike:$from);
+    let arguments = (ins TT_FloatTensor:$from, OptionalAttr<TT_RoundingModeAttr>:$rounding);
 
-    let results = (outs TT_FloatLike:$result);
+    let results = (outs TT_FloatTensor:$result);
 
     let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 
-    // TODO: We need a verifier here.
+    let hasVerifier = 1;
 }
 
 //
@@ -301,19 +301,29 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
     let hasFolder = 1;
 }
 
-// view is not `pure` because it may reorder elements
-def TT_ViewOp : TT_Op<"view", [NoMemoryEffect,
-                               SameOperandsAndResultElementType]> {
-    let summary = "view";
+def TT_ReshapeOp : TT_Op<"reshape", [Pure,
+                                     SameOperandsAndResultElementType]> {
+    let summary = "reinterpret a tensor to a different shape. It may change elements order if the attribute is set.";
+    let description = [{
+        reinterpret a tensor to a different shape.
 
-    let arguments = (ins TT_Tensor:$src);
+        If allow_reorder is set the compiler is free to change the order of
+        elements to generate more efficient code.
 
+        If efficient_layout is set, this is a hint that the destination layout should be kept for performance reason.
+        The compiler is still free to change it for better performance.
+    }];
+    let arguments = (ins TT_Tensor:$src, BoolAttr:$allow_reorder, OptionalAttr<UnitAttr>:$efficient_layout);
     let results = (outs TT_Tensor:$result);
-
-    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
-
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
+    let hasVerifier = 1;
+    let builders = [
+      OpBuilder<(ins "Type":$type, "Value":$src, "bool":$allow_reorder),
+        [{
+        build($_builder, $_state, type, src, allow_reorder, /*efficient_layout=*/UnitAttr());
+        }]>];
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
@@ -341,6 +351,19 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+}
+
+def TT_ExperimentalInterleaveOp : TT_Op<"experimental_interleave", [NoMemoryEffect, SameTypeOperands, SameOperandsAndResultElementType]> {
+    let summary = "interleave two tensors in their minor dimension";
+    let description = [{
+        For example, if the two input tensors are [1,2,3] and [4,5,6],
+        interleaving them returns [1,4,2,5,3,6].
+    }];
+
+    let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
+    let results = (outs TT_Tensor:$result);
+    let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
+    let hasVerifier = 1;
 }
 
 def TT_TransOp : TT_Op<"trans", [Pure,
@@ -488,7 +511,6 @@ def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
 //
 // Make Range Op
 //
-// TODO: should have ConstantLike as Trait
 def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
     let summary = "make range";
 
@@ -498,6 +520,10 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
         Values span from $start to $end (exclusive), with step = 1
     }];
 
+    // WARNING: MLIR generates getStart()/getEnd() functions which return
+    // uint32_t, even though these arguments are to be interpreted as *signed*
+    // int32 values.  If this matters, use get{Start,End}Attr().getInt(), which
+    // return int64_t.
     let arguments = (ins I32Attr:$start, I32Attr:$end);
 
     let results = (outs TT_IntTensor:$result);
@@ -505,6 +531,7 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
     let assemblyFormat = "attr-dict `:` type($result)";
 
     let hasFolder = 1;
+    let hasVerifier = 1;
 }
 
 //
@@ -513,16 +540,16 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
 def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [Elementwise,
                                                                  SameOperandsAndResultEncoding,
                                                                  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
-  let summary = "inline assembly applying elementwise operation to a group of packed element.";
+  let summary = "inline assembly applying an elementwise operation to a group of packed elements.";
   let description = [{
-   This will apply the given in inline assembly to `packed_element` number of
-   elements of the inputs. The elements packed together is unknown and will
-   depend on the backend implementation.
+    Runs an inline asm block to generate one or more tensors.
+
+    The asm block is given `packed_element` elements at a time.  Exactly which
+    elems it receives is unspecified.
   }];
 
   let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure, I32Attr:$packed_element, Variadic<AnyTypeOf<[TT_Type]>>:$args);
-  let results = (outs TT_Type:$result);
-
+  let results = (outs Variadic<TT_Type>:$result);
 
   let assemblyFormat = [{
     $asm_string attr-dict ($args^ `:` type($args))? `->` type($result)

@@ -30,7 +30,7 @@ using namespace mlir::triton;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
@@ -65,21 +65,16 @@ triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
   }
 }
 
-mlir::triton::nvgpu::WGMMADescMode
-getModeFromLayout(const SharedEncodingAttr &layout, uint32_t widthInByte) {
+int64_t getSwizzlingFromLayout(const SharedEncodingAttr &layout,
+                               uint32_t widthInByte) {
   int perPhase = layout.getPerPhase();
   int maxPhase = layout.getMaxPhase();
   uint32_t swizzlingByteWidth = 0;
-
-  mlir::triton::nvgpu::WGMMADescMode mode;
   if (perPhase == 4 && maxPhase == 2) {
-    mode = mlir::triton::nvgpu::WGMMADescMode::swizzle32;
     swizzlingByteWidth = 32;
   } else if (perPhase == 2 && maxPhase == 4) {
-    mode = mlir::triton::nvgpu::WGMMADescMode::swizzle64;
     swizzlingByteWidth = 64;
   } else if (perPhase == 1 && maxPhase == 8) {
-    mode = mlir::triton::nvgpu::WGMMADescMode::swizzle128;
     swizzlingByteWidth = 128;
   } else {
     llvm::report_fatal_error("Unsupported shared layout.");
@@ -90,7 +85,50 @@ getModeFromLayout(const SharedEncodingAttr &layout, uint32_t widthInByte) {
   // allocating shared memory.
   assert(swizzlingByteWidth <= widthInByte &&
          "swizzling size larger than matrix width is not supported.");
-  return mode;
+  return swizzlingByteWidth;
+}
+
+static Value createDescriptor(ConversionPatternRewriter &rewriter, Location loc,
+                              int64_t swizzling, uint32_t stride) {
+  // Create descriptor based on the format described in the spec:
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-shared-memory-layout-matrix-descriptor
+  union WGMMADescriptor {
+    uint64_t descriptor;
+    struct {
+      uint64_t baseAddress : 14;
+      uint64_t : 2;
+      uint64_t leadDimensionBaseOffset : 14;
+      uint64_t : 2;
+      uint64_t strideDimensionBaseOffset : 14;
+      uint64_t : 3;
+      uint64_t matrixBaseOffset : 3;
+      uint64_t : 10;
+      uint64_t swizzlingMode : 2;
+    };
+  };
+  static_assert(sizeof(WGMMADescriptor) == 8,
+                "Descriptor size should be 64 bits.");
+  WGMMADescriptor desc;
+  desc.descriptor = 0;
+  switch (swizzling) {
+  case 0:
+    desc.swizzlingMode = 0;
+    break;
+  case 32:
+    desc.swizzlingMode = 3;
+    break;
+  case 64:
+    desc.swizzlingMode = 2;
+    break;
+  case 128:
+    desc.swizzlingMode = 1;
+    break;
+  default:
+    llvm::report_fatal_error("Unsupported swizzling size.");
+  }
+  desc.strideDimensionBaseOffset = swizzling >> 1;
+  desc.leadDimensionBaseOffset = (swizzling * stride) >> 4;
+  return int_val(64, desc.descriptor);
 }
 
 class DotOpMmaV3SmemLoader {
@@ -112,10 +150,9 @@ public:
     elemsPerSwizzlingRowVal = i32_val(elemsPerSwizzlingRow);
 
     uint32_t widthInByte = shape[ord[0]] * elemBytes;
-    mode = getModeFromLayout(sharedLayout, widthInByte);
+    int64_t swizzling = getSwizzlingFromLayout(sharedLayout, widthInByte);
 
-    baseDesc = rewriter.create<triton::nvgpu::WGMMADescCreateOp>(
-        loc, base, i32_val(shape[ord[1]]), mode);
+    descriptor = createDescriptor(rewriter, loc, swizzling, shape[ord[1]]);
   }
 
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
@@ -134,7 +171,12 @@ public:
     Value off1 = mul(i32_val(elemBytes), offset);
     Value off_ = zext(i64_ty, udiv(off1, i32_val(16)));
 
-    return add(baseDesc, off_);
+    Value loadDesc = add(descriptor, off_);
+    // Add the base at the end to make it easier to do loop invariant code
+    // motion.
+    loadDesc = add(loadDesc, lshr(shl(ptrtoint(i64_ty, base), int_val(64, 46)),
+                                  int_val(64, 50)));
+    return loadDesc;
   }
 
 private:
@@ -144,18 +186,17 @@ private:
   int dimWpt;
   bool trans;
   Value elemsPerSwizzlingRowVal;
-  mlir::triton::nvgpu::WGMMADescMode mode;
   SmallVector<unsigned int> instrShape;
   ArrayRef<unsigned> ord;
   int elemsPerSwizzlingRow;
   int elemBytes;
-  Value baseDesc;
+  Value descriptor;
 };
 
 DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
-                           const MmaEncodingAttr &mmaEncoding, Value tensor,
-                           Value smemObjBase, Value thread) {
+                           const NvidiaMmaEncodingAttr &mmaEncoding,
+                           Value tensor, Value smemObjBase, Value thread) {
   auto aTensorTy = tensor.getType().cast<RankedTensorType>();
   auto aSharedLayout = aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
   assert(aSharedLayout && "only support load dot operand from shared.");
@@ -171,6 +212,10 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
   // The descriptor should be calculated based on the first warp of the
   // warpgroup.
   Value warp = and_(udiv(thread, i32_val(32)), i32_val(0xFFFFFFFC));
+  // Workaround for a bug in ptxas 12.3 that cause a failure in
+  // test_core.py::test_dot. The shuffle will force the compiler to treate the
+  // value as uniform and prevent wrong optimizations.
+  warp = mlir::LLVM::shflIdxSync(loc, rewriter, warp, 0);
   Value warpM = urem(warp, i32_val(wpt[0]));
   Value warpId = urem(warpM, i32_val(shapePerCTA[0] / instrShape[0]));
 
@@ -187,7 +232,7 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
 
 DotOpMmaV3SmemLoader loadB(TritonGPUToLLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
-                           MmaEncodingAttr &mmaEncoding, Value tensor,
+                           NvidiaMmaEncodingAttr &mmaEncoding, Value tensor,
                            Value base, Value thread) {
   auto bTensorTy = tensor.getType().cast<RankedTensorType>();
   auto bSharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
@@ -226,18 +271,25 @@ llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
                                  Operation *insertBefore) {
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(insertBefore);
-  if (!elements[0].getType().isF16()) {
+
+  // Internally bfloat16 is stored as int16, so we check them both
+  auto isBF16 =
+      elements[0].getType().isBF16() || elements[0].getType().isInteger(16);
+
+  if (!(elements[0].getType().isF16() || isBF16)) {
     llvm::SmallVector<Value> mmaOut(numElements);
     for (int i = 0; i < numElements; ++i)
       mmaOut[i] = elements[startIndex + i];
     return mmaOut;
   }
-  // For FP16 we need to pack accumulator into 32-bit integers.
+
+  // For FP16 and BF16 we need to pack accumulator into 32-bit integers.
   llvm::SmallVector<Value> mmaOut(numElements / 2);
+  Type cPackTy = isBF16 ? vec_ty(rewriter.getIntegerType(16), 2)
+                        : vec_ty(rewriter.getF16Type(), 2);
   for (int i = 0; i < numElements / 2; ++i) {
     Value a0 = elements[startIndex + 2 * i];
     Value a1 = elements[startIndex + 2 * i + 1];
-    Type cPackTy = vec_ty(rewriter.getF16Type(), 2);
     Value pack = rewriter.create<LLVM::UndefOp>(loc, cPackTy);
     pack = insert_element(cPackTy, pack, a0, i32_val(0));
     pack = insert_element(cPackTy, pack, a1, i32_val(1));
@@ -326,14 +378,21 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   auto dTensorTy = d.getType().cast<RankedTensorType>();
   auto aSharedLayout = aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
   auto bSharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto mmaEncoding = dTensorTy.getEncoding().cast<MmaEncodingAttr>();
+  auto mmaEncoding = dTensorTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
   auto bOrd = bSharedLayout.getOrder();
   bool transA = false;
   Value baseA;
   Value baseB;
   if (aSharedLayout)
-    baseA = getSharedMemoryObjectFromStruct(loc, loadedA, rewriter).base;
-  baseB = getSharedMemoryObjectFromStruct(loc, loadedB, rewriter).base;
+    baseA =
+        getSharedMemoryObjectFromStruct(
+            loc, loadedA,
+            typeConverter->convertType(aTensorTy.getElementType()), rewriter)
+            .base;
+  baseB = getSharedMemoryObjectFromStruct(
+              loc, loadedB,
+              typeConverter->convertType(bTensorTy.getElementType()), rewriter)
+              .base;
   if (aSharedLayout) {
     auto aOrd = aSharedLayout.getOrder();
     transA = aOrd[0] == 0;

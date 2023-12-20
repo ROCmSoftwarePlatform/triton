@@ -93,13 +93,13 @@ class FoldSplatMaskInInsertAsync : public mlir::RewritePattern {
 public:
   FoldSplatMaskInInsertAsync(mlir::MLIRContext *context)
       : mlir::RewritePattern(
-            triton::nvidia_gpu::InsertSliceAsyncV2Op::getOperationName(), 1,
+            triton::nvidia_gpu::InsertSliceTMAOp::getOperationName(), 1,
             context) {}
 
   LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
-    auto insertOp = cast<triton::nvidia_gpu::InsertSliceAsyncV2Op>(op);
+    auto insertOp = cast<triton::nvidia_gpu::InsertSliceTMAOp>(op);
     if (!insertOp.getMask())
       return failure();
     auto splatOp = insertOp.getMask().getDefiningOp<triton::SplatOp>();
@@ -169,8 +169,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // memory to the function arguments.
     auto loc = funcOp.getLoc();
     auto ctx = funcOp->getContext();
-    auto ptrTy = LLVM::LLVMPointerType::get(
-        this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
     // 1. Modify the function type to add the new argument.
     auto funcTy = funcOp.getFunctionType();
     auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
@@ -205,7 +204,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // Collect TMA informations.
     unsigned numTMALoad = 0;
     funcOp.walk(
-        [&numTMALoad](triton::nvidia_gpu::InsertSliceAsyncV2Op insertSliceOp) {
+        [&numTMALoad](triton::nvidia_gpu::InsertSliceTMAOp insertSliceOp) {
           numTMALoad++;
         });
     unsigned numTMAStore = 0;
@@ -242,15 +241,14 @@ struct FuncOpConversion : public FuncOpConversionBase {
     allocation.mapFuncOp(funcOp, newFuncOp);
 
     // Append arguments to receive TMADesc in global memory in the runtime
-    auto i8PtrTy = LLVM::LLVMPointerType::get(
-        this->getTypeConverter()->convertType(rewriter.getI8Type()), 1);
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
     auto numArgs = newFuncOp.getBody().front().getNumArguments();
     auto funcTy = newFuncOp.getFunctionType().cast<LLVM::LLVMFunctionType>();
     SmallVector<Type> newInputsTy(funcTy.getParams().begin(),
                                   funcTy.getParams().end());
     for (unsigned i = 0; i < numTMA; ++i) {
-      newFuncOp.getBody().front().addArgument(i8PtrTy, funcOp.getLoc());
-      newInputsTy.push_back(i8PtrTy);
+      newFuncOp.getBody().front().addArgument(ptrTy, funcOp.getLoc());
+      newInputsTy.push_back(ptrTy);
     }
     newFuncOp.setType(
         LLVM::LLVMFunctionType::get(funcTy.getReturnType(), newInputsTy));
@@ -306,9 +304,8 @@ private:
     // of shared memory and append it to the operands of the callOp.
     auto loc = callOp.getLoc();
     auto caller = callOp->getParentOfType<FunctionOpInterface>();
-    auto ptrTy = LLVM::LLVMPointerType::get(
-        this->getTypeConverter()->convertType(rewriter.getI8Type()),
-        NVVM::kSharedMemorySpace);
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
+                                            NVVM::kSharedMemorySpace);
     auto promotedOperands = this->getTypeConverter()->promoteOperands(
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
@@ -322,7 +319,9 @@ private:
     }
     // function has a shared mem buffer
     auto offset = funcAllocation->getOffset(bufferId);
-    auto offsetValue = gep(ptrTy, base, i32_val(offset));
+    auto offsetValue =
+        gep(ptrTy, this->getTypeConverter()->convertType(rewriter.getI8Type()),
+            base, i32_val(offset));
     promotedOperands.push_back(offsetValue);
     return promotedOperands;
   }
@@ -420,8 +419,16 @@ struct ConvertTritonGPUToLLVM
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
+    // Hack: WSMaterialization may have changed the effective number of warps,
+    // in a way that isn't reflected in triton_gpu.num-warps.  If so, we have to
+    // respect that here.
+    if (Attribute attr = mod->getAttr("triton_gpu.num-warp-groups-per-cta")) {
+      numWarps *= attr.cast<IntegerAttr>().getInt();
+    }
+
     // Preprocess
     decomposeFp8e4b15Convert(mod);
+    decomposeSplatToSharedLayout(mod, numWarps, threadsPerWarp, numCTAs);
     decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
 #ifdef USE_ROCM
     decomposeMfmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
@@ -438,15 +445,15 @@ struct ConvertTritonGPUToLLVM
 
     /* Get tensorPtrMap before conversion */
     TensorPtrMapT tensorPtrMap;
-    mod.walk([&tensorPtrMap](
-                 mlir::triton::nvidia_gpu::InsertSliceAsyncV2Op insertOp) {
-      auto src = insertOp.getSrc();
-      auto ptrTy = src.getType().dyn_cast<triton::PointerType>();
-      if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
-        auto makeTensorPtrOp = getMakeTensorPtrOp(insertOp.getSrc());
-        tensorPtrMap[insertOp.getOperation()] = makeTensorPtrOp;
-      }
-    });
+    mod.walk(
+        [&tensorPtrMap](mlir::triton::nvidia_gpu::InsertSliceTMAOp insertOp) {
+          auto src = insertOp.getSrc();
+          auto ptrTy = src.getType().dyn_cast<triton::PointerType>();
+          if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
+            auto makeTensorPtrOp = getMakeTensorPtrOp(insertOp.getSrc());
+            tensorPtrMap[insertOp.getOperation()] = makeTensorPtrOp;
+          }
+        });
 
     mod.walk([&tensorPtrMap](mlir::triton::nvidia_gpu::StoreAsyncOp storeOp) {
       auto dst = storeOp.getDst();
@@ -462,7 +469,7 @@ struct ConvertTritonGPUToLLVM
       RewritePatternSet patterns(context);
       patterns.add<FoldSplatMaskInInsertAsync>(context);
       SmallVector<Operation *> insertSlices;
-      mod.walk([&insertSlices](triton::nvidia_gpu::InsertSliceAsyncV2Op op) {
+      mod.walk([&insertSlices](triton::nvidia_gpu::InsertSliceTMAOp op) {
         insertSlices.push_back(op);
       });
       if (applyOpPatternsAndFold(insertSlices, std::move(patterns)).failed())
@@ -627,9 +634,8 @@ private:
       } else {
         funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
       }
-      auto ptrTy =
-          LLVM::LLVMPointerType::get(typeConverter.convertType(b.getI8Type()),
-                                     NVVM::NVVMMemorySpace::kSharedMemorySpace);
+      auto ptrTy = LLVM::LLVMPointerType::get(
+          ctx, NVVM::NVVMMemorySpace::kSharedMemorySpace);
       funcSmem = b.create<LLVM::BitcastOp>(loc, ptrTy, funcSmem);
       allocation.setFunctionSharedMemoryValue(funcOp, funcSmem);
     });
@@ -663,9 +669,36 @@ private:
       addWSNamedAttrs(newCvt, cvtOp->getAttrs());
       auto newRet = builder.create<mlir::triton::FpToFpOp>(
           cvtOp.getLoc(), cvtOp.getType(), newCvt.getResult());
+      newRet.setRounding(
+          triton::RoundingMode::RTNE); // Downcast requires rounding mode
       addWSNamedAttrs(newRet, cvtOp->getAttrs());
       cvtOp.replaceAllUsesWith(newRet.getResult());
       cvtOp.erase();
+    });
+  }
+
+  void decomposeSplatToSharedLayout(ModuleOp mod, int numWarps,
+                                    int threadsPerWarp, int numCTAs) const {
+    // Replace `splat -> shared` with `splat -> blocked -> shared`.
+    mod.walk([&](triton::SplatOp splatOp) -> void {
+      auto dstType = splatOp.getType().cast<RankedTensorType>();
+      auto shared =
+          dstType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
+      if (shared) {
+        OpBuilder builder(splatOp);
+        SmallVector<unsigned, 4> sizePerThread(dstType.getRank(), 1);
+        auto newType = RankedTensorType::get(
+            dstType.getShape(), dstType.getElementType(),
+            triton::gpu::BlockedEncodingAttr::get(
+                mod.getContext(), dstType.getShape(), sizePerThread,
+                getOrder(shared), numWarps, threadsPerWarp, numCTAs));
+        auto newSplat = builder.create<triton::SplatOp>(
+            splatOp.getLoc(), newType, splatOp.getOperand());
+        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
+            splatOp.getLoc(), dstType, newSplat.getResult());
+        splatOp.replaceAllUsesWith(newConvert.getResult());
+        splatOp.erase();
+      }
     });
   }
 
@@ -678,7 +711,7 @@ private:
       auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
       auto dstType = cvtOp.getType().cast<RankedTensorType>();
       auto srcMma =
-          srcType.getEncoding().dyn_cast<triton::gpu::MmaEncodingAttr>();
+          srcType.getEncoding().dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (srcMma && dstDotOp && !isMmaToDotShortcut(srcType, dstType)) {
@@ -1046,10 +1079,10 @@ private:
       Type AElType =
           dotOp.getA().getType().cast<RankedTensorType>().getElementType();
       Type promoteType;
-      MmaEncodingAttr mmaLayout = D.getType()
-                                      .cast<RankedTensorType>()
-                                      .getEncoding()
-                                      .dyn_cast<MmaEncodingAttr>();
+      NvidiaMmaEncodingAttr mmaLayout = D.getType()
+                                            .cast<RankedTensorType>()
+                                            .getEncoding()
+                                            .dyn_cast<NvidiaMmaEncodingAttr>();
       if (mmaLayout) {
         bool isNativeHopperFP8 =
             AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();

@@ -6,7 +6,7 @@
 #BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #A = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #B = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-#C = #triton_gpu.mma<{version = 2, warpsPerCTA = [4, 1]}>
+#C = #triton_gpu.nvidia_mma<{version = 2, warpsPerCTA = [4, 1]}>
 #A_OP = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
 #B_OP = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
 
@@ -31,6 +31,7 @@
 // CHECK-DAG:   %[[NEXT_B_PREFETCH_SMEM:.*]] = triton_gpu.extract_slice {{.*}}[0, 0] [16, 128]
 // CHECK-DAG:   %[[NEXT_B_PREFETCH:.*]] = triton_gpu.convert_layout %[[NEXT_B_PREFETCH_SMEM]]
 // CHECK:     scf.yield {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[NEXT_A_PREFETCH_CVT]], %[[NEXT_B_PREFETCH]]
+module attributes { "triton_gpu.num-warps" = 4 : i32 } {
 tt.func @matmul_loop_mixed(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f8E5M2>, %B : !tt.ptr<f16>) -> tensor<128x128xf32, #C>{
   %a_ptr_init = tt.broadcast %A : (!tt.ptr<f8E5M2>) -> tensor<128x32x!tt.ptr<f8E5M2>, #AL>
   %b_ptr_init = tt.broadcast %B : (!tt.ptr<f16>) -> tensor<32x128x!tt.ptr<f16>, #BL>
@@ -66,3 +67,4 @@ tt.func @matmul_loop_mixed(%lb : index, %ub : index, %step : index, %A : !tt.ptr
   }
   tt.return %loop#4 : tensor<128x128xf32, #C>
 }
+}  // end module

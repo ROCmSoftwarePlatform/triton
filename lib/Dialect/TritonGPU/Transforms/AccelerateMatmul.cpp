@@ -39,7 +39,7 @@ using tt::DotOp;
 using ttg::BlockedEncodingAttr;
 using ttg::ConvertLayoutOp;
 using ttg::DotOperandEncodingAttr;
-using ttg::MmaEncodingAttr;
+using ttg::NvidiaMmaEncodingAttr;
 using ttg::SliceEncodingAttr;
 
 // higher mma version is prefered, will fallback to lower version if not
@@ -68,17 +68,31 @@ static int getMMAVersionSafe(int computeCapability, tt::DotOp op) {
 SmallVector<unsigned, 2>
 warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   auto filter = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
+    return op->getParentRegion() == dotOp->getParentRegion() &&
+           !isa<tt::TransOp>(op);
   };
-  auto slices = multiRootGetSlice(dotOp, {filter});
-  for (Operation *op : slices)
+  auto slices = multiRootGetSlice(dotOp, {filter}, {filter});
+  bool hasChainedDot = false;
+  for (Operation *op : slices) {
     if (isa<tt::DotOp>(op) && (op != dotOp)) {
-      if (shape[0] >= shape[1]) {
-        return {(unsigned)numWarps, 1};
-      } else {
-        return {1, (unsigned)numWarps};
+      auto chainedDot = cast<tt::DotOp>(op);
+      if (auto mmaEncoding = chainedDot.getResult()
+                                 .getType()
+                                 .cast<RankedTensorType>()
+                                 .getEncoding()
+                                 .dyn_cast<NvidiaMmaEncodingAttr>()) {
+        return ttg::getWarpsPerCTA(mmaEncoding);
       }
+      hasChainedDot = true;
     }
+  }
+  if (hasChainedDot) {
+    if (shape[0] >= shape[1]) {
+      return {(unsigned)numWarps, 1};
+    } else {
+      return {1, (unsigned)numWarps};
+    }
+  }
 
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp = {16, 8};
@@ -231,7 +245,7 @@ public:
     // TODO: Check data-types and SM compatibility
     auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
     if (!oldRetType.getEncoding() ||
-        oldRetType.getEncoding().isa<ttg::MmaEncodingAttr>())
+        oldRetType.getEncoding().isa<ttg::NvidiaMmaEncodingAttr>())
       return failure();
 
     auto AType = dotOp.getOperand(0).getType().cast<RankedTensorType>();
@@ -255,7 +269,7 @@ public:
     auto oldAType = a.getType().cast<RankedTensorType>();
     auto oldBType = b.getType().cast<RankedTensorType>();
 
-    ttg::MmaEncodingAttr mmaEnc;
+    ttg::NvidiaMmaEncodingAttr mmaEnc;
     if (versionMajor == 1) {
       SetVector<Operation *> aBwdSlices, bBwdSlices;
       auto isCvt = [](Operation *op) { return isa<ConvertLayoutOp>(op); };
@@ -287,7 +301,7 @@ public:
       if (bOp)
         isBRow = getCvtArgOrder(bOp)[0] == 1;
 
-      mmaEnc = ttg::MmaEncodingAttr::get(
+      mmaEnc = ttg::NvidiaMmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, numWarps, CTALayout,
           instrShape, oldAType.getShape(), oldBType.getShape(), retShapePerCTA,
           isARow, isBRow, mmaV1Counter++);
@@ -295,9 +309,9 @@ public:
       int versionMinor = computeCapability == 75 ? 1 : 0;
       auto warpsPerTile = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
                                           numWarps, instrShape);
-      mmaEnc = ttg::MmaEncodingAttr::get(oldRetType.getContext(), versionMajor,
-                                         versionMinor, warpsPerTile, CTALayout,
-                                         instrShape);
+      mmaEnc = ttg::NvidiaMmaEncodingAttr::get(
+          oldRetType.getContext(), versionMajor, versionMinor, warpsPerTile,
+          CTALayout, instrShape);
     }
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), mmaEnc);
@@ -365,6 +379,6 @@ public:
 };
 
 std::unique_ptr<Pass>
-mlir::createTritonGPUAccelerateMatmulPass(int computeCapability) {
+mlir::triton::gpu::createAccelerateMatmulPass(int computeCapability) {
   return std::make_unique<TritonGPUAccelerateMatmulPass>(computeCapability);
 }

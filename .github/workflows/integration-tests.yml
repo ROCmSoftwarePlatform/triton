@@ -18,6 +18,7 @@ env:
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       matrix-required: ${{ steps.set-matrix.outputs.matrix-required }}
       matrix-optional: ${{ steps.set-matrix.outputs.matrix-optional }}
@@ -33,11 +34,11 @@ jobs:
             echo '::set-output name=matrix-optional::["ubuntu-latest"]'
           fi
 
-
   Integration-Tests:
     needs: Runner-Preparation
 
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
 
     strategy:
       matrix:
@@ -47,7 +48,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          submodules: 'true'
+          submodules: "true"
       - name: Set CUDA ENV
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
@@ -173,6 +174,7 @@ jobs:
 
   Compare-artifacts:
     needs: Integration-Tests
+    timeout-minutes: 5
 
     runs-on: ubuntu-latest
 

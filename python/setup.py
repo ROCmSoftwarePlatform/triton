@@ -80,18 +80,30 @@ def get_llvm_package_info():
             arch = "x64"
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
-        # TODO: arm64
-        vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
-        vglibc = vglibc[0] * 100 + vglibc[1]
-        system_suffix = 'ubuntu-x64' if vglibc > 217 else 'centos-x64'
+        if arch == 'arm64':
+            system_suffix = 'ubuntu-arm64'
+        else:
+            vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
+            vglibc = vglibc[0] * 100 + vglibc[1]
+            system_suffix = 'ubuntu-x64' if vglibc > 217 else 'centos-x64'
     else:
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     # release_suffix = "assert" if use_assert_enabled_llvm else "release"
-    rev = "49af6502"
+    llvm_hash_file = open("../cmake/llvm-hash.txt", "r")
+    rev = llvm_hash_file.read(8)
     name = f"llvm-{rev}-{system_suffix}"
     url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+
+
+def open_url(url):
+    user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0'
+    headers = {
+        'User-Agent': user_agent,
+    }
+    request = urllib.request.Request(url, None, headers)
+    return urllib.request.urlopen(request)
 
 
 def get_thirdparty_packages(triton_cache_path):
@@ -111,8 +123,7 @@ def get_thirdparty_packages(triton_cache_path):
                 pass
             os.makedirs(package_root_dir, exist_ok=True)
             print(f'downloading and extracting {p.url} ...')
-            ftpstream = urllib.request.urlopen(p.url)
-            file = tarfile.open(fileobj=ftpstream, mode="r|*")
+            file = tarfile.open(fileobj=open_url(p.url), mode="r|*")
             file.extractall(path=package_root_dir)
             # write version url to package_dir
             with open(os.path.join(package_dir, "version.txt"), "w") as f:
@@ -148,8 +159,7 @@ def download_and_copy(src_path, variable, version, url_func):
             download = curr_version != version
     if download:
         print(f'downloading and extracting {url} ...')
-        ftpstream = urllib.request.urlopen(url)
-        file = tarfile.open(fileobj=ftpstream, mode="r|*")
+        file = tarfile.open(fileobj=open_url(url), mode="r|*")
         with tempfile.TemporaryDirectory() as temp_dir:
             file.extractall(path=temp_dir)
             src_path = os.path.join(temp_dir, src_path)
@@ -314,28 +324,28 @@ class CMakeBuild(build_ext):
 download_and_copy(
     src_path="bin/ptxas",
     variable="TRITON_PTXAS_PATH",
-    version="12.1.105",
+    version="12.3.52",
     url_func=lambda arch, version:
-    f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
+    f"https://anaconda.org/nvidia/cuda-nvcc/12.3.52/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
 )
 download_and_copy(
     src_path="bin/cuobjdump",
     variable="TRITON_CUOBJDUMP_PATH",
-    version="12.1.111",
+    version="12.3.52",
     url_func=lambda arch, version:
-    f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
+    f"https://anaconda.org/nvidia/cuda-cuobjdump/12.3.52/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
 )
 download_and_copy(
     src_path="bin/nvdisasm",
     variable="TRITON_NVDISASM_PATH",
-    version="12.1.105",
+    version="12.3.52",
     url_func=lambda arch, version:
-    f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
+    f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
 
 setup(
-    name="triton",
-    version="2.1.0",
+    name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
+    version="2.1.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
@@ -345,6 +355,7 @@ setup(
         "triton/_C",
         "triton/common",
         "triton/compiler",
+        "triton/compiler/backends",
         "triton/language",
         "triton/language/extra",
         "triton/ops",

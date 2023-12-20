@@ -50,11 +50,12 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   HIP_CHECK_AND_RETURN_NULL(hipGetDeviceProperties(&props, device_id));
 
   // create a struct to hold device properties
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:s}", "max_shared_mem",
                        props.sharedMemPerBlock, "multiprocessor_count",
                        props.multiProcessorCount, "sm_clock_rate",
                        props.clockRate, "mem_clock_rate", props.memoryClockRate,
-                       "mem_bus_width", props.memoryBusWidth);
+                       "mem_bus_width", props.memoryBusWidth, "arch",
+                       props.gcnArchName);
 }
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
@@ -67,21 +68,6 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
                         &device)) {
     return NULL;
   }
-
-  // Open HSACO file
-  FILE *hsaco_file;
-  if ((hsaco_file = fopen(data, "rb")) == NULL) {
-    return NULL;
-  }
-
-  // Read HSCAO file into Buffer
-  fseek(hsaco_file, 0L, SEEK_END);
-  size_t hsaco_file_size = ftell(hsaco_file);
-  unsigned char *hsaco =
-      (unsigned char *)malloc(hsaco_file_size * sizeof(unsigned char));
-  rewind(hsaco_file);
-  fread(hsaco, sizeof(unsigned char), hsaco_file_size, hsaco_file);
-  fclose(hsaco_file);
 
   // set HIP options
   hipJitOption opt[] = {hipJitOptionErrorLogBufferSizeBytes,

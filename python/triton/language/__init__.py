@@ -4,6 +4,7 @@
 from . import math
 from . import extra
 from .standard import (
+    PropagateNan,
     argmax,
     argmin,
     cdiv,
@@ -15,6 +16,7 @@ from .standard import (
     minimum,
     sigmoid,
     softmax,
+    sort,
     sum,
     ravel,
     swizzle2d,
@@ -97,6 +99,7 @@ from .core import (
     view,
     void,
     where,
+    _experimental_interleave,
 )
 from .random import (
     pair_uniform_to_normal,
@@ -108,10 +111,11 @@ from .random import (
     randint4x,
     randn,
     randn4x,
-    uint32_to_uniform_float,
+    uint_to_uniform_float,
 )
 
 __all__ = [
+    "PropagateNan",
     "TRITON_MAX_TENSOR_NUMEL",
     "abs",
     "advance",
@@ -193,6 +197,7 @@ __all__ = [
     "sigmoid",
     "sin",
     "softmax",
+    "sort",
     "sqrt",
     "static_range",
     "static_assert",
@@ -205,7 +210,7 @@ __all__ = [
     "triton",
     "uint16",
     "uint32",
-    "uint32_to_uniform_float",
+    "uint_to_uniform_float",
     "uint64",
     "uint8",
     "umulhi",
@@ -215,4 +220,5 @@ __all__ = [
     "xor_sum",
     "zeros",
     "zeros_like",
+    _experimental_interleave,
 ]

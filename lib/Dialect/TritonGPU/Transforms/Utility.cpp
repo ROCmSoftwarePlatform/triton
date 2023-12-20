@@ -226,7 +226,7 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
       return "green";
     else if (layout.isa<triton::gpu::SliceEncodingAttr>())
       return "yellow";
-    else if (layout.isa<triton::gpu::MmaEncodingAttr>())
+    else if (layout.isa<triton::gpu::NvidiaMmaEncodingAttr>())
       return "lightslateblue";
     else if (layout.isa<triton::gpu::DotOperandEncodingAttr>())
       return "orange";
@@ -258,6 +258,27 @@ static std::optional<Attribute> inferDstEncoding(triton::ExpandDimsOp op,
   return sliceEncoding.getParent();
 }
 
+static std::optional<Attribute>
+inferDstEncoding(triton::ExperimentalInterleaveOp op, Attribute encoding) {
+  // Same as src encoding, except the last dim has 2x the elements per thread.
+  auto ctx = op->getContext();
+  auto enc = encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
+  if (!enc)
+    return std::nullopt;
+
+  // Precondition for the interleave op in general: The last dim is also the
+  // most minor dim (i.e. it occurs first in `order`).
+  if (enc.getOrder()[0] != enc.getOrder().size() - 1)
+    return std::nullopt;
+
+  auto newSizePerThread = enc.getSizePerThread();
+  newSizePerThread[newSizePerThread.size() - 1] *= 2;
+
+  return triton::gpu::BlockedEncodingAttr::get(
+      ctx, newSizePerThread, enc.getThreadsPerWarp(), enc.getWarpsPerCTA(),
+      enc.getOrder(), enc.getCTALayout());
+}
+
 static std::optional<Attribute> inferSrcEncoding(triton::ReduceOp op,
                                                  Attribute encoding) {
   auto sliceEncoding = encoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
@@ -274,12 +295,38 @@ static std::optional<Attribute> inferSrcEncoding(triton::ExpandDimsOp op,
                                              encoding);
 }
 
+static std::optional<Attribute>
+inferSrcEncoding(triton::ExperimentalInterleaveOp op, Attribute encoding) {
+  // Same as dst encoding, except the last dim has half the elements per thread.
+  auto ctx = op->getContext();
+  auto enc = encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
+  if (!enc)
+    return std::nullopt;
+
+  // Precondition for the interleave op in general: The last dim is also the
+  // most minor dim (i.e. it occurs first in `order`).
+  if (enc.getOrder()[0] != enc.getOrder().size() - 1)
+    return std::nullopt;
+
+  if (enc.getSizePerThread()[enc.getSizePerThread().size() - 1] % 2 != 0)
+    return std::nullopt;
+
+  auto newSizePerThread = enc.getSizePerThread();
+  newSizePerThread[newSizePerThread.size() - 1] /= 2;
+
+  return triton::gpu::BlockedEncodingAttr::get(
+      ctx, newSizePerThread, enc.getThreadsPerWarp(), enc.getWarpsPerCTA(),
+      enc.getOrder(), enc.getCTALayout());
+}
+
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferSrcEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferSrcEncoding(expand, encoding);
-  if (isa<triton::ViewOp, triton::CatOp>(op))
+  if (auto interleave = dyn_cast<triton::ExperimentalInterleaveOp>(op))
+    return inferSrcEncoding(interleave, encoding);
+  if (isa<triton::ReshapeOp, triton::CatOp>(op))
     return std::nullopt;
   return encoding;
 }
@@ -289,7 +336,9 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferDstEncoding(expand, encoding);
-  if (isa<triton::ViewOp, triton::CatOp>(op))
+  if (auto interleave = dyn_cast<triton::ExperimentalInterleaveOp>(op))
+    return inferDstEncoding(interleave, encoding);
+  if (isa<triton::ReshapeOp, triton::CatOp>(op))
     return std::nullopt;
   return encoding;
 }
@@ -336,7 +385,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
     return !triton::gpu::isExpensiveCat(cast<triton::CatOp>(op),
                                         targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-    if (targetEncoding.isa<triton::gpu::MmaEncodingAttr>()) {
+    if (targetEncoding.isa<triton::gpu::NvidiaMmaEncodingAttr>()) {
       auto srcEncoding =
           convert.getOperand().getType().cast<RankedTensorType>().getEncoding();
       if (targetEncoding != srcEncoding)
@@ -344,11 +393,15 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
     }
     return true;
   }
-  if (auto view = dyn_cast<triton::ViewOp>(op)) {
-    auto viewDstType = view.getType().cast<RankedTensorType>();
-    RankedTensorType newDstType = RankedTensorType::get(
-        viewDstType.getShape(), viewDstType.getElementType(), targetEncoding);
-    return !triton::gpu::isExpensiveView(view.getOperand().getType(),
+
+  if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
+    auto reshapeDstType = reshape.getType().cast<RankedTensorType>();
+    RankedTensorType newDstType =
+        RankedTensorType::get(reshapeDstType.getShape(),
+                              reshapeDstType.getElementType(), targetEncoding);
+    return reshape.getAllowReorder() &&
+           !reshape.getEfficientLayout().has_value() &&
+           !triton::gpu::isExpensiveView(reshape.getOperand().getType(),
                                          newDstType);
   }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
@@ -430,8 +483,23 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     if (currentValue.getDefiningOp<scf::ForOp>())
       return failure();
     slice.insert(currentValue);
+    if (layout.find(currentValue) != layout.end()) {
+      if (layout[currentValue] != encoding)
+        return failure();
+    }
     layout[currentValue] = encoding;
     if (auto *definingOp = currentValue.getDefiningOp()) {
+      // If the op has multiple results we need to update all results layout.
+      for (Value result : definingOp->getResults()) {
+        if (result == currentValue || !result.getType().isa<RankedTensorType>())
+          continue;
+        if (layout.find(result) != layout.end()) {
+          if (layout[result] != encoding)
+            return failure();
+          continue;
+        }
+        layout[result] = encoding;
+      }
       if (canFoldIntoConversion(definingOp, encoding))
         continue;
       if (stopPropagation && stopPropagation(definingOp))
@@ -451,10 +519,10 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     Block *block = blockArg.getOwner();
     Operation *parentOp = block->getParentOp();
     if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
-      OpOperand &initOperand = forOp.getOpOperandForRegionIterArg(blockArg);
+      OpOperand *initOperand = forOp.getTiedLoopInit(blockArg);
       Value yieldOperand = forOp.getBody()->getTerminator()->getOperand(
           blockArg.getArgNumber() - forOp.getNumInductionVars());
-      queue.push_back({initOperand.get(), encoding});
+      queue.push_back({initOperand->get(), encoding});
       queue.push_back({yieldOperand, encoding});
       continue;
     }
@@ -566,7 +634,7 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
       Value value = queue.pop_back_val();
       if (auto nestedFor = value.getDefiningOp<scf::ForOp>()) {
         auto result = value.cast<OpResult>();
-        OpOperand &forOperand = nestedFor.getOpOperandForResult(result);
+        OpOperand &forOperand = *nestedFor.getTiedLoopInit(result);
         markLive(forOperand.get());
         auto nestedYieldOp =
             cast<scf::YieldOp>(nestedFor.getBody()->getTerminator());
@@ -612,6 +680,28 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
         continue;
       if (yieldOperand.value() == block.getArgument(yieldOperand.index() + 1))
         continue;
+
+      // The yield operand might live outside the loop, e.g.
+      //   %init = ...
+      //   %x = ...
+      //   %y = for iter_args(%unused = %init) {
+      //     yield %x
+      //   }
+      //
+      // In this case, the loop returns %x if it runs 1 or more times, and
+      // otherwise it returns %init.  We cowardly refuse to remove this operand
+      // from the yield.  (We could, but we'd need to prove that the loop runs 0
+      // or >=1 times.)
+      //
+      // As a special case, if it doesn't matter whether the loop runs 0 or >=1
+      // times (because the loop returns the same value in both cases) then we
+      // can still mark the operand as dead. This occurs in the above example
+      // when %init is the same as %x.
+      if (!forOp->isAncestor(
+              yieldOperand.value().getParentRegion()->getParentOp()) &&
+          yieldOperand.value() != forOp.getInitArgs()[yieldOperand.index()])
+        continue;
+
       deadArg.push_back(yieldOperand.index());
     }
     if (deadArg.empty())

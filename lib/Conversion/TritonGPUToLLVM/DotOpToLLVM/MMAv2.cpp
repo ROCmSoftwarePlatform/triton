@@ -5,7 +5,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 using ValueTableV2 = std::map<std::pair<unsigned, unsigned>, Value>;
 
@@ -16,7 +16,7 @@ Value loadC(Value tensor, Value llTensor,
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   size_t fcSize = triton::gpu::getTotalElemsPerThread(tensor.getType());
 
-  assert(tensorTy.getEncoding().isa<MmaEncodingAttr>() &&
+  assert(tensorTy.getEncoding().isa<NvidiaMmaEncodingAttr>() &&
          "Currently, we only support $c with a mma layout.");
   // Load a normal C tensor with mma layout, that should be a
   // LLVM::struct with fcSize elements.
@@ -287,12 +287,12 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   auto dShapePerCTA = triton::gpu::getShapePerCTA(dTensorTy);
 
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
-  auto repA =
-      aTensorTy.getEncoding().cast<DotOperandEncodingAttr>().getMMAv2Rep(
-          aShapePerCTA, bitwidth);
-  auto repB =
-      bTensorTy.getEncoding().cast<DotOperandEncodingAttr>().getMMAv2Rep(
-          bShapePerCTA, bitwidth);
+  auto dotOpA = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+  auto repA = dotOpA.getParent().cast<NvidiaMmaEncodingAttr>().getMMAv2Rep(
+      aShapePerCTA, bitwidth, dotOpA.getOpIdx());
+  auto dotOpB = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+  auto repB = dotOpB.getParent().cast<NvidiaMmaEncodingAttr>().getMMAv2Rep(
+      bShapePerCTA, bitwidth, dotOpB.getOpIdx());
 
   assert(repA[1] == repB[0]);
   int repM = repA[0], repN = repB[1], repK = repA[1];
@@ -376,7 +376,7 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                        .getType()
                        .cast<RankedTensorType>()
                        .getEncoding()
-                       .cast<MmaEncodingAttr>();
+                       .cast<NvidiaMmaEncodingAttr>();
 
   Value A = op.getA();
   Value B = op.getB();

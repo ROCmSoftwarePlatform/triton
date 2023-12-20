@@ -52,7 +52,7 @@ public:
                                .getType()
                                .cast<RankedTensorType>()
                                .getEncoding()
-                               .dyn_cast<ttg::MmaEncodingAttr>();
+                               .dyn_cast<ttg::NvidiaMmaEncodingAttr>();
         auto isHopperEncoding = mmaEncoding && mmaEncoding.isHopper();
         if (isHopperEncoding &&
             (dependOnSharedEncOperand(a) || dependOnSharedEncOperand(b))) {
@@ -71,7 +71,7 @@ private:
     if (op && isa<tt::DotOp, ttng::DotAsyncOp>(op))
       return false;
     // reach convertlayout
-    if (op && isa<ttg::ConvertLayoutOp>(op) && ttg::isSharedEncoding(operand))
+    if (op && isa<ttg::ConvertLayoutOp>(op) && ttg::hasSharedEncoding(operand))
       return true;
     // root and not BlockArgument
     if (!op && !isa<BlockArgument>(operand))

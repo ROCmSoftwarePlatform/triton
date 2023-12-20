@@ -29,8 +29,8 @@ using namespace mlir;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-static void pipelineLoop(scf::ForOp forOp, int numStages) {
-  mlir::triton::PipeliningOption options;
+// Return true if the preconditions for pipelining the loop are met.
+bool preCondition(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
   // TODO: relax the constraint in the expander.
   if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
@@ -38,6 +38,24 @@ static void pipelineLoop(scf::ForOp forOp, int numStages) {
                      Operation *def = operand.getDefiningOp();
                      return !def;
                    }))
+    return false;
+  // Don't pipeline outer loops.
+  if (forOp
+          ->walk([&](Operation *op) {
+            if (forOp.getOperation() == op)
+              return WalkResult::advance();
+            if (isa<scf::ForOp, scf::WhileOp>(op))
+              return WalkResult::interrupt();
+            return WalkResult::advance();
+          })
+          .wasInterrupted())
+    return false;
+  return true;
+}
+
+static void pipelineLoop(scf::ForOp forOp, int numStages) {
+  mlir::triton::PipeliningOption options;
+  if (!preCondition(forOp))
     return;
 
   bool foundSchedule = false;
@@ -79,10 +97,9 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
 };
 } // anonymous namespace
 
-std::unique_ptr<Pass> mlir::createTritonGPUPipelinePass(int numStages,
-                                                        int numWarps,
-                                                        int numCTAs,
-                                                        int computeCapability) {
+std::unique_ptr<Pass>
+mlir::triton::gpu::createPipelinePass(int numStages, int numWarps, int numCTAs,
+                                      int computeCapability) {
   return std::make_unique<PipelinePass>(numStages, numWarps, numCTAs,
                                         computeCapability);
 }

@@ -482,16 +482,18 @@ class _attention(torch.autograd.Function):
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
         BATCH, N_HEAD, N_CTX = q.shape[:3]
-        delta = torch.empty_like(L)
-        do_scaled = torch.empty_like(do)
-        # Figure out what BLOCK size fwd used and adjust num_blocks accordingly.
-        # If the two are the same, we don't need this but the bwd pass block size
-        # is smaller than the fwd so we need this scaling to ensure we loop over all
-        # values and don't skip some blocks. 
-        # Alternatively we could compute a new grid but this keeps it consistent
-        # with fwd and easier to reason about.
-        block_scale = (q.shape[2] // ctx.grid[0]) // BLOCK
-        _attn_bwd_preprocess[(ctx.grid[0] * ctx.grid[1], )](
+        PRE_BLOCK = 128
+        NUM_WARPS, NUM_STAGES = 4, 5
+        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 128, 128, 32
+        BLK_SLICE_FACTOR = 2
+        RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
+        arg_k = k
+        arg_k = arg_k * (ctx.sm_scale * RCP_LN2)
+        PRE_BLOCK = 128
+        assert N_CTX % PRE_BLOCK == 0
+        pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
+        delta = torch.empty_like(M)
+        _attn_bwd_preprocess[pre_grid](
             o, do,  #
             do_scaled, delta,  #
             BLOCK_M=block_scale * BLOCK, D_HEAD=ctx.BLOCK_DMODEL,  #

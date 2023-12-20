@@ -193,13 +193,12 @@ public:
 class RewriteTensorPointerPass
     : public TritonRewriteTensorPointerBase<RewriteTensorPointerPass> {
 private:
-  int computeCapability;
-  bool isROCM;
   DenseMap<Value, RewritedInfo> rewritedInfo;
 
 public:
-  explicit RewriteTensorPointerPass(int computeCapability, bool isROCM)
-      : computeCapability(computeCapability), isROCM(isROCM) {}
+  explicit RewriteTensorPointerPass(int computeCapability) {
+    this->computeCapability = computeCapability;
+  }
 
   static bool needRewrite(Operation *op) {
     return std::any_of(op->getOperands().begin(), op->getOperands().end(),
