@@ -84,7 +84,7 @@ configs = triton.testing.Benchmark(
         line_vals=['triton', 'torch'],  # Possible values for `line_arg`.
         line_names=['Triton', 'Torch'],  # Label name for the lines.
         styles=[('blue', '-'), ('green', '-')],  # Line styles.
-        ylabel='GB/s',  # Label name for the y-axis.
+        ylabel='GiB/s',  # Label name for the y-axis.
         plot_name=f'size={size}',  # Name for the plot. Used also as a file name for saving the plot.
         args={'size':size},  # Values for function arguments not in `x_names` and `y_name`.
 )
@@ -98,7 +98,7 @@ def benchmark(size, provider, wgs):
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: copy(x, wgs), quantiles=quantiles)
     # 8 because 4 bytes from load, 4 from store.
-    gbps = lambda ms: 8 * size / ms * 1e-6
+    gbps = lambda ms: 8 * size / ms * 1e3 / 1024**3
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
