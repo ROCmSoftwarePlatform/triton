@@ -733,6 +733,8 @@ SliceEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   return shape;
 }
 
+//
+
 SmallVector<unsigned>
 MfmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   size_t rank = shape.size();
@@ -758,6 +760,39 @@ MfmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   }
   return elemsPerThread;
 }
+#if 1
+unsigned MfmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
+                                                  Type eltTy) const {
+  return product<unsigned>(getElemsPerThread(shape, eltTy));
+}
+#else
+SmallVector<unsigned>
+MfmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
+  size_t rank = shape.size();
+  assert(rank == 2 && "Unexpected rank of mfma layout");
+
+  SmallVector<unsigned> elemsPerThread(rank);
+  auto nonKDim = getNonKDim();
+  auto elemsPerThreadPerTile = (nonKDim == 16 ? 4 : 16);
+  if (getIsTransposed()) {
+    unsigned elemsCol =
+        ceil<unsigned>(shape[1], nonKDim * getWarpsPerCTA()[1]) *
+        elemsPerThreadPerTile;
+    unsigned elemsRow = ceil<unsigned>(shape[0], nonKDim * getWarpsPerCTA()[0]);
+    elemsPerThread[0] = elemsRow;
+    elemsPerThread[1] = elemsCol;
+  } else {
+    unsigned elemsCol = ceil<unsigned>(shape[1], nonKDim * getWarpsPerCTA()[1]);
+    unsigned elemsRow =
+        ceil<unsigned>(shape[0], nonKDim * getWarpsPerCTA()[0]) *
+        elemsPerThreadPerTile;
+    elemsPerThread[0] = elemsRow;
+    elemsPerThread[1] = elemsCol;
+  }
+  return elemsPerThread;
+}
+#endif
+
 
 SmallVector<unsigned>
 NvidiaMmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,

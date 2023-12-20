@@ -474,7 +474,11 @@ public:
 
   void runOnOperation() override {
     // Only rewrite if the hardware does not support
-    if (!isROCM && computeCapability >= 90)
+#ifdef USE_ROCM
+    if (true)
+#else
+    if (computeCapability >= 90)
+#endif
       return;
 
     // NOTES(Chenggang): we don't use `ConversionPatternRewriter`, because
@@ -503,6 +507,6 @@ public:
 };
 
 std::unique_ptr<Pass>
-triton::createRewriteTensorPointerPass(int computeCapability, bool isROCM) {
-  return std::make_unique<RewriteTensorPointerPass>(computeCapability, isROCM);
+triton::createRewriteTensorPointerPass(int computeCapability) {
+  return std::make_unique<RewriteTensorPointerPass>(computeCapability);
 }

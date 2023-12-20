@@ -425,7 +425,7 @@ public:
 };
 
 std::unique_ptr<Pass>
-mlir::createTritonAMDGPUAccelerateMatmulPass(std::string archGen,
+mlir::triton::gpu::createTritonAMDGPUAccelerateMatmulPass(std::string archGen,
                                              int matrixInstructionSize,
                                              bool enableWmmaTransform) {
   return std::make_unique<TritonAMDGPUAccelerateMatmulPass>(
