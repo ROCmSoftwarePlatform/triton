@@ -220,14 +220,28 @@ def _attn_bwd_dkdv(dk, dv,  #
     offs_m = start_m + tl.arange(0, BLOCK_M1)
     offs_n = start_n + tl.arange(0, BLOCK_N1)
     offs_k = tl.arange(0, BLOCK_DMODEL)
-    qT_ptrs = Q + offs_m[None, :] * stride_tok + offs_k[:, None] * stride_d
-    do_ptrs = DO + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
+    QT_block_ptr = tl.make_block_ptr(
+        base=Q,
+        shape=(BLOCK_DMODEL, N_CTX),
+        strides=(stride_d, stride_tok),
+        offsets=(0, start_m),
+        block_shape=(BLOCK_DMODEL, BLOCK_M1),
+        order=(0,1)
+    )
+    DO_block_ptr = tl.make_block_ptr(
+        base=DO,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_tok, stride_d),
+        offsets=(start_m, 0),
+        block_shape=(BLOCK_M1, BLOCK_DMODEL),
+        order=(1,0)
+    )
     # BLOCK_N1 must be a multiple of BLOCK_M1, otherwise the code wouldn't work.
     tl.static_assert(BLOCK_N1 % BLOCK_M1 == 0)
     curr_m = start_m
     step_m = BLOCK_M1
     for blk_idx in range(num_steps):
-        qT = tl.load(qT_ptrs)
+        qT = tl.load(QT_block_ptr)
         # Load m before computing qk to reduce pipeline stall.
         offs_m = curr_m + tl.arange(0, BLOCK_M1)
         m = tl.load(M + offs_m)
@@ -237,7 +251,7 @@ def _attn_bwd_dkdv(dk, dv,  #
         if MASK:
             mask = (offs_m[None, :] >= offs_n[:, None])
             pT = tl.where(mask, pT, 0.0)
-        do = tl.load(do_ptrs)
+        do = tl.load(DO_block_ptr)
         # Compute dV.
         ppT = pT
         ppT = ppT.to(tl.float16)
@@ -251,8 +265,8 @@ def _attn_bwd_dkdv(dk, dv,  #
         dk += tl.dot(dsT, tl.trans(qT))
         # Increment pointers.
         curr_m += step_m
-        qT_ptrs += step_m * stride_tok
-        do_ptrs += step_m * stride_tok
+        QT_block_ptr = tl.advance(QT_block_ptr, (0, step_m))
+        DO_block_ptr = tl.advance(DO_block_ptr, (step_m, 0))
     return dk, dv
 
 
@@ -272,8 +286,22 @@ def _attn_bwd_dq(dq, q, K, V,  #
     offs_m = start_m + tl.arange(0, BLOCK_M2)
     offs_n = start_n + tl.arange(0, BLOCK_N2)
     offs_k = tl.arange(0, BLOCK_DMODEL)
-    kT_ptrs = K + offs_n[None, :] * stride_tok + offs_k[:, None] * stride_d
-    vT_ptrs = V + offs_n[None, :] * stride_tok + offs_k[:, None] * stride_d
+    KT_block_ptr = tl.make_block_ptr(
+        base=K,
+        shape=(BLOCK_DMODEL, N_CTX),
+        strides=(stride_d, stride_tok),
+        offsets=(0, start_n),
+        block_shape=(BLOCK_DMODEL, BLOCK_N2),
+        order=(0, 1)
+    )
+    VT_block_ptr = tl.make_block_ptr(
+        base=V,
+        shape=(BLOCK_DMODEL, N_CTX),
+        strides=(stride_d, stride_tok),
+        offsets=(0, start_n),
+        block_shape=(BLOCK_DMODEL, BLOCK_N2),
+        order=(0, 1)
+    )
     # D (= delta) is pre-divided by ds_scale.
     Di = tl.load(D + offs_m)
     # BLOCK_M2 must be a multiple of BLOCK_N2, otherwise the code wouldn't work.
@@ -281,8 +309,8 @@ def _attn_bwd_dq(dq, q, K, V,  #
     curr_n = start_n
     step_n = BLOCK_N2
     for blk_idx in range(num_steps):
-        kT = tl.load(kT_ptrs)
-        vT = tl.load(vT_ptrs)
+        kT = tl.load(KT_block_ptr)
+        vT = tl.load(VT_block_ptr)
         qk = tl.dot(q, kT)
         p = tl.math.exp2(qk - m)
         # Autoregressive masking.
@@ -299,15 +327,15 @@ def _attn_bwd_dq(dq, q, K, V,  #
         dq += tl.dot(ds, tl.trans(kT))
         # Increment pointers.
         curr_n += step_n
-        kT_ptrs += step_n * stride_tok
-        vT_ptrs += step_n * stride_tok
+        KT_block_ptr = tl.advance(KT_block_ptr, (0, step_n))
+        VT_block_ptr = tl.advance(VT_block_ptr, (0, step_n))
     return dq
 
 
 @triton.autotune(
    configs=[
        triton.Config({'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 64, 'BLOCK_N2': 32, 'BLK_SLICE_FACTOR': 1},
-                     num_stages=1, num_warps=4),
+                      num_stages=1, num_warps=4),
        triton.Config({'BLOCK_M1': 64, 'BLOCK_N1': 128, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'BLK_SLICE_FACTOR': 1},
                      num_stages=1, num_warps=4),
        triton.Config({'BLOCK_M1': 64, 'BLOCK_N1': 128, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'BLK_SLICE_FACTOR': 2},
@@ -381,9 +409,25 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     dk = tl.zeros([BLOCK_N1, BLOCK_DMODEL], dtype=tl.float32)
 
     # load K and V: they stay in SRAM throughout the inner loop.
-    # 128 x 64 slices, at the appropriate n_ctx offset. These are loaded normal.
-    k = tl.load(K + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d)
-    v = tl.load(V + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d)
+    K_block_ptr = tl.make_block_ptr(
+        base=K,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_tok, stride_d),
+        offsets=(start_n, 0),
+        block_shape=(BLOCK_N1, BLOCK_DMODEL),
+        order=(1, 0),
+    )
+    V_block_ptr = tl.make_block_ptr(
+        base=V,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_tok, stride_d),
+        offsets=(start_n, 0),
+        block_shape=(BLOCK_N1, BLOCK_DMODEL),
+        order=(1, 0),
+    )
+
+    k = tl.load(K_block_ptr)
+    v = tl.load(V_block_ptr)
 
     # 8
     num_steps = BLOCK_N1 // MASK_BLOCK_M1
@@ -415,13 +459,27 @@ def _attn_bwd(Q, K, V, sm_scale,  #
         MASK=False  #
     )
 
-    dv_ptrs = DV + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d
-    tl.store(dv_ptrs, dv)
+    DV_block_ptrs = tl.make_block_ptr(
+        base=DV,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_tok, stride_d),
+        offsets=(start_n, 0),
+        block_shape=(BLOCK_N1, BLOCK_DMODEL),
+        order=(1,0)
+    )
+    tl.store(DV_block_ptrs, dv.to(tl.float16))
 
     # Write back dK.
     dk *= sm_scale
-    dk_ptrs = DK + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d
-    tl.store(dk_ptrs, dk)
+    DK_block_ptrs = tl.make_block_ptr(
+        base=DK,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_tok, stride_d),
+        offsets=(start_n, 0),
+        block_shape=(BLOCK_N1, BLOCK_DMODEL),
+        order=(1,0)
+    )
+    tl.store(DK_block_ptrs, dk.to(tl.float16))
 
     # THIS BLOCK DOES DQ:
     start_m = pid * BLOCK_M2
@@ -430,9 +488,26 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     MASK_BLOCK_N2: tl.constexpr = BLOCK_N2 // BLK_SLICE_FACTOR
     offs_m = start_m + tl.arange(0, BLOCK_M2)
 
-    q = tl.load(Q + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d)
+    Q_block_ptr = tl.make_block_ptr(
+        base=Q,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_tok, stride_d),
+        offsets=(start_m, 0),
+        block_shape=(BLOCK_M2, BLOCK_DMODEL),
+        order=(1, 0)
+    )
+
+    DO_block_ptr = tl.make_block_ptr(
+        base=DO,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_tok, stride_d),
+        offsets=(start_m, 0),
+        block_shape=(BLOCK_M2, BLOCK_DMODEL),
+        order=(1, 0)
+    )
+    q = tl.load(Q_block_ptr)
+    do = tl.load(DO_block_ptr)
     dq = tl.zeros([BLOCK_M2, BLOCK_DMODEL], dtype=tl.float32)
-    do = tl.load(DO + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d)
 
     m = tl.load(M + offs_m)
     m = m[:, None]
@@ -463,9 +538,16 @@ def _attn_bwd(Q, K, V, sm_scale,  #
                       MASK=False  #
                       )
     # Write back dQ.
-    dq_ptrs = DQ + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
+    DQ_block_ptr = tl.make_block_ptr(
+        base=DQ,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_tok, stride_d),
+        offsets=(start_m, 0),
+        block_shape=(BLOCK_M2, BLOCK_DMODEL),
+        order=(1, 0)
+    )
     dq *= LN2
-    tl.store(dq_ptrs, dq)
+    tl.store(DQ_block_ptr, dq.to(tl.float16))
 
 
 empty = torch.empty(128, device="cuda")
