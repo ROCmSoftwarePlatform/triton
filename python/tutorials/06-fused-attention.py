@@ -304,6 +304,28 @@ def _attn_bwd_dq(dq, q, K, V,  #
     return dq
 
 
+@triton.autotune(
+   configs=[
+       triton.Config({'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 64, 'BLOCK_N2': 32, 'BLK_SLICE_FACTOR': 1},
+                     num_stages=1, num_warps=4),
+       triton.Config({'BLOCK_M1': 64, 'BLOCK_N1': 128, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'BLK_SLICE_FACTOR': 1},
+                     num_stages=1, num_warps=4),
+       triton.Config({'BLOCK_M1': 64, 'BLOCK_N1': 128, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'BLK_SLICE_FACTOR': 2},
+                     num_stages=1, num_warps=4),
+       triton.Config({'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 64, 'BLOCK_N2': 64, 'BLK_SLICE_FACTOR': 1},
+                     num_stages=1, num_warps=4),
+       triton.Config({'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 64, 'BLOCK_N2': 64, 'BLK_SLICE_FACTOR': 2},
+                     num_stages=1, num_warps=4),
+       triton.Config({'BLOCK_M1': 32, 'BLOCK_N1': 128, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'BLK_SLICE_FACTOR': 1},
+                     num_stages=1, num_warps=4),
+       triton.Config({'BLOCK_M1': 32, 'BLOCK_N1': 128, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'BLK_SLICE_FACTOR': 2},
+                     num_stages=1, num_warps=4),
+       triton.Config({'BLOCK_M1': 32, 'BLOCK_N1': 128, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'BLK_SLICE_FACTOR': 2},
+                     num_stages=1, num_warps=8),
+   ],
+   key=['H', 'N_CTX', 'BLOCK_DMODEL'],
+)
+
 @triton.jit
 def _attn_bwd(Q, K, V, sm_scale,  #
               DO,  #
@@ -313,12 +335,12 @@ def _attn_bwd(Q, K, V, sm_scale,  #
               stride_z, stride_h, stride_tok, stride_d,  #
               # H = 16, N_CTX = 1024
               H, N_CTX,  #
+              BLOCK_DMODEL: tl.constexpr, # 64
               BLOCK_M1: tl.constexpr,  # 32
               BLOCK_N1: tl.constexpr,  # 128
               BLOCK_M2: tl.constexpr,  # 128
               BLOCK_N2: tl.constexpr,  # 32
-              BLK_SLICE_FACTOR: tl.constexpr,  # 2
-              BLOCK_DMODEL: tl.constexpr): # 64
+              BLK_SLICE_FACTOR: tl.constexpr):  # 2
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
     # [0, 64)
@@ -527,18 +549,17 @@ class _attention(torch.autograd.Function):
             BATCH, N_HEAD, N_CTX,
             BLOCK_M=PRE_BLOCK, D_HEAD=ctx.BLOCK_DMODEL
         )
-        grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
+        grid = lambda META: (
+            triton.cdiv(N_CTX, META['BLOCK_N1']),
+            1,
+            BATCH * N_HEAD
+        )
         _attn_bwd[grid](
             q, arg_k, v, ctx.sm_scale, do, dq, dk, dv,
             M, delta,
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),
             N_HEAD, N_CTX,
-            BLOCK_M1=BLOCK_M1, BLOCK_N1=BLOCK_N1,
-            BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,
-            BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,
-            BLOCK_DMODEL=ctx.BLOCK_DMODEL,
-            num_warps=NUM_WARPS,
-            num_stages=NUM_STAGES
+            BLOCK_DMODEL=ctx.BLOCK_DMODEL
         )
 
         return dq, dk, dv, None, None
@@ -633,7 +654,7 @@ except BaseException:
 
 # vary seq length for fixed head and batch=4
 configs = []
-for mode in ['fwd', 'bwd']:
+for mode in ['bwd']:
     for D_HEAD in [128, 64]:
         for causal in [False, True]:
             if mode == 'bwd' and causal == False:
