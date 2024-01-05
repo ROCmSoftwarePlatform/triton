@@ -103,6 +103,10 @@ unsigned getNumCTAs(Attribute layout);
 
 bool isaDistributedLayout(Attribute layout);
 
+bool sameBlockedEncodings(BlockedEncodingAttr blockedA,
+                          BlockedEncodingAttr blockedB);
+
+bool sameMfmaEncodings(MfmaEncodingAttr mfmaA, MfmaEncodingAttr mfmaB);
 bool hasSharedEncoding(Value value);
 
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
