@@ -187,35 +187,33 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,
     tl.store(O_block_ptr, acc.to(Out.type.element_ty))
 
 @triton.jit
-def _attn_bwd_preprocess(O, DO,  #
-                         Delta,  #
-                         Z, H, N_CTX,  #
-                         BLOCK_M: tl.constexpr, D_HEAD: tl.constexpr  #
+def _attn_bwd_preprocess(O, DO,
+                         Delta,
+                         Z, H, N_CTX,
+                         BLOCK_M: tl.constexpr, D_HEAD: tl.constexpr
                          ):
     off_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
     off_hz = tl.program_id(1)
     off_n = tl.arange(0, D_HEAD)
-    # load
     o = tl.load(O + off_hz * D_HEAD * N_CTX + off_m[:, None] * D_HEAD + off_n[None, :])
     do = tl.load(DO + off_hz * D_HEAD * N_CTX + off_m[:, None] * D_HEAD + off_n[None, :]).to(tl.float32)
     delta = tl.sum(o * do, axis=1)
-    # write-back
     tl.store(Delta + off_hz * N_CTX + off_m, delta)
 
 
 # The main inner-loop logic for computing dK and dV.
 @triton.jit
-def _attn_bwd_dkdv(dk, dv,  #
-                   Q, k, v, sm_scale,  #
-                   DO,  #
-                   M, D,  #
+def _attn_bwd_dkdv(dk, dv,
+                   Q, k, v, sm_scale,
+                   DO,
+                   M, D,
                    # shared by Q/K/V/DO.
-                   stride_tok, stride_d,  #
-                   H, N_CTX, BLOCK_M1: tl.constexpr,  #
-                   BLOCK_N1: tl.constexpr,  #
-                   BLOCK_DMODEL: tl.constexpr,  #
+                   stride_tok, stride_d,
+                   H, N_CTX, BLOCK_M1: tl.constexpr,
+                   BLOCK_N1: tl.constexpr,
+                   BLOCK_DMODEL: tl.constexpr,
                    # Filled in by the wrapper.
-                   start_n, start_m, num_steps,  #
+                   start_n, start_m, num_steps,
                    MASK: tl.constexpr):
     offs_m = start_m + tl.arange(0, BLOCK_M1)
     offs_n = start_n + tl.arange(0, BLOCK_N1)
@@ -259,7 +257,7 @@ def _attn_bwd_dkdv(dk, dv,  #
         # D (= delta) is pre-divided by ds_scale.
         Di = tl.load(D + offs_m)
         # Compute dP and dS.
-        dpT = tl.dot(v, tl.trans(do)).to(tl.float32)
+        dpT = tl.dot(v, tl.trans(do))
         dsT = pT * (dpT - Di[None, :])
         dsT = dsT.to(tl.float16)
         dk += tl.dot(dsT, tl.trans(qT))
@@ -272,16 +270,16 @@ def _attn_bwd_dkdv(dk, dv,  #
 
 # the main inner-loop logic for computing dQ
 @triton.jit
-def _attn_bwd_dq(dq, q, K, V,  #
+def _attn_bwd_dq(dq, q, K, V,
                  do, m, D,
                  # shared by Q/K/V/DO.
-                 stride_tok, stride_d,  #
-                 H, N_CTX,  #
-                 BLOCK_M2: tl.constexpr,  #
-                 BLOCK_N2: tl.constexpr,  #
+                 stride_tok, stride_d,
+                 H, N_CTX,
+                 BLOCK_M2: tl.constexpr,
+                 BLOCK_N2: tl.constexpr,
                  BLOCK_DMODEL: tl.constexpr,
                  # Filled in by the wrapper.
-                 start_m, start_n, num_steps,  #
+                 start_m, start_n, num_steps,
                  MASK: tl.constexpr):
     offs_m = start_m + tl.arange(0, BLOCK_M2)
     offs_n = start_n + tl.arange(0, BLOCK_N2)
@@ -310,7 +308,6 @@ def _attn_bwd_dq(dq, q, K, V,  #
     step_n = BLOCK_N2
     for blk_idx in range(num_steps):
         kT = tl.load(KT_block_ptr)
-        vT = tl.load(VT_block_ptr)
         qk = tl.dot(q, kT)
         p = tl.math.exp2(qk - m)
         # Autoregressive masking.
@@ -319,6 +316,7 @@ def _attn_bwd_dq(dq, q, K, V,  #
             mask = (offs_m[:, None] >= offs_n[None, :])
             p = tl.where(mask, p, 0.0)
         # Compute dP and dS.
+        vT = tl.load(VT_block_ptr)
         dp = tl.dot(do, vT).to(tl.float32)
         ds = p * (dp - Di[:, None])
         ds = ds.to(tl.float16)
@@ -335,6 +333,8 @@ def _attn_bwd_dq(dq, q, K, V,  #
 @triton.autotune(
    configs=[
        triton.Config({'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 64, 'BLOCK_N2': 32, 'BLK_SLICE_FACTOR': 1},
+                      num_stages=1, num_warps=4),
+       triton.Config({'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 64, 'BLOCK_N2': 32, 'BLK_SLICE_FACTOR': 2},
                       num_stages=1, num_warps=4),
        triton.Config({'BLOCK_M1': 64, 'BLOCK_N1': 128, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'BLK_SLICE_FACTOR': 1},
                      num_stages=1, num_warps=4),
@@ -355,29 +355,25 @@ def _attn_bwd_dq(dq, q, K, V,  #
 )
 
 @triton.jit
-def _attn_bwd(Q, K, V, sm_scale,  #
-              DO,  #
-              DQ, DK, DV,  #
+def _attn_bwd(Q, K, V, sm_scale,
+              DO,
+              DQ, DK, DV,
               M, D,
               # shared by Q/K/V/DO.
-              stride_z, stride_h, stride_tok, stride_d,  #
+              stride_z, stride_h, stride_tok, stride_d,
               # H = 16, N_CTX = 1024
-              H, N_CTX,  #
-              BLOCK_DMODEL: tl.constexpr, # 64
-              BLOCK_M1: tl.constexpr,  # 32
-              BLOCK_N1: tl.constexpr,  # 128
-              BLOCK_M2: tl.constexpr,  # 128
-              BLOCK_N2: tl.constexpr,  # 32
-              BLK_SLICE_FACTOR: tl.constexpr):  # 2
+              H, N_CTX,
+              BLOCK_DMODEL: tl.constexpr,
+              BLOCK_M1: tl.constexpr,
+              BLOCK_N1: tl.constexpr,
+              BLOCK_M2: tl.constexpr,
+              BLOCK_N2: tl.constexpr,
+              BLK_SLICE_FACTOR: tl.constexpr):
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
-    # [0, 64)
     bhid = tl.program_id(2)
-    # Offset for tensors of shape [batch, heads, n_ctx], choose batch/head
     off_chz = (bhid * N_CTX).to(tl.int64)
-    # offset within tensors of shape [batch, heads, n_ctx, dmodel], choose batch/head
     adj = (stride_h * (bhid % H) + stride_z * (bhid // H)).to(tl.int64)
-    # [0, 8)
     pid = tl.program_id(0)
 
     # offset pointers for batch/head
@@ -391,24 +387,20 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     M += off_chz
     D += off_chz
 
-    # load scales
-    # 0 - 63
     offs_k = tl.arange(0, BLOCK_DMODEL)
 
-    # pid is n_ctx / block_n1 so this is basically a slice of n_ctx
     start_n = pid * BLOCK_N1
+    # This assignment is important. It is what allows us to pick the diagonal
+    # blocks. Later, when we want to do the lower triangular, we update start_m
+    # after the first dkdv call.
     start_m = start_n
 
-    # 16
     MASK_BLOCK_M1: tl.constexpr = BLOCK_M1 // BLK_SLICE_FACTOR
-    # start_n is start of the slice, this just completes the slice indices[]
     offs_n = start_n + tl.arange(0, BLOCK_N1)
 
-    # 128 x 64
     dv = tl.zeros([BLOCK_N1, BLOCK_DMODEL], dtype=tl.float32)
     dk = tl.zeros([BLOCK_N1, BLOCK_DMODEL], dtype=tl.float32)
 
-    # load K and V: they stay in SRAM throughout the inner loop.
     K_block_ptr = tl.make_block_ptr(
         base=K,
         shape=(N_CTX, BLOCK_DMODEL),
@@ -426,37 +418,37 @@ def _attn_bwd(Q, K, V, sm_scale,  #
         order=(1, 0),
     )
 
+    # load K and V: they stay in SRAM throughout the inner loop for dkdv.
     k = tl.load(K_block_ptr)
     v = tl.load(V_block_ptr)
 
-    # 8
     num_steps = BLOCK_N1 // MASK_BLOCK_M1
 
-    dk, dv = _attn_bwd_dkdv(dk, dv,  #
-                            Q, k, v, sm_scale,  #
-                            DO,  #
-                            M, D,  #
-                            stride_tok, stride_d,  #
-                            H, N_CTX,  #
-                            MASK_BLOCK_M1, BLOCK_N1, BLOCK_DMODEL,  #
-                            start_n, start_m, num_steps,  #
-                            MASK=True  #
+    dk, dv = _attn_bwd_dkdv(dk, dv,
+                            Q, k, v, sm_scale,
+                            DO,
+                            M, D,
+                            stride_tok, stride_d,
+                            H, N_CTX,
+                            MASK_BLOCK_M1, BLOCK_N1, BLOCK_DMODEL,
+                            start_n, start_m, num_steps,
+                            MASK=True
                             )
 
     start_m += num_steps * MASK_BLOCK_M1
     num_steps = (N_CTX - start_m) // BLOCK_M1
 
     # Compute dK and dV for non-masked blocks.
-    dk, dv = _attn_bwd_dkdv(  #
-        dk, dv,  #
-        Q, k, v, sm_scale,  #
-        DO,  #
-        M, D,  #
-        stride_tok, stride_d,  #
-        H, N_CTX,  #
-        BLOCK_M1, BLOCK_N1, BLOCK_DMODEL,  #
-        start_n, start_m, num_steps,  #
-        MASK=False  #
+    dk, dv = _attn_bwd_dkdv(
+        dk, dv,
+        Q, k, v, sm_scale,
+        DO,
+        M, D,
+        stride_tok, stride_d,
+        H, N_CTX,
+        BLOCK_M1, BLOCK_N1, BLOCK_DMODEL,
+        start_n, start_m, num_steps,
+        MASK=False
     )
 
     DV_block_ptrs = tl.make_block_ptr(
@@ -518,24 +510,24 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     # not due to anything important.  I just wanted to reuse the loop
     # structure for dK & dV above as much as possible.
     num_steps = BLOCK_M2 // MASK_BLOCK_N2
-    dq = _attn_bwd_dq(dq, q, K, V,  #
-                      do, m, D,  #
-                      stride_tok, stride_d,  #
-                      H, N_CTX,  #
-                      BLOCK_M2, MASK_BLOCK_N2, BLOCK_DMODEL,  #
-                      start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,  #
-                      MASK=True  #
+    dq = _attn_bwd_dq(dq, q, K, V,
+                      do, m, D,
+                      stride_tok, stride_d,
+                      H, N_CTX,
+                      BLOCK_M2, MASK_BLOCK_N2, BLOCK_DMODEL,
+                      start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,
+                      MASK=True
                       )
     end_n -= num_steps * MASK_BLOCK_N2
     # stage 2
     num_steps = end_n // BLOCK_N2
-    dq = _attn_bwd_dq(dq, q, K, V,  #
-                      do, m, D,  #
-                      stride_tok, stride_d,  #
-                      H, N_CTX,  #
-                      BLOCK_M2, BLOCK_N2, BLOCK_DMODEL,  #
-                      start_m, end_n - num_steps * BLOCK_N2, num_steps,  #
-                      MASK=False  #
+    dq = _attn_bwd_dq(dq, q, K, V,
+                      do, m, D,
+                      stride_tok, stride_d,
+                      H, N_CTX,
+                      BLOCK_M2, BLOCK_N2, BLOCK_DMODEL,
+                      start_m, end_n - num_steps * BLOCK_N2, num_steps,
+                      MASK=False
                       )
     # Write back dQ.
     DQ_block_ptr = tl.make_block_ptr(
@@ -736,7 +728,7 @@ except BaseException:
 
 # vary seq length for fixed head and batch=4
 configs = []
-for mode in ['bwd']:
+for mode in ['fwd', 'bwd']:
     for D_HEAD in [128, 64]:
         for causal in [False, True]:
             if mode == 'bwd' and causal == False:
@@ -784,7 +776,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype
         if mode == "fwd" and TORCH_HAS_FP8:
             q = q.to(torch_dtype)
             k = k.to(torch_dtype)
-        sm_scale = 1.3
+        sm_scale = D_HEAD ** -0.5
         fn = lambda: attention(q, k, v, causal, sm_scale)
         if mode == 'bwd':
             o = fn()
