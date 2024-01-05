@@ -16,8 +16,6 @@ include "mlir/Interfaces/ViewLikeInterface.td"
 def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
 def OperandAndResultHaveSameEncoding: NativeOpTrait<"OperandAndResultHaveSameEncoding">;
 
-def OperandsAreSharedEncoding: NativeOpTrait<"OperandsAreSharedEncoding">;
-
 class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic,
        !listconcat(traits, [VerifyTensorLayoutsTrait])> {
@@ -316,7 +314,7 @@ def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [MemoryEffects<[MemAlloc]>,  // A
 }
 
 def TTG_DeallocTensorOp : TTG_Op<"dealloc_tensor", [MemoryEffects<[MemFree]>,  // Deallocate shared memory
-                                                    OperandsAreSharedEncoding]> {
+                                                    OperandAndResultHaveSameEncoding]> {
   let summary = "dealloc tensor";
 
   let description = [{

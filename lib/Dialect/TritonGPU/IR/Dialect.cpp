@@ -428,7 +428,7 @@ bool sameMfmaEncodings(MfmaEncodingAttr mfmaA, MfmaEncodingAttr mfmaB) {
   return true;
 }
 
-bool hasEncoding(Value value) {
+template <typename T> bool hasEncoding(Value value) {
   auto type = value.getType();
   if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
     auto encoding = tensorType.getEncoding();
@@ -892,11 +892,6 @@ NvidiaMmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   }
 
   return elemsPerThread;
-}
-
-unsigned MfmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
-                                                  Type eltTy) const {
-  return product<unsigned>(getElemsPerThread(shape, eltTy));
 }
 
 unsigned NvidiaMmaEncodingAttr::getElemsPerThreadOfOperand(

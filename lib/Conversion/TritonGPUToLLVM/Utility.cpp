@@ -266,7 +266,7 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 
 
 #if USE_ROCM
-  return load(ptr);
+  return load(elemTy, ptr);
 #else
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = ptr.getType().cast<LLVMPointerType>();

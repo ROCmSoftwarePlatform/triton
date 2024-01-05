@@ -339,8 +339,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
 
 #ifdef USE_ROCM
       if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(user)) {
-        if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
-            triton::gpu::isSharedEncoding(convertOp.getOperand()))
+        if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
+            triton::gpu::hasSharedEncoding(convertOp.getOperand()))
           continue;
       }
 #endif
