@@ -157,7 +157,6 @@ compared to 1*64 when the hasLeadingOffset is false.
                      "unsigned":$typeWidthInBit,
                      "bool":$needTrans), [{
 
-#ifdef USE_ROCM
         // ---- begin GFX908/GFX90A ----
         auto mfmaEnc = dotOpEnc.getParent().dyn_cast<MfmaEncodingAttr>();
 
@@ -197,7 +196,8 @@ compared to 1*64 when the hasLeadingOffset is false.
             return get(context, 1, 1, 1, order, CTALayout);
           }
         }
-#endif
+
+
         auto mmaEnc = dotOpEnc.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
 
         if(!mmaEnc)
@@ -615,6 +615,7 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
     InterfaceMethod<"Return total element size per thread for dot operands.", "unsigned",
       "getTotalElemsPerThreadForOperands", (ins "ArrayRef<int64_t>":$tensorShape,
                                                 "Type":$eltTy,
+                                                "unsigned":$kWidth,
                                                 "unsigned":$opIdx)>,
 
     InterfaceMethod<"Return size per thread for dot operands.", "SmallVector<unsigned>",
@@ -691,24 +692,6 @@ The data will be distributed between threads as follows:
 [ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
 [ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
 [ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
-
-Example 3:
-Suppose we have a tensor with a shape of [8, 8], warpsPerCTA set to [2, 2] and nonKDim set to 4.
-The data will be distributed between threads as follows(note that each element is duploicated in 16 threads):
-
-M  N ->                    wave 0                                                       wave 2
-| --------------------------/\--------------------------   ------------------------------/\------------------------------
-V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,133...189  130,134...190  131,135...191 ]
-  [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,133...189  130,134...190  131,135...191 ]
-  [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,133...189  130,134...190  131,135...191 ]
-  [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,133...189  130,134...190  131,135...191 ]
-
-                           wave 1                                                       wave 3
-  --------------------------/\--------------------------   ------------------------------/\------------------------------
-  [ 64,68...124  65,69...125  66,70...126  67,71...127 ]   [ 192,196...252  193,197...253  194,198...254  195,199...255 ]
-  [ 64,68...124  65,69...125  66,70...126  67,71...127 ]   [ 192,196...252  193,197...253  194,198...254  195,199...255 ]
-  [ 64,68...124  65,69...125  66,70...126  67,71...127 ]   [ 192,196...252  193,197...253  194,198...254  195,199...255 ]
-  [ 64,68...124  65,69...125  66,70...126  67,71...127 ]   [ 192,196...252  193,197...253  194,198...254  195,199...255 ]
 }];
 
   let parameters = (
@@ -929,7 +912,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     };
     SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
-    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int opIdx) const;
+    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
   }];
 
   let hasCustomAssemblyFormat = 1;

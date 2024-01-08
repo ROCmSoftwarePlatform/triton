@@ -4,7 +4,6 @@ from functools import wraps
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
 from .._C.libtriton import ir
-from ..common.build import is_hip
 from . import core as tl
 
 import triton._C.libtriton.triton as _triton
@@ -1210,33 +1209,6 @@ def atomic_xchg(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope
 #                               Linear Algebra
 # ===----------------------------------------------------------------------===//
 
-def is_hip():
-    try:
-        import torch
-    except ImportError:
-        raise ImportError("Triton requires PyTorch to be installed")
-    return torch.version.hip is not None
-
-def mfma_supported_granularity(m, n, k) -> bool:
-    # todo make this gran_type matrix element type sensitive
-    for gran_type in [(32, 8), (16, 16), (4, 64)]:
-        granularity_mn, granularity_k = gran_type
-
-        if m % granularity_mn != 0 or n % granularity_mn != 0:
-            continue
-        if k % granularity_k != 0:
-            continue
-        return True
-    return False
-
-def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty, target) -> bool:
-    matrix_core_version = target["matrix_core_version"]
-    if matrix_core_version not in [1, 2, 3]:
-        return False
-    if not mfma_supported_granularity(M, N ,K):
-        return False
-    return True
-
 
 def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_num_imprecise_acc: int,
         out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
@@ -1333,43 +1305,29 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
     N = rhs.type.shape[1]
 
     # Cast operands of types f16 and i8 for configurations where FMA only supported.
-    if is_hip() and not mfma_supported(M, N, lhs.type.shape[1], allow_tf32, ret_scalar_ty, builder.target):
-        # max_num_imprecise_acc does not yet apply to hip
-        if is_hip():
-            max_num_imprecise_acc = 0
-        if max_num_imprecise_acc is None:
-            max_num_imprecise_acc = 2**30
-        ret_cast_scalar_ty = tl.float32 if lhs.type.scalar.is_int() else ret_scalar_ty
-        lhs = cast(lhs, ret_cast_scalar_ty, builder)
-        rhs = cast(rhs, ret_cast_scalar_ty, builder)
-        if ret_cast_scalar_ty == tl.float16:
-            _0 = builder.create_splat(builder.get_fp16(0), [M, N])
-        else:
-            _0 = builder.create_splat(builder.get_fp32(0), [M, N])
-        ret_ty = tl.block_type(ret_cast_scalar_ty, [M, N])
-        ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32, max_num_imprecise_acc),
-                        ret_ty)
-        return cast(ret, ret_scalar_ty, builder)
-    if is_hip() and mfma_supported(M, N, lhs.type.shape[1], allow_tf32,
-                                   ret_scalar_ty, builder.target) and ret_scalar_ty.primitive_bitwidth <= 32:
-        # max_num_imprecise_acc does not yet apply to hip
-        if is_hip():
-            max_num_imprecise_acc = 0
-        if max_num_imprecise_acc is None:
-            max_num_imprecise_acc = 2**30
-
-        if lhs.type.scalar.is_int():
-            ret_dot_scalar_ty = tl.int32
-            _0 = builder.create_splat(builder.get_int32(0), [M, N])
-        else:
-            ret_dot_scalar_ty = tl.float32
-            _0 = builder.create_splat(builder.get_fp32(0), [M, N])
-        ret_ty = tl.block_type(ret_dot_scalar_ty, [M, N])
-        ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32, max_num_imprecise_acc),
-                        ret_ty)
-        return cast(ret, ret_scalar_ty, builder)
-
-    _0 = builder.create_splat(_0, [M, N])
+    # TODO: builder should contain target information
+    # if is_hip() and not mfma_supported(M, N, lhs.type.shape[1], allow_tf32, ret_scalar_ty):
+    #     ret_cast_scalar_ty = tl.float32 if lhs.type.scalar.is_int() else ret_scalar_ty
+    #     lhs = cast(lhs, ret_cast_scalar_ty, builder)
+    #     rhs = cast(rhs, ret_cast_scalar_ty, builder)
+    #     if ret_cast_scalar_ty == tl.float16:
+    #         _0 = builder.create_splat(builder.get_fp16(0), [M, N])
+    #     else:
+    #         _0 = builder.create_splat(builder.get_fp32(0), [M, N])
+    #     ret_ty = tl.block_type(ret_cast_scalar_ty, [M, N])
+    #     ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32), ret_ty)
+    #     return cast(ret, ret_scalar_ty, builder)
+    # if is_hip() and mfma_supported(M, N, lhs.type.shape[1], allow_tf32,
+    #                                ret_scalar_ty) and ret_scalar_ty.primitive_bitwidth < 32:
+    #     if lhs.type.scalar.is_int():
+    #         ret_dot_scalar_ty = tl.int32
+    #         _0 = builder.create_splat(builder.get_int32(0), [M, N])
+    #     else:
+    #         ret_dot_scalar_ty = tl.float32
+    #         _0 = builder.create_splat(builder.get_fp32(0), [M, N])
+    #     ret_ty = tl.block_type(ret_dot_scalar_ty, [M, N])
+    #     ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32), ret_ty)
+    #     return cast(ret, ret_scalar_ty, builder)
     ret_ty = tl.block_type(ret_scalar_ty, [M, N])
     if acc is None:
         acc_handle = builder.create_splat(_0, [M, N])
@@ -1462,6 +1420,18 @@ def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn,
     scan_op.verify()
 
     return tuple(wrap_tensor(scan_op.get_result(i), inputs[i].type.scalar) for i in range(len(inputs)))
+
+
+# ===----------------------------------------------------------------------===
+#                               Histogram
+# ===----------------------------------------------------------------------===
+
+
+def histogram(input: tl.tensor, num_bins: int, builder: ir.builder) -> tl.tensor:
+    assert len(input.shape) == 1, "histogram only supports 1D input"
+    assert input.dtype.is_int(), "histogram only supports integer input"
+    histogram_op = builder.create_histogram(input.handle, num_bins)
+    return tl.tensor(histogram_op.get_result(0), tl.block_type(tl.int32, (num_bins, )))
 
 
 # ===----------------------------------------------------------------------===
