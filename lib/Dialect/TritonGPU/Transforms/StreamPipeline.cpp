@@ -518,8 +518,9 @@ void LoopPipeliner::emitPrologue() {
   OpBuilder builder(forOp);
   // Get init operands for loop carried values
   for (BlockArgument &arg : forOp.getRegionIterArgs()) {
-    OpOperand &operand = forOp.getOpOperandForRegionIterArg(arg);
-    prologueMap.map(arg, operand.get());
+    OpOperand *operand = forOp.getTiedLoopInit(arg);
+    assert(operand != nullptr);
+    prologueMap.map(arg, operand->get());
   }
 
   // Emit prologue
@@ -833,6 +834,6 @@ struct PipelinePass : public TritonGPUStreamPipelineBase<PipelinePass> {
 };
 } // anonymous namespace
 
-std::unique_ptr<Pass> mlir::createTritonGPUStreamPipelinePass() {
+std::unique_ptr<Pass> mlir::triton::gpu::createTritonGPUStreamPipelinePass() {
   return std::make_unique<PipelinePass>();
 }
