@@ -146,7 +146,7 @@ struct LoadOpConversion
       // TODO: optimization when ptr is GEP with constant offset
       size_t in_off = 0;
 
-      const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
+      const size_t maxWordWidth = std::max<size_t>(128, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
       const size_t width = std::min(totalWidth, maxWordWidth);
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
@@ -158,20 +158,25 @@ struct LoadOpConversion
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         size_t elemOffset = vecStart + wordIdx * wordNElems;
-        Value ptr =
-            addrspacecast(ptrElems[elemOffset],
-                          ptr_ty(IntegerType::get(getContext(), width)));
+        auto vecType = LLVM::getFixedVectorType(valueElemTy, wordNElems);
+        Value ptr = addrspacecast(ptrElems[elemOffset], ptr_ty(vecType));
         auto loaded = rewriter.create<scf::IfOp>(
-            loc, pred,
-            [&](OpBuilder &builder, Location loc) {
+            loc,
+            pred,
+            [&](OpBuilder& builder, Location loc) {
+              // Todo alignment
               auto loadVal = builder.create<LLVM::LoadOp>(loc, ptr);
+              //auto loadVal = builder.create<LLVM::LoadOp>(loc, ptr, 4);
               builder.create<mlir::scf::YieldOp>(loc, ValueRange({loadVal}));
             },
-            [&](OpBuilder &builder, Location loc) {
-              Value zeroVal = int_val(width, 0);
+            [&](OpBuilder& builder, Location loc) {
+              auto vecTy = LLVM::getFixedVectorType(valueElemTy, wordNElems);
+              auto denseValue =
+                  DenseElementsAttr::get(vecTy.cast<mlir::ShapedType>(), 0);
+              Value zeroVal = rewriter.create<LLVM::ConstantOp>(
+                  loc, vecTy, denseValue);
               Value otherVal;
               if (other) {
-                auto vecTy = LLVM::getFixedVectorType(valueElemTy, wordNElems);
                 Value v = undef(vecTy);
                 for (size_t s = 0; s < wordNElems; ++s) {
                   Value falseVal = otherElems[elemOffset + s];
@@ -180,14 +185,12 @@ struct LoadOpConversion
                       s);
                   v = insert_element(vecTy, v, falseVal, sVal);
                 }
-                otherVal = bitcast(v, IntegerType::get(getContext(), width));
+                otherVal = v;
               }
               Value falseVal = other ? otherVal : zeroVal;
               builder.create<mlir::scf::YieldOp>(loc, ValueRange({falseVal}));
             });
-        Value loadVal =
-            bitcast(loaded->getResult(0),
-                    LLVM::getFixedVectorType(valueElemTy, wordNElems));
+        Value loadVal = loaded->getResult(0);
         for (size_t ii = 0; ii < wordNElems; ++ii) {
           Value vecIdx = createIndexAttrConstant(
               rewriter, loc, this->getTypeConverter()->getIndexType(), ii % wordNElems);
@@ -1074,7 +1077,7 @@ struct AtomicCASOpConversion
 
         // Extract the new_loaded value from the pair.
         Value ret = extract_val(valueElemTy, cmpxchg, i);
-        
+
         for (int ii = 0; ii < vec; ++ii) {
           resultVals[i + ii] =
               vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
