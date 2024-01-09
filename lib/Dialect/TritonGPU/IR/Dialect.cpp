@@ -2023,8 +2023,9 @@ struct CanonicalizeConvertFromConvert
     auto srcType = op.getOperand().getType().cast<RankedTensorType>();
     auto dstType = op.getType().cast<RankedTensorType>();
     if (dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>() &&
-        (srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>() ||
-        srcType.getEncoding().isa<triton::gpu::NvidiaMmaEncodingAttr>()))
+        (srcType.getEncoding().isa<triton::gpu::NvidiaMmaEncodingAttr>() ||
+         srcType.getEncoding().isa<triton::gpu::MfmaEncodingAttr>() ||
+         srcType.getEncoding().isa<triton::gpu::WmmaEncodingAttr>()))
       return mlir::failure();
     // for hopper MMAv3
     if (!op.use_empty()) {

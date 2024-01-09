@@ -1,5 +1,3 @@
-add_library(rocm_libraries SHARED IMPORTED )
-set_target_properties(rocm_libraries PROPERTIES IMPORTED_LOCATION ${ROCM_LIBRARIES})
 # Separate out PTX/GCN builders to avoid cyclic dependencies as TritonAnalysis
 # depends on it.
 set(LLVM_OPTIONAL_SOURCES
@@ -23,8 +21,6 @@ add_mlir_conversion_library(TritonGPUToLLVM
     LoadStoreOpToLLVM.cpp
     BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
-    GCNAsmFormat.cpp
-    PTXAsmFormat.cpp
     TritonGPUToLLVMPass.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
@@ -59,7 +55,6 @@ add_mlir_conversion_library(TritonGPUToLLVM
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
     NVGPUIR
-    rocm_libraries
 )
 
 add_mlir_library(ASMBuilder

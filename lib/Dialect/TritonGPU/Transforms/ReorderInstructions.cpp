@@ -102,7 +102,7 @@ public:
       if (!dstEncoding.isa<triton::gpu::SharedEncodingAttr>() &&
           !dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
         return;
-#elif
+#else
       if (!dstEncoding.isa<triton::gpu::SharedEncodingAttr>())
         return;
 #endif

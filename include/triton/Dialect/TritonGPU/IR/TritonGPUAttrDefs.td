@@ -149,7 +149,6 @@ compared to 1*64 when the hasLeadingOffset is false.
         return get(context, dotOpEnc, shape, order, CTALayout, typeWidthInBit, needTrans);
     }]>,
 
-
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
@@ -858,6 +857,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       return $_get(context, versionMajor, versionMinor, wpt, CTALayout, instrShape);
     }]>,
 
+
     AttrBuilder<(ins "int":$versionMajor,
                      "int":$numWarps,
                      "CTALayoutAttr":$CTALayout,
@@ -918,7 +918,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   let hasCustomAssemblyFormat = 1;
 }
 
-def WmmaEncodingAttr : DistributedEncoding<"WmmaEncoding"> {
+def WmmaEncodingAttr : DistributedEncoding<"WmmaEncoding", [MmaEncodingTrait]> {
   let mnemonic = "wmma";
 
   let description = [{
