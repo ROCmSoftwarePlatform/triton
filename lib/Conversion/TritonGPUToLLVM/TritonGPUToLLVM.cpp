@@ -17,7 +17,7 @@ Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
   assert(axis >= 0);
   assert(axis < 3);
   assert(moduleOp);
-#ifdef USE_ROCM
+#if 1
   static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
                                                   mlir::gpu::Dimension::y,
                                                   mlir::gpu::Dimension::z};
@@ -144,7 +144,7 @@ struct PrintOpConversion
     if (op.getNumOperands() == 0) {
       std::string formatStr;
       llvm::raw_string_ostream os(formatStr);
-#ifdef USE_ROCM
+#if 1
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")" << op.getPrefix().str();
       llPrintfHIP(loc, op->getParentOfType<mlir::ModuleOp>(), formatStr, 
@@ -285,7 +285,7 @@ struct PrintOpConversion
         formatStrValue = llPrintf(formatStr, printfOperands, rewriter);
 #endif
       } else {
-#ifdef USE_ROCM
+#if 1
         llPrintfHIP(op->getLoc(), op->getParentOfType<mlir::ModuleOp>(), formatting,
 			printfOperands, rewriter);
 #else
@@ -454,7 +454,7 @@ struct AssertOpConversion
         return failure();
       }
     }
-#ifdef USE_ROCM
+#if 1
     llAssertHIP(op, condition, adaptor.getMessage(), adaptor.getFile(),
                 adaptor.getFunc(), adaptor.getLine(), rewriter);
 #else
@@ -467,7 +467,7 @@ struct AssertOpConversion
 
   // op: the op at which the assert is inserted. Unlike printf, we need to
   // know about the op to split the block.
-#ifdef USE_ROCM
+#if 1
   void llAssertHIP(Operation *op, Value condition, StringRef message,
                           StringRef file, StringRef func, int line,
                           ConversionPatternRewriter &rewriter) const {
@@ -627,7 +627,7 @@ struct GetProgramIdOpConversion
 
     Value programId = llGetPid(op.getAxisAsInt(), op->getLoc(),
                                op->getParentOfType<ModuleOp>(), rewriter);
-#ifdef USE_ROCM
+#if 1
     rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, programId);
 #else
     rewriter.replaceOp(op, programId);
@@ -648,7 +648,7 @@ struct GetNumProgramsOpConversion
   matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
-#ifdef USE_ROCM
+#if 1
     Location loc = op->getLoc();
     assert(op.getAxis() < 3);
     Value blockId =

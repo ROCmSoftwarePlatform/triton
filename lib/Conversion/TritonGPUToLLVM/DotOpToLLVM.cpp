@@ -25,7 +25,7 @@ LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                               TritonGPUToLLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter);
 
-#ifdef USE_ROCM
+#if 1
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
@@ -77,7 +77,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
           "Unsupported MMA kind found when converting DotOp to LLVM.");
     }
 
-#ifdef USE_ROCM
+#if 1
     MfmaEncodingAttr mfmaLayout = D.getType()
                                       .cast<RankedTensorType>()
                                       .getEncoding()

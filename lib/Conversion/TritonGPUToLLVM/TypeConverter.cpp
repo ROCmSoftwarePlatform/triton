@@ -160,7 +160,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   if (!dotOpLayout)
     return elemTy;
 
-#ifdef USE_ROCM
+#if 1
   if (auto mfmaParent = dotOpLayout.getParent().dyn_cast<MfmaEncodingAttr>()) {
     return vec_ty(elemTy, dotOpLayout.getKWidth());
   }

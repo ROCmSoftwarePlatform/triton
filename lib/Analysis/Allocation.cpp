@@ -80,7 +80,7 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
     }
   }
 
-#ifdef USE_ROCM
+#if 1
   if (srcLayout.isa<MfmaEncodingAttr>() &&
       srcLayout.dyn_cast<MfmaEncodingAttr>().getIsTransposed() &&
       dstLayout.isa<DotOperandEncodingAttr>())

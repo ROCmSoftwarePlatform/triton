@@ -449,102 +449,7 @@ bool supportMFMA(triton::DotOp op) {
   return true;
 }
 
-bool supportMMA(triton::DotOp op, int version) {
-  // Refer to mma section for the data type supported by Volta and Hopper
-  // Tensor Core in
-  // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
-  auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
-  auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
-  if (version == 3) {
-    if (::triton::tools::getBoolEnv("DISABLE_MMA_V3"))
-      return false;
-    auto retType = op.getResult().getType().cast<RankedTensorType>();
-    auto retShapePerCTA = triton::gpu::getShapePerCTA(retType);
-    auto mod = op->getParentOfType<mlir::ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    if (!(numWarps % 4 == 0 && retShapePerCTA[0] % 64 == 0 &&
-          retShapePerCTA[1] % 8 == 0 &&
-          (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ() ||
-           aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
-           aElemTy.isF32()))) {
-      return false;
-    }
-    // We cannot use MMA_V3 if we need to accumulate in F32 within the MMA op.
-    if (op.getMaxNumImpreciseAcc() < 32 &&
-        (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ()) &&
-        op.getType().cast<RankedTensorType>().getElementType().isF32()) {
-      return false;
-    }
-  }
-  if (aElemTy.isF32() && bElemTy.isF32()) {
-    return (op.getAllowTF32() && version == 2) || version == 3;
-  }
-  return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
-}
-
-#ifdef USE_ROCM
-static bool supportMFMAGranularity(int m, int n, int k) {
-  // these limitations are dtype dependent, in future we may relax them
-  const static std::pair<int, int> mfmaTypes[] = {{32, 8}, {16, 16}, {4, 64}};
-  for (const auto &mfmaType : mfmaTypes) {
-    auto [granularityMN, granularityK] = mfmaType;
-    if (m % granularityMN != 0 || n % granularityMN != 0)
-      continue;
-    if (k % granularityK != 0)
-      continue;
-    return true;
-  }
-  return false;
-}
-
-bool supportMFMATypes(Type a, Type b) {
-  if (a.getIntOrFloatBitWidth() != b.getIntOrFloatBitWidth())
-    return false;
-
-  auto F8E4M3FNUZ = TypeID::get<mlir::Float8E4M3FNUZType>();
-  auto F8E5M2FNUZ = TypeID::get<mlir::Float8E5M2FNUZType>();
-  auto F16 = TypeID::get<mlir::Float16Type>();
-  auto BF16 = TypeID::get<mlir::BFloat16Type>();
-  auto F32 = TypeID::get<mlir::Float32Type>();
-  auto Int = TypeID::get<mlir::IntegerType>();
-  const static DenseSet<std::pair<mlir::TypeID, mlir::TypeID>> supportedTypes = {
-      {F32, F32},
-      {F16, F16},
-      {BF16, BF16},
-      {F8E4M3FNUZ, F8E4M3FNUZ},
-      {F8E4M3FNUZ, F8E5M2FNUZ},
-      {F8E5M2FNUZ, F8E4M3FNUZ},
-      {F8E5M2FNUZ, F8E5M2FNUZ},
-      {Int, Int}};
-
-  if (!supportedTypes.contains({a.getTypeID(), b.getTypeID()}))
-    return false;
-
-  if (a.isIntOrIndex() && a.getIntOrFloatBitWidth() != 8)
-    return false;
-  return true;
-}
-
-bool supportMFMA(triton::DotOp op) {
-  auto aTy = op.getA().getType().cast<RankedTensorType>();
-  auto bTy = op.getB().getType().cast<RankedTensorType>();
-
-  auto aElemTy = aTy.getElementType();
-  auto bElemTy = bTy.getElementType();
-
-  if (!supportMFMATypes(aElemTy, bElemTy))
-    return false;
-
-  auto aShape = aTy.getShape();
-  auto bShape = bTy.getShape();
-
-  assert(aShape[1] == bShape[0]);
-  if (!supportMFMAGranularity(aShape[0], bShape[1], aShape[1]))
-    return false;
-
-  return true;
-}
-
+#if 1
 static bool supportWMMAGranularity(int m, int n, int k) {
   return m % 16 == 0 && n % 16 == 0 && k % 16 == 0;
 }
@@ -595,13 +500,45 @@ bool supportWMMA(triton::DotOp op) {
 }
 #endif
 
+bool supportMMA(triton::DotOp op, int version) {
+  // Refer to mma section for the data type supported by Volta and Hopper
+  // Tensor Core in
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
+  auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
+  auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
+  if (version == 3) {
+    if (::triton::tools::getBoolEnv("DISABLE_MMA_V3"))
+      return false;
+    auto retType = op.getResult().getType().cast<RankedTensorType>();
+    auto retShapePerCTA = triton::gpu::getShapePerCTA(retType);
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    if (!(numWarps % 4 == 0 && retShapePerCTA[0] % 64 == 0 &&
+          retShapePerCTA[1] % 8 == 0 &&
+          (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ() ||
+           aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
+           aElemTy.isF32()))) {
+      return false;
+    }
+    // We cannot use MMA_V3 if we need to accumulate in F32 within the MMA op.
+    if (op.getMaxNumImpreciseAcc() < 32 &&
+        (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ()) &&
+        op.getType().cast<RankedTensorType>().getElementType().isF32()) {
+      return false;
+    }
+  }
+  if (aElemTy.isF32() && bElemTy.isF32()) {
+    return op.getAllowTF32() && version >= 2;
+  }
+  return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
+}
+
 bool supportMMA(Value value, int version) {
   // Tell whether a DotOp support MMA by the operand type(either $a or $b).
   // We cannot get both the operand types(in TypeConverter), here we assume the
   // types of both the operands are identical here.
   assert((version == 1 || version == 2 || version == 3) &&
          "Unexpected MMA layout version found");
-
   auto elemTy = value.getType().cast<RankedTensorType>().getElementType();
   // FP8 is not natively supported on all mma versions but it can always be
   // promoted to fp16 therefore we can always support it.

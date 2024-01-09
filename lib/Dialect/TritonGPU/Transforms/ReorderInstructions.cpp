@@ -98,7 +98,7 @@ public:
       // a loop invariant. Moving this conversion post dependent load,
       // will hoist the conversion outside the loop. Consequently, during
       // computation, we will be able to maintain the Q tensor in the registers.
-#ifdef USE_ROCM
+#if 1
       if (!dstEncoding.isa<triton::gpu::SharedEncodingAttr>() &&
           !dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
         return;
@@ -121,7 +121,7 @@ public:
     });
     // Move `dot` operand so that conversions to opIdx=1 happens after
     // conversions to opIdx=0
-#ifdef USE_ROCM
+#if 1
     // Skip this reordering for ROCm backend since it will sink shared->dot
     // conversion for Q tensor in flash attention into the main loop. This
     // increases LDS pressure and requires additional computation in every loop

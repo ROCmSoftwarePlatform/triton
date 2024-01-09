@@ -289,7 +289,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                             Value clamp, Value laneId = Value()) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
-#ifdef USE_ROCM
+#if 1
   //On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on 32bit/dwords
   //so we need promote to 32 here.
   auto valType = val.getType();
@@ -322,7 +322,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     return bitcast(vec, val.getType());
   }
 
-#ifdef USE_ROCM
+#if 1
   auto bpermute = [&](Value lane) {
     // Multiple lineId by 4. (More on permute instruction semantics:
     // https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/instinct-mi200-cdna2-instruction-set-architecture.pdf#page=180

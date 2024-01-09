@@ -899,7 +899,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     SmallVector<int64_t> getMMAv2Rep(ArrayRef<int64_t> shape,
                                      int bitwidth, int opIdx) const;
 
-#ifdef USE_ROCM
+#if 1
     SmallVector<int64_t> getMFMAElemsPerInstr() const;
     SmallVector<int64_t> getMFMARep(ArrayRef<int64_t> operandShape) const;
 #endif
@@ -918,7 +918,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   let hasCustomAssemblyFormat = 1;
 }
 
-def WmmaEncodingAttr : DistributedEncoding<"WmmaEncoding", [MmaEncodingTrait]> {
+def WmmaEncodingAttr : DistributedEncoding<"WmmaEncoding"> {
   let mnemonic = "wmma";
 
   let description = [{

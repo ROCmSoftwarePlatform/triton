@@ -190,7 +190,7 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
   return false;
 }
 
-#ifdef USE_ROCM
+#if 1
 // Look ahead to at the transitive uses and see if there is a convert to mfma
 // operations.
 // TODO: unify with hasConvertToMMATransisitiveUse?
@@ -252,7 +252,7 @@ void LayoutPropagation::initAnchorLayout() {
                   .isa<triton::gpu::NvidiaMmaEncodingAttr>() &&
               !hasConvertToMMATransisitiveUse(op, tensorType.getEncoding()))
             continue;
-#ifdef USE_ROCM
+#if 1
           // Workaround to not propagate MFMA layout in case there are
           // no chained dots MFMA layout is expensive to convert, so we want
           // to convert it to something else as soon as possible.
@@ -337,7 +337,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
             triton::ExperimentalInterleaveOp, triton::gpu::ConvertLayoutOp>(user)) {
 
 
-#ifdef USE_ROCM
+#if 1
       if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(user)) {
         if (triton::gpu::hasSharedEncoding(convertOp.getResult()) ||
             triton::gpu::hasSharedEncoding(convertOp.getOperand()))

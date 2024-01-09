@@ -17,7 +17,7 @@ struct Fp8ConversionDesc {
   size_t numElements;
 };
 
-#ifdef USE_ROCM
+#if 1
 static SmallVector<Value>
 Fp16_to_Fp8E5M2(Location loc, ConversionPatternRewriter &rewriter,
                    const SmallVector<Value> &v) {
@@ -63,7 +63,7 @@ static const Fp8ConversionDesc Fp16_to_Fp8E5M2_RTNE(bool hasNativeFP) {
 #endif
 
 // ROCM utility functions for data type conversion
-#ifdef USE_ROCM
+#if 1
 static Value cvtFp16ToFp32(Location loc,
                                 ConversionPatternRewriter &rewriter,
                                 const Value &v) {
@@ -145,7 +145,7 @@ static SmallVector<Value> convert_val_Fp8_to_Fp16(
 }
 #endif
 
-#ifdef USE_ROCM
+#if 1
 // Depend on whether we focus more on performance, we may skip
 // the processing of submornal values
 static Value Fp16_to_Fp8E5M2FNUZ_oneValue(
@@ -196,7 +196,7 @@ ConverterT Fp16_to_Fp8E5M2FNUZ(int computeCapability) {
 #endif
 
 
-#ifdef USE_ROCM
+#if 1
 static SmallVector<Value>
 Fp8E5M2_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
                    const SmallVector<Value> &v) {
@@ -240,7 +240,7 @@ static const std::string Fp8E5M2_to_Fp16(bool hasNativeFP) {
 }
 #endif
 
-#ifdef USE_ROCM
+#if 1
 static Value Fp8E5M2FNUZ_to_Fp16_oneValue(
   Location loc, ConversionPatternRewriter &rewriter, Value v) {
   auto fp8x2VecTy = vec_ty(i8_ty, 2);
@@ -295,7 +295,7 @@ ConverterT Fp8E5M2FNUZ_to_Fp16(int computeCapability) {
 }
 #endif
 
-#ifdef USE_ROCM
+#if 1
 static SmallVector<Value>
 Fp8E5M2_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
                    const SmallVector<Value> &v) {
@@ -391,7 +391,7 @@ static const std::string Fp8E5M2_to_Bf16(bool hasNativeFP) {
 }
 #endif
 
-#ifdef USE_ROCM
+#if 1
 static SmallVector<Value>
 Bf16_to_Fp8E5M2(Location loc, ConversionPatternRewriter &rewriter,
                    const SmallVector<Value> &v) {
@@ -526,7 +526,7 @@ static const std::string Bf16_to_Fp8E5M2(bool hasNativeFP) {
 // This is the same format as FP8E4M3Nv, but:
 //   - the exponent bias is 15 instead of 7
 //   - 0xff and 0x7f are mapped to +-1.750 instead of +-nan
-#ifdef USE_ROCM
+#if 1
 static SmallVector<Value>
 Fp8E4M3B15_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
                    const SmallVector<Value> &v) {
@@ -579,7 +579,7 @@ const std::string Fp8E4M3B15_to_Fp16 =
     "}                                      \n";
 #endif
 
-#ifdef USE_ROCM
+#if 1
 static SmallVector<Value>
 Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
                          const SmallVector<Value> &v) {
@@ -670,7 +670,7 @@ static const std::string Fp16_to_Fp8E4M3B15(bool has_minx2) {
 // $0 = (($2 << 1) & 0x80008000u) | (($2 << 7) & 0x3f803f80u);
 // $1 = (($2 << 0) & 0x80008000u) | (($2 << 0) & 0x3f803f80u);
 // WARN: subnormal (0bs0000xxx) are not handled
-#ifdef USE_ROCM
+#if 1
 static SmallVector<Value>
 Fp8E4M3B15x4_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
                    const SmallVector<Value> &v) {
@@ -718,7 +718,7 @@ static const Fp8ConversionDesc Fp8E4M3B15x4_to_Fp16 = {
 //       ((e4.y >> 0) & (0x80008000u >> 0)) |
 //       ((e4.y >> 0) & (0x3f803f80u >> 0)) ;
 // WARN: subnormal (0bs0000xxx) are not handled
-#ifdef USE_ROCM
+#if 1
 static SmallVector<Value>
 Fp16_to_Fp8E4M3B15x4(Location loc, ConversionPatternRewriter &rewriter,
                    const SmallVector<Value> &v) {
@@ -767,7 +767,7 @@ static const std::string Fp16_to_Fp8E4M3B15x4 =
 // does not handle denormals and has
 // more than a single NaN values.
 
-#ifdef USE_ROCM
+#if 1
 static Value Fp8E4M3FNUZ_to_Fp16_oneValue(
   Location loc, ConversionPatternRewriter &rewriter, Value v) {
   auto fp8x2VecTy = vec_ty(i8_ty, 2);
@@ -821,7 +821,7 @@ Fp8E4M3FNUZ_to_Fp16(int computeCapability) {
 #endif
 
 // Fp16 -> Fp8E4M3 (packed)
-#ifdef USE_ROCM
+#if 1
 static Value Fp16_to_Fp8E4M3FNUZ_oneValue(
   Location loc, ConversionPatternRewriter &rewriter, Value v) {
   auto vi16 = bitcast(v, i16_ty);
@@ -877,7 +877,7 @@ Fp16_to_Fp8E4M3FNUZ(int computeCapability) {
 #endif
 
 // WARN: subnormal (0bs0000xxx) are not handled
-#ifdef USE_ROCM
+#if 1
 static SmallVector<Value>
 Fp8E4M3_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
 		   const SmallVector<Value> &v) {
@@ -937,7 +937,7 @@ const std::string Fp8E4M3_to_Bf16 =
     "}";
 #endif
 
-#ifdef USE_ROCM
+#if 1
 static SmallVector<Value>
 Bf16_to_Fp8E4M3(Location loc, ConversionPatternRewriter &rewriter,
 		   const SmallVector<Value> &v) {
@@ -1549,7 +1549,7 @@ struct FpToFpOpConversion
   static Value convertBf16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
-#ifdef USE_ROCM
+#if 1
     auto as_int16 = bitcast(v, i16_ty);
     auto as_int32 = zext(i32_ty, as_int16);
     auto shifted = shl(i32_ty, as_int32, i32_val(16));
@@ -1567,7 +1567,7 @@ struct FpToFpOpConversion
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
-#ifdef USE_ROCM
+#if 1
     return cvtFp16ToFp32(loc, rewriter, v);
 #else
     PTXBuilder builder;
@@ -1582,7 +1582,7 @@ struct FpToFpOpConversion
   static Value convertFp32ToBf16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v, const RoundingMode rounding) {
-    #ifdef USE_ROCM
+    #if 1
     auto as_uint32 = bitcast(v, i32_ty);
     auto check_exponent = and_(i32_ty, xor_(i32_ty, as_uint32, i32_val(0xffffffff)), i32_val(0x7f800000));
     auto exponent_not_all1s = icmp_ne(check_exponent, i32_val(0)); 
@@ -1622,7 +1622,7 @@ struct FpToFpOpConversion
   static Value convertFp32ToFp16NZ(Location loc,
                                    ConversionPatternRewriter &rewriter,
                                    const Value &v, const RoundingMode rounding) {
-#ifdef USE_ROCM
+#if 1
     return cvtFp32ToFp16(loc, rewriter, v);
 #else
     PTXBuilder builder;
@@ -1652,7 +1652,7 @@ struct FpToFpOpConversion
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
     auto F8E4M3B15TyID = TypeID::get<mlir::Float8E4M3B11FNUZType>();
-#ifdef USE_ROCM
+#if 1
     auto F8E4M3FNUZTyID = TypeID::get<mlir::Float8E4M3FNUZType>();
 #else
     auto F8E4M3TyID = TypeID::get<mlir::Float8E4M3FNUZType>();
@@ -1666,7 +1666,7 @@ struct FpToFpOpConversion
     auto F64TyID = TypeID::get<mlir::Float64Type>();
     auto undefRounding = static_cast<RoundingMode>(-1);
 
-#ifdef USE_ROCM
+#if 1
     static DenseMap<std::pair<TypeID, TypeID>, ConverterT> srcMap = {
 #else
     static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, Fp8ConversionDesc> srcMap = {
@@ -1674,7 +1674,7 @@ struct FpToFpOpConversion
         // F8 -> F16
         {{F8E4M3B15TyID, F16TyID}, Fp8E4M3B15_to_Fp16},
         {{F8E4M3FNTyID, F16TyID}, Fp8E4M3B15x4_to_Fp16},
-#ifdef USE_ROCM
+#if 1
         {{F8E4M3FNUZTyID, F16TyID}, Fp8E4M3FNUZ_to_Fp16(computeCapability)},
         {{F8E5M2FNUZTyID, F16TyID}, Fp8E5M2FNUZ_to_Fp16(computeCapability)},
         {{F8E5M2TyID, F16TyID}, Fp8E5M2_to_Fp16},
@@ -1685,7 +1685,7 @@ struct FpToFpOpConversion
 
         // F16 -> F8
 	      {{F16TyID, F8E4M3FNTyID}, Fp16_to_Fp8E4M3B15x4},
-#ifdef USE_ROCM
+#if 1
         {{F16TyID, F8E4M3B15TyID}, Fp16_to_Fp8E4M3B15},
         {{F16TyID, F8E5M2FNUZTyID}, Fp16_to_Fp8E5M2FNUZ(computeCapability)},
         {{F16TyID, F8E4M3FNUZTyID}, Fp16_to_Fp8E4M3FNUZ(computeCapability)},
@@ -1697,7 +1697,7 @@ struct FpToFpOpConversion
 #endif
 
       	// F8 -> BF16
-#ifdef USE_ROCM
+#if 1
 	      {{F8E5M2TyID, BF16TyID}, Fp8E5M2_to_Bf16},
 #else
 	      {{F8E5M2TyID, BF16TyID}, Fp8E5M2_to_Bf16(computeCapability >= 90)},
@@ -1705,7 +1705,7 @@ struct FpToFpOpConversion
 #endif
 
      	  // BF16 -> F8
-#ifdef USE_ROCM
+#if 1
         {{BF16TyID, F8E5M2TyID}, Bf16_to_Fp8E5M2},
 #else
         {{BF16TyID, F8E5M2TyID}, Bf16_to_Fp8E5M2(computeCapability >= 90)},
@@ -1722,7 +1722,7 @@ struct FpToFpOpConversion
                    << "\n";
       llvm_unreachable("");
     }
-#ifdef USE_ROCM
+#if 1
     return srcMap.lookup(key);
 #else
     int inVecWidthBits = 32;
@@ -1764,7 +1764,7 @@ struct FpToFpOpConversion
     size_t numElements = 4;
     if (srcElementType.isFloat8E4M3FNUZ() ||
         dstElementType.isFloat8E4M3FNUZ() ||
-#ifdef USE_ROCM
+#if 1
         srcElementType.isFloat8E5M2FNUZ() ||
         dstElementType.isFloat8E5M2FNUZ())
 #else
@@ -1777,7 +1777,7 @@ struct FpToFpOpConversion
       numElements = 2;
     }
     bool useFP16IntermediateSrc =
-#ifdef USE_ROCM
+#if 1
         srcElementType.isF32();
 #else
         srcElementType.isF32() &&
@@ -2175,7 +2175,7 @@ struct FDivOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-#ifdef USE_ROCM
+#if 1
     return {rewriter.create<LLVM::FDivOp>(loc, elemTy, operands[0][0],
                                          operands[0][1])};
 #else
@@ -2217,7 +2217,7 @@ struct FMulOpConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-#ifdef USE_ROCM
+#if 1
       return {EmitDualBF16ElementwiseOp<LLVM::FMulOp>(loc, rewriter, operands)};
 #else
       PTXBuilder builder;
@@ -2252,7 +2252,7 @@ struct FAddOpConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-#ifdef USE_ROCM
+#if 1
       return {EmitDualBF16ElementwiseOp<LLVM::FAddOp>(loc, rewriter, operands)};
 #else
       PTXBuilder builder;
@@ -2287,7 +2287,7 @@ struct FSubOpConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-#ifdef USE_ROCM
+#if 1
       return {EmitDualBF16ElementwiseOp<LLVM::FSubOp>(loc, rewriter, operands)};
 #else
       PTXBuilder builder;
@@ -2308,7 +2308,7 @@ struct FSubOpConversion
   }
 };
 
-#ifdef USE_ROCM
+#if 1
 static SmallVector<Value>
 S8_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
 		   const SmallVector<Value> &v) {
@@ -2459,7 +2459,7 @@ struct ExpOpConversionApprox
     const double log2e = 1.4426950408889634;
     Value prod = fmul(f32_ty, operands[0][0], f32_val(log2e));
 
-#ifdef USE_ROCM
+#if 1
     return {rewriter.create<math::Exp2Op>(loc, f32_ty, prod,
                                          adaptor.getAttributes().getValue())};
 #else

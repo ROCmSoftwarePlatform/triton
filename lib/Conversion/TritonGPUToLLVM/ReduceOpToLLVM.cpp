@@ -176,7 +176,7 @@ private:
 
   // Check if the reduction can use a redux op and return the kind.
   std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op) const {
-  #ifdef USE_ROCM
+  #if 1
     return std::nullopt;
   #endif
     if (computeCapability < 80)
@@ -284,7 +284,7 @@ private:
     for (unsigned N = numLaneToReduce / 2; N > 0; N >>= 1) {
       SmallVector<Value> shfl(acc.size());
       unsigned shuffleIdx = N;
-#ifdef USE_ROCM
+#if 1
       auto srcTys = op.getInputTypes();
       auto inputTy = srcTys[0].cast<RankedTensorType>();
       auto inMfma =

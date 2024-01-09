@@ -48,7 +48,7 @@ public:
              dstDotOp.getParent() == srcMmaEncoding))
           return;
       }
-#ifdef USE_ROCM
+#if 1
       if (auto srcMfmaEncoding =
               srcEncoding.dyn_cast<triton::gpu::MfmaEncodingAttr>()) {
 

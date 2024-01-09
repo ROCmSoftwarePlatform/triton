@@ -151,7 +151,7 @@ struct LoadOpConversion
       const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
 
-#ifdef USE_ROCM
+#if 1
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         size_t elemOffset = vecStart + wordIdx * wordNElems;
@@ -403,7 +403,7 @@ struct StoreOpConversion
           llWord = insert_element(wordTy, llWord, elem, i32_val(elemIdx));
         }
         llWord = bitcast(llWord, valArgTy);
-#ifdef USE_ROCM
+#if 1
         Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
         rewriter.create<scf::IfOp>(loc, maskVal,
                                      [&](OpBuilder &builder, Location loc){
@@ -418,7 +418,7 @@ struct StoreOpConversion
 #endif
       }
 
-#ifndef USE_ROCM
+#if 0
       // Prepare the PTX inline asm.
       PTXBuilder ptxBuilder;
       auto *asmArgList = ptxBuilder.newListOperand(asmArgs);
@@ -978,7 +978,7 @@ private:
 namespace {
 void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
                    int numCTAs) {
-#ifdef USE_ROCM
+#if 1
   barrier();
 #else
   if (numCTAs == 1) {
@@ -1005,7 +1005,7 @@ struct AtomicCASOpConversion
             converter, allocation, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
-#ifdef USE_ROCM
+#if 1
   LogicalResult
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -1252,7 +1252,7 @@ struct AtomicRMWOpConversion
             converter, allocation, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
-#ifdef USE_ROCM
+#if 1
   /// Try to match the mlir::triton::RMWOp to LLVM::AtomicBinOp.
   static std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
     switch (atomicOp) {

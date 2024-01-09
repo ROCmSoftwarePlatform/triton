@@ -993,7 +993,7 @@ void init_triton_ir(py::module &&m) {
       .def("create_shl",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-#ifdef USE_ROCM
+#if 1
              mlir::Type elementType = getElementTypeOrSelf(lhs.getType());
              unsigned typeWidth = elementType.getIntOrFloatBitWidth();
              auto constValue = self.create<mlir::arith::ConstantIntOp>(
@@ -1024,7 +1024,7 @@ void init_triton_ir(py::module &&m) {
       .def("create_lshr",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-#ifdef USE_ROCM
+#if 1
              mlir::Type elementType = getElementTypeOrSelf(lhs.getType());
              unsigned typeWidth = elementType.getIntOrFloatBitWidth();
              auto constValue = self.create<mlir::arith::ConstantIntOp>(
@@ -1055,7 +1055,7 @@ void init_triton_ir(py::module &&m) {
       .def("create_ashr",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-#ifdef USE_ROCM
+#if 1
              mlir::Type elementType = getElementTypeOrSelf(lhs.getType());
              unsigned typeWidth = elementType.getIntOrFloatBitWidth();
              auto constValue = self.create<mlir::arith::ConstantIntOp>(

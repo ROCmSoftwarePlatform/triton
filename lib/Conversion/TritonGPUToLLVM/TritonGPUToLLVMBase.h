@@ -774,7 +774,7 @@ public:
     llvm_unreachable("unsupported emitOffsetForLayout");
   }
 
-#ifdef USE_ROCM
+#if 1
   void emitMfmaOffsetForCTA(const MfmaEncodingAttr &mfmaLayout,
                             SmallVector<SmallVector<unsigned>> &offsets,
                             unsigned ctaOffsetX, unsigned ctaOffsetY) const {

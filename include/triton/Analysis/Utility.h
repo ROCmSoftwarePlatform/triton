@@ -198,7 +198,7 @@ template <typename T> T nextPowOf2(T n) {
   return n + 1;
 }
 
-#ifdef USE_ROCM
+#if 1
 bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
 #endif
 

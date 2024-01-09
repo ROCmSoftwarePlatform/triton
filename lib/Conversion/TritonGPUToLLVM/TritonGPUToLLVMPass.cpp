@@ -19,7 +19,7 @@
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#ifndef USE_ROCM
+#if 0
 #else
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #endif
@@ -64,7 +64,7 @@ static void addWSNamedAttrs(Operation *op,
       op->setAttr(attr.getName(), attr.getValue());
 }
 
-#ifdef USE_ROCM
+#if 1
 constexpr int LDSSize = 65536;
 constexpr int kPtrBitWidth = 64;
 #endif
@@ -223,7 +223,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       rewriter.eraseOp(amendedFuncOp);
     }
-#ifndef USE_ROCM
+#if 0
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
@@ -413,7 +413,7 @@ struct ConvertTritonGPUToLLVM
     decomposeFp8e4b15Convert(mod);
     decomposeSplatToSharedLayout(mod, numWarps, threadsPerWarp, numCTAs);
     decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
-#ifdef USE_ROCM
+#if 1
     decomposeMfmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
     reduceCvtOpLDSUsage(mod);
 #endif
@@ -704,7 +704,7 @@ private:
     });
   }
 
-#ifdef USE_ROCM
+#if 1
   void decomposeMfmaToDotOperand(ModuleOp mod, int numWarps, int threadsPerWarp,
                                  int numCTAs) const {
     // Replace `mfma -> dot_op` with `mfma -> blocked -> dot_op`
@@ -963,7 +963,7 @@ private:
 
       // If the load byte width is not eligible or the current compute
       // capability does not support async copy, then we do decompose
-#ifndef USE_ROCM
+#if 0
       if (triton::gpu::InsertSliceAsyncOp::getEligibleLoadByteWidth(
               computeCapability)
               .contains(byteWidth)) {
@@ -1006,7 +1006,7 @@ private:
     });
 
     mod.walk([&](triton::gpu::AsyncCommitGroupOp asyncCommitGroupOp) -> void {
-#ifdef USE_ROCM
+#if 1
       asyncCommitGroupOp.erase();
 #else
       if (!triton::gpu::AsyncCommitGroupOp::isSupported(computeCapability))
@@ -1015,7 +1015,7 @@ private:
     });
 
     mod.walk([&](triton::gpu::AsyncWaitOp asyncWaitOp) -> void {
-#ifdef USE_ROCM
+#if 1
       // AsyncWait is not supported for ROCM and should be removed
       asyncWaitOp.erase();
 #else
@@ -1063,7 +1063,7 @@ private:
         if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
           return;
         promoteType = builder.getF16Type();
-#ifdef USE_ROCM
+#if 1
       } else if (MfmaEncodingAttr mfmaLayout =
                      D.getType()
                          .cast<RankedTensorType>()

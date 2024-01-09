@@ -50,7 +50,7 @@ public:
     auto encoding =
         cvtOp.getSrc().getType().cast<RankedTensorType>().getEncoding();
 
-#ifdef USE_ROCM
+#if 1
     if (!encoding.isa<triton::gpu::MfmaEncodingAttr>())
       return mlir::failure();
 #else

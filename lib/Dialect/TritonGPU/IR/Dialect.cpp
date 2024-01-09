@@ -1743,7 +1743,7 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
   unsigned kWidth = 0;
   Attribute _kWidth = attrs.get("kWidth");
   if (_kWidth) {
-#ifndef USE_ROCM
+#if 0
     if (!mmaParent || mmaParent.isVolta()) {
       auto loc = parser.getNameLoc();
       parser.emitError(loc, "kWidth only supported for MMAv2+ parent");
