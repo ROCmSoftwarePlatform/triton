@@ -34,7 +34,7 @@ namespace {
 
 Type getShemPtrTy(Type elemTy) {
   if (elemTy.isBF16()) {
-    auto ctx = elemTy.getContext();
+    MLIRContext *ctx = elemTy.getContext();
     return ptr_ty(type::i16Ty(ctx), 3);
   }
 
