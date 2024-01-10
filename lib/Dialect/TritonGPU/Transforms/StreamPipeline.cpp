@@ -826,7 +826,7 @@ struct PipelinePass : public TritonGPUStreamPipelineBase<PipelinePass> {
       pipeliner.emitEpilogue(newResults);
 
       // Replace the original loop
-      for (const auto &pair : newResults)
+      for (auto &pair : newResults)
         std::get<0>(pair).replaceAllUsesWith(std::get<1>(pair));
       forOp->erase();
     });
