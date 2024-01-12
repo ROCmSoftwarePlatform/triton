@@ -130,3 +130,51 @@ jobs:
           pytest -n 32 --capture=tee-sys -rfs --verbose "python/test/unit/language/test_core.py"
 
 
+  Docker-Test:
+    if: true
+    needs: Runner-Preparation
+
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-required)}}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+          rm -rf python/triton.egg-info
+          rm -rf python/.pytest_cache
+          rm -rf python/tests/__pycache__
+          rm -rf python/build
+          rm -rf /tmp/tmp*
+          rm -rf /tmp/triton_upstream
+          rm -rf .pytest_cache
+          rm -rf ./venv_triton_upstream
+      
+      - name: Clear Docker images
+        run: |
+          docker stop triton_container || true && docker rm triton_container || true
+          docker image prune -a -f
+
+      - name: Update PATH
+        run: |
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Docker Test
+        run: |
+          set -x
+
+          docker build -t triton .
+
+          sudo docker run -it --rm --network=host --user root --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --ipc=host --shm-size 16G --device=/dev/kfd --device=/dev/dri -w /tmp/triton --name triton_container -d triton
+          
+          docker exec triton_container sh -c "python -m pytest -n 32 --capture=tee-sys -rfs --verbose "python/test/unit/language/test_core.py""
+          
+          # docker stop triton_container
+
+
