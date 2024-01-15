@@ -175,6 +175,6 @@ jobs:
           
           docker exec triton_container sh -c "python -m pytest -n 32 --capture=tee-sys -rfs --verbose "python/test/unit/language/test_core.py""
           
-          # docker stop triton_container
+          docker stop triton_container
 
 
