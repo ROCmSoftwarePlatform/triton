@@ -131,6 +131,8 @@ compared to 1*64 when the hasLeadingOffset is false.
 
         if (mfmaEnc) {
           int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
+          if (needTrans)
+            kDimNum = 1 - kDimNum;
           bool isKDimInner = (order[0] == kDimNum);
           if (isKDimInner) {
             const int numBanks = 32;
@@ -156,7 +158,17 @@ compared to 1*64 when the hasLeadingOffset is false.
             //
             // maxPhase is set to SIMDWidth / perPhase
             int vecSize = ((typeWidthInBit == 16) ? 64 : 32 ) / typeWidthInBit;
-            int maxPhase = SIMDWidth / perPhase;
+            // On MI300, fp8 and int8 mfma is assigned to VGPRs for the operands
+            if (3 == mfmaEnc.getVersionMajor() && 8 == typeWidthInBit)
+              vecSize = 8;
+            int maxPhase = std::min(SIMDWidth / perPhase, innerDimLength / vecSize);
+            // TODO (zhanglx): figure out better parameters for mfma4
+            auto mDim = mfmaEnc.getMDim();
+            auto nDim = mfmaEnc.getNDim();
+            auto nonKDim = dotOpEnc.getOpIdx() == 0 ? mDim : nDim;
+            if (4 == nonKDim)
+               maxPhase = 4;
+            assert(maxPhase > 0);
 
             return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
           } else {
@@ -675,12 +687,19 @@ def MfmaEncodingAttr : DistributedEncoding<"MfmaEncoding"> {
   let mnemonic = "mfma";
 
   let description = [{
-An encoding for tensors that have been produced by MI100 && MI200 tensor cores.
-It is characterized by parameters `warpsPerCTA` and `nonKDim` that indicates how data should be partitioned
-between waves (analogous to the term 'warp' used in NVIDIA's CUDA programming model).
+An encoding for tensors that have been produced by tensor cores of AMD MI GPUs.
+It is characterized by the following parameters:
+- `versionMajor` and `versionMinor` indicates the GPU arch
+  - 1.0: gfx908, i.e. MI100
+  - 2.0: gfx90a: i.e. MI200, MI210, MI250
+  - 3.0: gfx940, gfx941, gfx942: MI300
+- `warpsPerCTA` indicates the wave layout in the workgroup.
+- `MDim` and `NDim` indicate the dimension of the output of the mfma instruction.
+- `isTransposed` indicates the result tensor is transposed so that it can be converted to dotOperand layout
+without going to LDS. This is used in the case of chained dot (E.g. Flash-Attention kernel).
 
 Example 1:
-Suppose we have a tensor with a shape of [32, 64], warpsPerCTA set to [1, 2] and nonKDim set to 32.
+Suppose we have a tensor with a shape of [32, 64], warpsPerCTA set to [1, 2] and MDim=NDim=32.
 The data will be distributed between threads as follows:
 
                 wave 0                                 wave 1
@@ -719,7 +738,7 @@ The data will be distributed between threads as follows:
 [ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
 
 Example 2:
-Suppose we have a tensor with a shape of [16, 32], warpsPerCTA set to [1, 2] and nonKDim set to 16.
+Suppose we have a tensor with a shape of [16, 32], warpsPerCTA set to [1, 2] and MDim=NDim=16.
 The data will be distributed between threads as follows:
 
                 wave 0                                 wave 1
@@ -740,14 +759,76 @@ The data will be distributed between threads as follows:
 [ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
 [ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
 [ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
+
+Example 3:
+Suppose we have a tensor with a shape of [8, 8], warpsPerCTA set to [2, 2] and MDim=NDim=4.
+The data will be distributed between threads as follows(note that each element is duplicated in 16 threads):
+
+M  N ->                    wave 0                                                       wave 2
+| --------------------------/\--------------------------   ------------------------------/\------------------------------
+V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,133...189  130,134...190  131,135...191 ]
+  [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,133...189  130,134...190  131,135...191 ]
+  [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,133...189  130,134...190  131,135...191 ]
+  [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,133...189  130,134...190  131,135...191 ]
+
+                           wave 1                                                       wave 3
+  --------------------------/\--------------------------   ------------------------------/\------------------------------
+  [ 64,68...124  65,69...125  66,70...126  67,71...127 ]   [ 192,196...252  193,197...253  194,198...254  195,199...255 ]
+  [ 64,68...124  65,69...125  66,70...126  67,71...127 ]   [ 192,196...252  193,197...253  194,198...254  195,199...255 ]
+  [ 64,68...124  65,69...125  66,70...126  67,71...127 ]   [ 192,196...252  193,197...253  194,198...254  195,199...255 ]
+  [ 64,68...124  65,69...125  66,70...126  67,71...127 ]   [ 192,196...252  193,197...253  194,198...254  195,199...255 ]
 }];
 
   let parameters = (
     ins
-    "unsigned":$nonKDim,
+    "unsigned": $versionMajor,
+    "unsigned": $versionMinor,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    "bool":$isTransposed,
-    "CTALayoutAttr":$CTALayout
+    "unsigned":$MDim,
+    "unsigned":$NDim,
+    "bool":$isTransposed
+  );
+
+  let hasCustomAssemblyFormat = 1;
+}
+
+def WmmaEncodingAttr : DistributedEncoding<"WmmaEncoding"> {
+  let mnemonic = "wmma";
+
+  let description = [{
+An encoding for tensors that have been produced by WMMA instructions,
+available on RDNA 3.
+A `warpsPerCTA` parameter characterizes data distribution between waves.
+An important limitation of WMMA for layout is a shape for tiles proccessed
+by a single wave. It is [16, 16].
+This encoding assumes specific access to matrix elements by threads.
+Example:
+Suppose we have a tensor with shape [32, 48], `warpsPerCTA` set to [2, 3].
+
+    wave 0 [16, 16]           wave 1 [16, 16]           wave 2 [16, 16]
+-----------/\----------   -----------/\----------   -----------/\----------
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+...                       ...                       ...
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+
+    wave 3 [16, 16]           wave 4 [16, 16]           wave 5 [16, 16]
+-----------/\----------   -----------/\----------   -----------/\----------
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+...                       ...                       ...
+[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
+[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+  }];
+
+  let parameters = (
+    ins
+    ArrayRefParameter<"unsigned">:$warpsPerCTA
   );
 
   let hasCustomAssemblyFormat = 1;
@@ -796,7 +877,7 @@ def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
 In TritonGPU dialect, considering `d = tt.dot a, b, c`
 tt.dot's operands a and b must be of DotOperandEncodingAttr layout.
 a's opIdx is 0, b's opIdx is 1.
-The parend field in DotOperandEncodingAttr is the layout of d.
+The parent field in DotOperandEncodingAttr is the layout of d.
 
 For MMA v1, an additional attribute `isMMAv1Row` determines whether e.g. the a operand is used
 in the context of an mma.884.row.col or an mma.884.col.col operation. See the PTX ISA documentation
@@ -837,8 +918,7 @@ section 9.7.13.4.1 for more details.
                                      int bitwidth) const;
 #ifdef USE_ROCM
     SmallVector<int64_t> getMFMAElemsPerInstr() const;
-    SmallVector<int64_t> getMFMARep(ArrayRef<int64_t> operandShape,
-                                    Type elemType) const;
+    SmallVector<int64_t> getMFMARep(ArrayRef<int64_t> operandShape) const;
 #endif
   }];
 }

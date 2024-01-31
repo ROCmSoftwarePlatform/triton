@@ -98,7 +98,7 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
     auto dim = sliceLayout.getDim();
     auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(sliceLayout.getParent());
     if (CTAsPerCGA[dim] != 1)
-      assert(0 && "Layout conversion to be implemented");
+      llvm::report_fatal_error("Layout conversion to be implemented");
   }
 
   // Case where CTAsPerCGA of dstLayout in the sliced dim is not 1 is supported
@@ -426,10 +426,11 @@ bool supportMMA(triton::DotOp op, int version) {
 #ifdef USE_ROCM
 static bool supportMFMAGranularity(int m, int n, int k) {
   // these limitations are dtype dependent, in future we may relax them
-  const static std::pair<int, int> mfmaTypes[2] = {{32, 8}, {16, 16}};
+  const static std::tuple<int, int, int> mfmaTypes[] = {
+      {32, 32, 8}, {16, 16, 16}, {4, 4, 64}, {64, 4, 4}, {4, 64, 4}};
   for (const auto &mfmaType : mfmaTypes) {
-    auto [granularityMN, granularityK] = mfmaType;
-    if (m % granularityMN != 0 || n % granularityMN != 0)
+    auto [granularityM, granularityN, granularityK] = mfmaType;
+    if (m % granularityM != 0 || n % granularityN != 0)
       continue;
     if (k % granularityK != 0)
       continue;
@@ -448,7 +449,7 @@ bool supportMFMATypes(Type a, Type b) {
   auto BF16 = TypeID::get<mlir::BFloat16Type>();
   auto F32 = TypeID::get<mlir::Float32Type>();
   auto Int = TypeID::get<mlir::IntegerType>();
-  DenseSet<std::pair<mlir::TypeID, mlir::TypeID>> supportedTypes = {
+  const static DenseSet<std::pair<mlir::TypeID, mlir::TypeID>> supportedTypes = {
       {F32, F32},
       {F16, F16},
       {BF16, BF16},
@@ -481,6 +482,55 @@ bool supportMFMA(triton::DotOp op) {
 
   assert(aShape[1] == bShape[0]);
   if (!supportMFMAGranularity(aShape[0], bShape[1], aShape[1]))
+    return false;
+
+  return true;
+}
+
+static bool supportWMMAGranularity(int m, int n, int k) {
+  return m % 16 == 0 && n % 16 == 0 && k % 16 == 0;
+}
+
+bool supportWMMATypes(Type a, Type b, Type c, Type d) {
+  if (a != b || c != d)
+    return false;
+  if (a.isIntOrIndex()) {
+    if (!c.isIntOrIndex())
+      return false;
+    auto aWidth = a.getIntOrFloatBitWidth();
+    auto cWidth = c.getIntOrFloatBitWidth();
+    bool aValid = a.isUnsignedInteger() && (aWidth == 4 || aWidth == 8);
+    bool cValid = c.isSignedInteger() && cWidth == 32;
+    return aValid && cValid;
+  } else if (a.isa<FloatType>()) {
+    if (a.isBF16())
+      return c.isBF16() || c.isF32();
+    if (a.isF16())
+      return c.isF16() || c.isF32();
+  }
+  return false;
+}
+
+// TODO: check C D operands
+bool supportWMMA(triton::DotOp op) {
+  auto aTy = op.getA().getType().cast<RankedTensorType>();
+  auto bTy = op.getB().getType().cast<RankedTensorType>();
+  auto cTy = op.getC().getType().cast<RankedTensorType>();
+  auto dTy = op.getResult().getType().cast<RankedTensorType>();
+
+  auto aElemTy = aTy.getElementType();
+  auto bElemTy = bTy.getElementType();
+  auto cElemTy = cTy.getElementType();
+  auto dElemTy = dTy.getElementType();
+
+  if (!supportWMMATypes(aElemTy, bElemTy, cElemTy, dElemTy))
+    return false;
+
+  auto aShape = aTy.getShape();
+  auto bShape = bTy.getShape();
+
+  assert(aShape[1] == bShape[0]);
+  if (!supportWMMAGranularity(aShape[0], bShape[1], aShape[1]))
     return false;
 
   return true;
@@ -563,7 +613,8 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
          dotOperandLayout.getOpIdx() == 0 &&
          dotOperandLayout.getKWidth() == 4 &&
          dotOperandLayout.getParent() == mfmaLayout &&
-         mfmaLayout.getNonKDim() == 32 && mfmaLayout.getIsTransposed() &&
+         (mfmaLayout.getMDim() == 32 || mfmaLayout.getMDim() == 16) &&
+         mfmaLayout.getIsTransposed() &&
          (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
 }
 #endif

@@ -56,9 +56,10 @@ static const std::string Fp16_to_Fp8E5M2(bool hasNativeFP) {
 
 // ROCM utility functions for data type conversion
 #ifdef USE_ROCM
+// convert fp16 to fp32
 static Value cvtFp16ToFp32(Location loc,
-                                ConversionPatternRewriter &rewriter,
-                                const Value &v) {
+                           ConversionPatternRewriter &rewriter,
+                           const Value &v) {
   GCNBuilder builder;
   auto &cvt = *builder.create("v_cvt_f32_f16");
   auto res = builder.newOperand("=v");
@@ -67,9 +68,10 @@ static Value cvtFp16ToFp32(Location loc,
   return builder.launch(rewriter, loc, f32_ty, false);
 }
 
+// convert fp32 to f16
 static Value cvtFp32ToFp16(Location loc,
-                                ConversionPatternRewriter &rewriter,
-                                const Value &v) {
+                           ConversionPatternRewriter &rewriter,
+                           const Value &v) {
   GCNBuilder builder;
   auto &cvt = *builder.create("v_cvt_f16_f32");
   auto res = builder.newOperand("=v");
@@ -78,34 +80,8 @@ static Value cvtFp32ToFp16(Location loc,
   return builder.launch(rewriter, loc, f16_ty, false);
 }
 
-static SmallVector<Value> convert_val_Fp16_to_Fp8(
-  Location loc, ConversionPatternRewriter &rewriter, 
-  Value v0, Value v1, const std::string& fp8_format) {
-  assert(fp8_format == "fp8" or fp8_format == "bf8");
-  std::string ins_str = "v_cvt_pk_" + fp8_format + "_f32";
-
-  auto f32_0 = cvtFp16ToFp32(loc, rewriter, v0);
-  auto f32_1 = cvtFp16ToFp32(loc, rewriter, v1);
-
-  GCNBuilder builder;
-  auto &cvt = *builder.create(ins_str);
-  auto res = builder.newOperand("=v");
-  auto operand0 = builder.newOperand(f32_0, "v");
-  auto operand1 = builder.newOperand(f32_1, "v");
-  cvt(res, operand0, operand1);
-  auto fp8x4Vec = builder.launch(rewriter, loc, i32_ty, false);
-
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  auto a1 = bitcast(fp8x4Vec, fp8x4VecTy);
-
-  SmallVector<Value> ret(2);
-  ret[0] = extract_element(i8_ty, a1, i32_val(0));
-  ret[1] = extract_element(i8_ty, a1, i32_val(1));
-
-  return ret;
-}
-
-static SmallVector<Value> convert_val_Fp8_to_Fp16(
+// convert fp8 to fp32
+static SmallVector<Value> cvtFp8ToFp32(
   Location loc, ConversionPatternRewriter &rewriter, 
   Value v0, Value v1, const std::string& fp8_format) {
   assert(fp8_format == "fp8" or fp8_format == "bf8");
@@ -126,14 +102,95 @@ static SmallVector<Value> convert_val_Fp8_to_Fp16(
   auto fp32x2VecTy = vec_ty(f32_ty, 2);
   auto fp32x2Vec = bitcast(i64v, fp32x2VecTy);
 
-  auto f32_0 = extract_element(f32_ty, fp32x2Vec, i32_val(0));
-  auto f32_1 = extract_element(f32_ty, fp32x2Vec, i32_val(1));
-
   SmallVector<Value> ret(2);
-  ret[0] = cvtFp32ToFp16(loc, rewriter, f32_0);
-  ret[1] = cvtFp32ToFp16(loc, rewriter, f32_1);
+  ret[0] = extract_element(f32_ty, fp32x2Vec, i32_val(0));
+  ret[1] = extract_element(f32_ty, fp32x2Vec, i32_val(1));
 
   return ret;
+}
+
+// convert fp32 to fp8
+static SmallVector<Value> cvtFp32ToFp8(
+  Location loc, ConversionPatternRewriter &rewriter, 
+  Value v0, Value v1, const std::string& fp8_format) {
+  assert(fp8_format == "fp8" or fp8_format == "bf8");
+  std::string ins_str = "v_cvt_pk_" + fp8_format + "_f32";
+
+  GCNBuilder builder;
+  auto &cvt = *builder.create(ins_str);
+  auto res = builder.newOperand("=v");
+  auto operand0 = builder.newOperand(v0, "v");
+  auto operand1 = builder.newOperand(v1, "v");
+  cvt(res, operand0, operand1);
+  auto fp8x4Vec = builder.launch(rewriter, loc, i32_ty, false);
+
+  auto fp8x4VecTy = vec_ty(i8_ty, 4);
+  auto a1 = bitcast(fp8x4Vec, fp8x4VecTy);
+
+  SmallVector<Value> ret(2);
+  ret[0] = extract_element(i8_ty, a1, i32_val(0));
+  ret[1] = extract_element(i8_ty, a1, i32_val(1));
+
+  return ret;
+}
+
+// convert fp16 to fp8 for MI300 format
+static SmallVector<Value> convert_val_Fp16_to_Fp8(
+  Location loc, ConversionPatternRewriter &rewriter, 
+  Value v0, Value v1, const std::string& fp8_format) {
+  assert(fp8_format == "fp8" or fp8_format == "bf8");
+
+  // Convert fp16 to fp32
+  auto f32_0 = cvtFp16ToFp32(loc, rewriter, v0);
+  auto f32_1 = cvtFp16ToFp32(loc, rewriter, v1);
+
+  // Convert fp32 to fp8
+  return cvtFp32ToFp8(loc, rewriter, f32_0, f32_1, fp8_format);
+}
+
+// convert fp8 to fp16 for mi300 formats
+static SmallVector<Value> convert_val_Fp8_to_Fp16(
+  Location loc, ConversionPatternRewriter &rewriter, 
+  Value v0, Value v1, const std::string& fp8_format) {
+
+  // Convert fp8 to fp32
+  SmallVector<Value> ret = cvtFp8ToFp32(loc, rewriter, v0, v1, fp8_format);
+
+  // Convert fp32 to fp16
+  ret[0] = cvtFp32ToFp16(loc, rewriter, ret[0]);
+  ret[1] = cvtFp32ToFp16(loc, rewriter, ret[1]);
+
+  return ret;
+}
+#endif
+
+#ifdef USE_ROCM
+static SmallVector<Value> Fp32_to_Fp8E5M2FNUZ(
+  Location loc, ConversionPatternRewriter &rewriter, 
+  const SmallVector<Value>& v) {
+  assert (v.size() == 2);
+  return cvtFp32ToFp8(loc, rewriter, v[0], v[1], "bf8");
+}
+
+static SmallVector<Value> Fp32_to_Fp8E4M3FNUZ(
+  Location loc, ConversionPatternRewriter &rewriter, 
+  const SmallVector<Value>& v) {
+  assert (v.size() == 2);
+  return cvtFp32ToFp8(loc, rewriter, v[0], v[1], "fp8");
+}
+
+static SmallVector<Value> Fp8E5M2FNUZ_to_Fp32(
+  Location loc, ConversionPatternRewriter &rewriter, 
+  const SmallVector<Value>& v) {
+  assert (v.size() == 2);
+  return cvtFp8ToFp32(loc, rewriter, v[0], v[1], "bf8");
+}
+
+static SmallVector<Value> Fp8E4M3FNUZ_to_Fp32(
+  Location loc, ConversionPatternRewriter &rewriter, 
+  const SmallVector<Value>& v) {
+  assert (v.size() == 2);
+  return cvtFp8ToFp32(loc, rewriter, v[0], v[1], "fp8");
 }
 #endif
 
@@ -187,7 +244,6 @@ ConverterT Fp16_to_Fp8E5M2FNUZ(int computeCapability) {
 }
 #endif
 
-
 #ifdef USE_ROCM
 static SmallVector<Value>
 Fp8E5M2_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
@@ -231,6 +287,55 @@ static const std::string Fp8E5M2_to_Fp16(bool hasNativeFP) {
 }
 #endif
 
+static Value convertBf16ToFp32(Location loc,
+                                ConversionPatternRewriter &rewriter,
+                                const Value &v) {
+#ifdef USE_ROCM
+  auto as_int16 = bitcast(v, i16_ty);
+  auto as_int32 = zext(i32_ty, as_int16);
+  auto shifted = shl(i32_ty, as_int32, i32_val(16));
+  return(bitcast(shifted, f32_ty));
+#else
+  PTXBuilder builder;
+  auto &cvt = *builder.create("cvt.f32.bf16");
+  auto res = builder.newOperand("=r");
+  auto operand = builder.newOperand(v, "h");
+  cvt(res, operand);
+  return builder.launch(rewriter, loc, f32_ty, false);
+#endif
+}
+
+static Value convertFp32ToBf16(Location loc,
+                                ConversionPatternRewriter &rewriter,
+                                const Value &v) {
+#ifdef USE_ROCM
+  auto as_uint32 = bitcast(v, i32_ty);
+  auto check_exponent = and_(i32_ty, xor_(i32_ty, as_uint32, i32_val(0xffffffff)), i32_val(0x7f800000));
+  auto exponent_not_all1s = icmp_ne(check_exponent, i32_val(0)); 
+  auto exponent_all1s = icmp_eq(check_exponent, i32_val(0)); 
+  auto rounded = add(i32_ty, i32_val(0x7fff),  and_(i32_ty, lshr(i32_ty, as_uint32, i32_val(16)), i32_val(1)) );
+  rounded = add(i32_ty, rounded, as_uint32);
+  auto res = select(exponent_not_all1s, rounded, as_uint32); 
+
+  auto preserve_nan = and_( i1_ty, exponent_all1s, icmp_ne(and_(i32_ty, as_uint32, i32_val(0xffff)), i32_val(0)) );
+  auto nan = or_(i32_ty, as_uint32, i32_val(0x10000));
+  res = select(preserve_nan, nan, res); 
+
+  auto shifted = lshr(i32_ty, res, i32_val(16));
+  auto truncated = trunc(i16_ty, shifted);
+  return truncated;
+#else
+  PTXBuilder builder;
+  auto &cvt = *builder.create("cvt.rn.bf16.f32");
+  auto res = builder.newOperand("=h");
+  auto operand = builder.newOperand(v, "r");
+  cvt(res, operand);
+  // TODO: This is a hack to get the right type. We should be able to invoke
+  // the type converter
+  return builder.launch(rewriter, loc, i16_ty, false);
+#endif
+}
+
 #ifdef USE_ROCM
 static Value Fp8E5M2FNUZ_to_Fp16_oneValue(
   Location loc, ConversionPatternRewriter &rewriter, Value v) {
@@ -269,10 +374,10 @@ static Value Fp8E5M2FNUZ_to_Fp16_oneValue(
 static SmallVector<Value>
 Fp8E5M2FNUZ_to_Fp16_SW(Location loc, ConversionPatternRewriter &rewriter,
                    const SmallVector<Value> &v) {
-  SmallVector<Value> result(2);
-  result[0] = Fp8E5M2FNUZ_to_Fp16_oneValue(loc, rewriter, v[0]);
-  result[1] = Fp8E5M2FNUZ_to_Fp16_oneValue(loc, rewriter, v[1]);
-  return result;
+  SmallVector<Value> res(2);
+  res[0] = Fp8E5M2FNUZ_to_Fp16_oneValue(loc, rewriter, v[0]);
+  res[1] = Fp8E5M2FNUZ_to_Fp16_oneValue(loc, rewriter, v[1]);
+  return res;
 }
 
 static SmallVector<Value>
@@ -332,7 +437,7 @@ Fp8E5M2_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
 static const std::string Fp8E5M2_to_Bf16(bool hasNativeFP) {
   std::string ret;
   if (!hasNativeFP) {
-        ret = "{                                        \n"
+    ret = "{                                        \n"
           ".reg .b32 a<2>, b<2>, c<4>, d<4>, e112;  \n" // if input = 0xf1f2f3f4
           "mov.u32 e112, 0x77800000;                \n"
           "prmt.b32 a0, 0, $2, 0x5140;              \n" // a0 = 0xf300f400
@@ -357,16 +462,23 @@ static const std::string Fp8E5M2_to_Bf16(bool hasNativeFP) {
           "lop3.b32 $1, b1, 0x80008000, a1, 0xf8;   \n" // (restore sign)
           "}";
   } else {
-    ret = "{                                       \n"
-          ".reg .b32 a;                            \n"
-          ".reg .f16 a<2>;                         \n"
-          ".reg .b16 b<2>;                         \n"
-          "cvt.rn.f16x2.e5m2x2 a, $1;              \n"
-          "mov.b32 {a0, a1}, a;                    \n"
-          "cvt.bf16.f16 b0, a0;                    \n"
-          "cvt.bf16.f16 b1, a1;                    \n"
-          "mov.b32 $0, {b0, b1};                   \n"
-          "}";
+    ret =
+        "{                                       \n"
+        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
+        ".reg .b32 e112;                        \n"
+        "mov.u32 e112, 0x77807780;              \n" // 2**112 represented as
+                                                    // bf16x2
+        "prmt.b32 a0, 0, $2, 0x5140;            \n" // a0 = 0xf300f400
+        "prmt.b32 a1, 0, $2, 0x7362;            \n" // a1 = 0xf100f200
+        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
+        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
+        "shr.b32  b0, b0, 3;                    \n" // b0 >>= 3
+        "shr.b32  b1, b1, 3;                    \n" // shift into bf16 position
+        "lop3.b32 b0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
+        "lop3.b32 b1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+        "mul.rn.bf16x2 $0, b0, e112;            \n" // b0.exp += 2**7-2**4
+        "mul.rn.bf16x2 $1, b1, e112;            \n" // exponent compensate = 112
+        "}";
   }
   return ret;
 }
@@ -492,12 +604,59 @@ static const std::string Bf16_to_Fp8E5M2(bool hasNativeFP) {
           "mov.b32 {a0, a1}, $1;                   \n"
           "cvt.f32.bf16 b0, a0;                    \n"
           "cvt.f32.bf16 b1, a1;                    \n"
-          "cvt.rn.satfinite.e5m2x2.f32 $0, b0, b1; \n"
+          "cvt.rn.satfinite.e5m2x2.f32 $0, b1, b0; \n"
           "}";
   }
   return ret;
 }
 #endif
+
+// ROCM type conversion between fp8 and bf16
+#ifdef USE_ROCM
+
+// fp8e4m3fnuz to bf16
+static SmallVector<Value>
+Fp8E4M3FNUZ_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
+                   const SmallVector<Value> &v) {
+  assert(v.size() == 2);
+  auto ret = cvtFp8ToFp32(loc, rewriter, v[0], v[1], "fp8");
+  ret[0] = convertFp32ToBf16(loc, rewriter, ret[0]);
+  ret[1] = convertFp32ToBf16(loc, rewriter, ret[1]);
+  return ret;
+}
+
+// bf16 to fp8e4m3fnuz
+static SmallVector<Value>
+Bf16_to_Fp8E4M3FNUZ(Location loc, ConversionPatternRewriter &rewriter,
+                   const SmallVector<Value> &v) {
+  assert(v.size() == 2);
+  auto v0 = convertBf16ToFp32(loc, rewriter, v[0]);
+  auto v1 = convertBf16ToFp32(loc, rewriter, v[1]);
+  return cvtFp32ToFp8(loc, rewriter, v0, v1, "fp8");
+}
+
+// fp8e5m2fnuz to bf16
+static SmallVector<Value>
+Fp8E5M2FNUZ_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
+                   const SmallVector<Value> &v) {
+  assert(v.size() == 2);
+  auto ret = cvtFp8ToFp32(loc, rewriter, v[0], v[1], "bf8");
+  ret[0] = convertFp32ToBf16(loc, rewriter, ret[0]);
+  ret[1] = convertFp32ToBf16(loc, rewriter, ret[1]);
+  return ret;
+}
+
+// bf16 to fp8e5m2fnuz
+static SmallVector<Value>
+Bf16_to_Fp8E5M2FNUZ(Location loc, ConversionPatternRewriter &rewriter,
+                   const SmallVector<Value> &v) {
+  assert(v.size() == 2);
+  auto v0 = convertBf16ToFp32(loc, rewriter, v[0]);
+  auto v1 = convertBf16ToFp32(loc, rewriter, v[1]);
+  return cvtFp32ToFp8(loc, rewriter, v0, v1, "bf8");
+}
+#endif
+
 /* ----- FP8E4M3B15 ------ */
 // This data-type is a variant of the standard FP8E4M3 format.
 // It was designed for fast software conversion to FP16 on
@@ -745,7 +904,6 @@ static const std::string Fp16_to_Fp8E4M3B15x4 =
 // Note: when handled by software, this format
 // does not handle denormals and has
 // more than a single NaN values.
-
 #ifdef USE_ROCM
 static Value Fp8E4M3FNUZ_to_Fp16_oneValue(
   Location loc, ConversionPatternRewriter &rewriter, Value v) {
@@ -1058,7 +1216,7 @@ static const std::string Bf16_to_Fp8E4M3Nv =
     "mov.b32 {a0, a1}, $1;                   \n"
     "cvt.f32.bf16 b0, a0;                    \n"
     "cvt.f32.bf16 b1, a1;                    \n"
-    "cvt.rn.satfinite.e4m3x2.f32 $0, b0, b1; \n"
+    "cvt.rn.satfinite.e4m3x2.f32 $0, b1, b0; \n"
     "}";
 
 /* ----- Packed integer to BF16 ------ */
@@ -1312,8 +1470,118 @@ public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
   explicit ElementwiseOpConversionBase(
-      TritonGPUToLLVMTypeConverter &typeConverter, PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
+      TritonGPUToLLVMTypeConverter &typeConverter,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit),
+        axisAnalysisPass(axisAnalysisPass) {}
+
+  // Try to deduplicate the resultVals based on the
+  // constancy properties of the result discovered by
+  // the axis analysis pass. If possible, redundant
+  // computation is eliminated.
+  SmallVector<Value> maybeDeduplicate(SourceOp op,
+                                      SmallVector<Value> resultVals) const {
+    if (!isMemoryEffectFree(op))
+      // the op has side effects: can't dedup
+      return resultVals;
+    SmallVector<Value> results = op->getResults();
+    if (results.size() == 0 || results.size() > 1)
+      // there must be exactly 1 result
+      return resultVals;
+    Value result = results[0];
+    Type type = result.getType();
+    if (!type)
+      return resultVals;
+    RankedTensorType rtType = type.dyn_cast<RankedTensorType>();
+    if (!rtType)
+      // the result must be a tensor
+      return resultVals;
+    Attribute encoding = rtType.getEncoding();
+    if (!encoding)
+      // encoding not available
+      return resultVals;
+    if (!encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>() &&
+        !encoding.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
+      // TODO: constraining the ecndoing type here is necessary
+      // for avoiding crashes in the triton::gpu::getElemsPerThread
+      // call below happening in the test_core::test_fp8_dot_acc
+      return resultVals;
+    }
+
+    SmallVector<unsigned> elemsPerThread =
+        triton::gpu::getElemsPerThread(rtType);
+    int rank = elemsPerThread.size();
+    if (product<unsigned>(elemsPerThread) != resultVals.size())
+      return resultVals;
+    AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(result);
+    if (!axisInfo)
+      // axis info (e.g., constancy) not available
+      return resultVals;
+    SmallVector<unsigned> sizePerThread =
+        triton::gpu::getSizePerThread(encoding);
+    if (rank != sizePerThread.size())
+      return resultVals;
+
+    SmallVector<int64_t> constancy = axisInfo->getConstancy();
+    if (rank != constancy.size())
+      return resultVals;
+    bool hasConstancy = false;
+    for (int i = 0; i < rank; ++i) {
+      if (constancy[i] > sizePerThread[i]) {
+        if (constancy[i] % sizePerThread[i] != 0)
+          // constancy is not evenly covered by sizePerThread
+          return resultVals;
+        // can't move the values across different
+        // "sizePerThread"-sized blocks
+        constancy[i] = sizePerThread[i];
+      }
+      if (elemsPerThread[i] < 1 || constancy[i] < 1)
+        return resultVals;
+      if (!(elemsPerThread[i] % constancy[i] == 0 ||
+            constancy[i] % elemsPerThread[i] == 0))
+        // either the constancy along each dimension must fit
+        // into the elemsPerThread or the other way around
+        return resultVals;
+      if (constancy[i] > 1)
+        hasConstancy = true;
+    }
+    if (!hasConstancy)
+      // nothing to deduplicate
+      return resultVals;
+
+    if (rank > 1) {
+      // reorder the shape and constancy vectors by the axis order:
+      // from the fastest-changing to the smallest-changing axis
+      SmallVector<unsigned> order = triton::gpu::getOrder(encoding);
+      if (rank != order.size())
+        return resultVals;
+      ArrayRef<unsigned> orderRef(order);
+      elemsPerThread = reorder(ArrayRef<unsigned>(elemsPerThread), orderRef);
+      constancy = reorder(ArrayRef<int64_t>(constancy), orderRef);
+    }
+
+    SmallVector<unsigned> strides(rank, 1);
+    for (int i = 1; i < rank; ++i) {
+      strides[i] = strides[i - 1] * elemsPerThread[i - 1];
+    }
+    SmallVector<Value> dedupResultVals;
+    dedupResultVals.reserve(resultVals.size());
+    for (int i = 0; i < resultVals.size(); ++i) {
+      // each coordinate of the orig_idx is "coarsened" using the
+      // constancy along this dimension: the resulting dedup_idx
+      // points to the reused value in the original resultsVal
+      int orig_idx = i;
+      int dedup_idx = 0;
+      for (int j = 0; j < rank; ++j) {
+        int coord_j = orig_idx % elemsPerThread[j];
+        dedup_idx += (coord_j / constancy[j] * constancy[j]) * strides[j];
+        orig_idx /= elemsPerThread[j];
+      }
+      dedupResultVals.push_back(resultVals[dedup_idx]);
+    }
+
+    return dedupResultVals;
+  }
 
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
@@ -1356,6 +1624,7 @@ public:
       auto argTy = op->getOperand(0).getType();
       resultVals = reorderValues(resultVals, argTy, resultTy);
     }
+    resultVals = maybeDeduplicate(op, resultVals);
     resultVals =
         packI32(resultVals, resultTy, rewriter, loc, this->getTypeConverter());
     resultVals = this->getTypeConverter()->packMfmaOperand(resultVals, resultTy, rewriter, loc);
@@ -1366,6 +1635,9 @@ public:
 
     return success();
   }
+
+protected:
+  ModuleAxisInfoAnalysis &axisAnalysisPass;
 
 private:
   int computeCapability;
@@ -1398,27 +1670,10 @@ struct FpToFpOpConversion
       triton::FpToFpOp, FpToFpOpConversion>::ElementwiseOpConversionBase;
 
   explicit FpToFpOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                              ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability, PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, benefit),
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
         computeCapability(computeCapability) {}
-
-  static Value convertBf16ToFp32(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v) {
-#ifdef USE_ROCM
-    auto as_int16 = bitcast(v, i16_ty);
-    auto as_int32 = zext(i32_ty, as_int16);
-    auto shifted = shl(i32_ty, as_int32, i32_val(16));
-    return(bitcast(shifted, f32_ty));
-#else
-    PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.f32.bf16");
-    auto res = builder.newOperand("=r");
-    auto operand = builder.newOperand(v, "h");
-    cvt(res, operand);
-    return builder.launch(rewriter, loc, f32_ty, false);
-#endif
-  }
 
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
@@ -1435,45 +1690,14 @@ struct FpToFpOpConversion
 #endif
   }
 
-  static Value convertFp32ToBf16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v) {
-#ifdef USE_ROCM
-    auto as_uint32 = bitcast(v, i32_ty);
-    auto check_exponent = and_(i32_ty, xor_(i32_ty, as_uint32, i32_val(0xffffffff)), i32_val(0x7f800000));
-    auto exponent_not_all1s = icmp_ne(check_exponent, i32_val(0)); 
-    auto exponent_all1s = icmp_eq(check_exponent, i32_val(0)); 
-    auto rounded = add(i32_ty, i32_val(0x7fff),  and_(i32_ty, lshr(i32_ty, as_uint32, i32_val(16)), i32_val(1)) );
-    rounded = add(i32_ty, rounded, as_uint32);
-    auto res = select(exponent_not_all1s, rounded, as_uint32); 
-
-    auto preserve_nan = and_( i1_ty, exponent_all1s, icmp_ne(and_(i32_ty, as_uint32, i32_val(0xffff)), i32_val(0)) );
-    auto nan = or_(i32_ty, as_uint32, i32_val(0x10000));
-    res = select(preserve_nan, nan, res); 
-
-    auto shifted = lshr(i32_ty, res, i32_val(16));
-    auto truncated = trunc(i16_ty, shifted);
-    return truncated;
-#else
-    PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.rn.bf16.f32");
-    auto res = builder.newOperand("=h");
-    auto operand = builder.newOperand(v, "r");
-    cvt(res, operand);
-    // TODO: This is a hack to get the right type. We should be able to invoke
-    // the type converter
-    return builder.launch(rewriter, loc, i16_ty, false);
-#endif
-  }
-
-  static Value convertFp32ToFp16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v) {
+  static Value convertFp32ToFp16NZ(Location loc,
+                                   ConversionPatternRewriter &rewriter,
+                                   const Value &v) {
 #ifdef USE_ROCM
     return cvtFp32ToFp16(loc, rewriter, v);
 #else
     PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.rn.f16.f32");
+    auto &cvt = *builder.create("cvt.rz.f16.f32");
     auto res = builder.newOperand("=h");
     auto operand = builder.newOperand(v, "r");
     cvt(res, operand);
@@ -1528,6 +1752,8 @@ struct FpToFpOpConversion
       	// F8 -> BF16
 #ifdef USE_ROCM
 	      {{F8E5M2TyID, BF16TyID}, Fp8E5M2_to_Bf16},
+	      {{F8E5M2FNUZTyID, BF16TyID}, Fp8E5M2FNUZ_to_Bf16},
+	      {{F8E4M3FNUZTyID, BF16TyID}, Fp8E4M3FNUZ_to_Bf16},
 #else
 	      {{F8E5M2TyID, BF16TyID}, Fp8E5M2_to_Bf16(computeCapability >= 90)},
         {{F8E4M3TyID, BF16TyID}, Fp8E4M3Nv_to_Bf16},
@@ -1536,10 +1762,20 @@ struct FpToFpOpConversion
      	  // BF16 -> F8
 #ifdef USE_ROCM
         {{BF16TyID, F8E5M2TyID}, Bf16_to_Fp8E5M2},
+        {{BF16TyID, F8E5M2FNUZTyID}, Bf16_to_Fp8E5M2FNUZ},
+        {{BF16TyID, F8E4M3FNUZTyID}, Bf16_to_Fp8E4M3FNUZ},
 #else
         {{BF16TyID, F8E5M2TyID}, Bf16_to_Fp8E5M2(computeCapability >= 90)},
         {{BF16TyID, F8E4M3TyID}, Bf16_to_Fp8E4M3Nv},
-        // F32 -> F8
+#endif
+
+        // F32 <-> F8
+#ifdef USE_ROCM
+        {{F32TyID, F8E4M3FNUZTyID}, Fp32_to_Fp8E4M3FNUZ},
+        {{F32TyID, F8E5M2FNUZTyID}, Fp32_to_Fp8E5M2FNUZ},
+        {{F8E4M3FNUZTyID, F32TyID}, Fp8E4M3FNUZ_to_Fp32},
+        {{F8E5M2FNUZTyID, F32TyID}, Fp8E5M2FNUZ_to_Fp32},
+#else
         {{F32TyID, F8E4M3TyID}, Fp32_to_Fp8E4M3Nv},
         {{F32TyID, F8E5M2TyID}, Fp32_to_Fp8E5M2},
 #endif
@@ -1557,7 +1793,7 @@ struct FpToFpOpConversion
     int inVecWidthBits = 32;
     int outVecWidthBits = 32;
     if (srcTy.isFloat8E4M3FNUZ() ||
-        (computeCapability >= 90 && srcTy.isFloat8E5M2())) {
+        (computeCapability >= 90 && srcTy.isFloat8E5M2() && dstTy.isF16())) {
       inVecWidthBits = 16;
       outVecWidthBits = 32;
     }
@@ -1596,36 +1832,48 @@ struct FpToFpOpConversion
         dstElementType.isFloat8E5M2FNUZ())
 #else
         (computeCapability >= 90 &&
-        (srcElementType.isFloat8E5M2() || dstElementType.isFloat8E5M2())))
+         ((srcElementType.isFloat8E5M2() &&
+           (dstElementType.isF16() || dstElementType.isF32())) ||
+          dstElementType.isFloat8E5M2()))) {
 #endif
     {
       numElements = 2;
     }
     bool useFP16IntermediateSrc =
 #ifdef USE_ROCM
-        srcElementType.isF32();
+        srcElementType.isF32() &&
+        !(computeCapability >= 300 &&
+          (dstElementType.isFloat8E4M3FNUZ() || dstElementType.isFloat8E5M2FNUZ()));
 #else
         srcElementType.isF32() &&
         !(computeCapability >= 90 &&
           (dstElementType.isFloat8E4M3FNUZ() || dstElementType.isFloat8E5M2()));
 #endif
-    bool isDstFP32 = dstElementType.isF32();
-    auto cvtFunc =
-        getConversionFunc(useFP16IntermediateSrc ? f16_ty : srcElementType,
-                          isDstFP32 ? f16_ty : dstElementType);
+
+    bool useFP16IntermediateDst = 
+#ifdef USE_ROCM
+        dstElementType.isF32() &&
+        !(computeCapability >= 300 &&
+          (srcElementType.isFloat8E4M3FNUZ() || srcElementType.isFloat8E5M2FNUZ()));
+#else
+        dstElementType.isF32();
+#endif
+
+    Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
+    Type dstType = useFP16IntermediateDst ? f16_ty : dstElementType;
+    auto cvtFunc = getConversionFunc(srcType, dstType);
     SmallVector<Value> inVals;
     for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
       inVals.push_back(operands[i][0]);
     }
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
-        v = convertFp32ToFp16(loc, rewriter, v);
-    inVals.resize(numElements,
-                  undef(typeConverter->convertType(srcElementType)));
+        v = convertFp32ToFp16NZ(loc, rewriter, v);
+    inVals.resize(numElements, undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
     outVals.resize(std::min(numElements, operands.size()));
-    if (isDstFP32)
+    if (useFP16IntermediateDst)
       for (Value &v : outVals)
         v = convertFp16ToFp32(loc, rewriter, v);
     // Pack values
@@ -1640,25 +1888,24 @@ template <typename OP>
 Value EmitDualBF16ElementwiseOp(Location loc,
                                 ConversionPatternRewriter &rewriter,
                                 MultipleOperandsRange operands) {
-  auto v0 = FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0][0]);
-  auto v1 = FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0][1]);
+  auto v0 = convertBf16ToFp32(loc, rewriter, operands[0][0]);
+  auto v1 = convertBf16ToFp32(loc, rewriter, operands[0][1]);
   auto result = rewriter.create<OP>(loc, f32_ty, v0, v1);
-  return FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, result);
+  return convertFp32ToBf16(loc, rewriter, result);
 }
 
 struct CmpIOpConversion
-    : public ElementwiseOpConversionBase<triton::gpu::CmpIOp,
-                                         CmpIOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<triton::gpu::CmpIOp, CmpIOpConversion>;
+    : public ElementwiseOpConversionBase<arith::CmpIOp, CmpIOpConversion> {
+  using Base = ElementwiseOpConversionBase<arith::CmpIOp, CmpIOpConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
   // An interface to support variant DestOp builder.
-  SmallVector<LLVM::ICmpOp>
-  createDestOps(triton::gpu::CmpIOp op, OpAdaptor adaptor,
-                ConversionPatternRewriter &rewriter, Type elemTy,
-                MultipleOperandsRange operands, Location loc) const {
+  SmallVector<LLVM::ICmpOp> createDestOps(arith::CmpIOp op, OpAdaptor adaptor,
+                                          ConversionPatternRewriter &rewriter,
+                                          Type elemTy,
+                                          MultipleOperandsRange operands,
+                                          Location loc) const {
     return {rewriter.create<LLVM::ICmpOp>(
         loc, elemTy, ArithCmpIPredicateToLLVM(op.getPredicate()),
         operands[0][0], operands[0][1])};
@@ -1689,16 +1936,14 @@ struct CmpIOpConversion
 };
 
 struct CmpFOpConversion
-    : public ElementwiseOpConversionBase<triton::gpu::CmpFOp,
-                                         CmpFOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<triton::gpu::CmpFOp, CmpFOpConversion>;
+    : public ElementwiseOpConversionBase<arith::CmpFOp, CmpFOpConversion> {
+  using Base = ElementwiseOpConversionBase<arith::CmpFOp, CmpFOpConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
   // An interface to support variant DestOp builder.
   static SmallVector<LLVM::FCmpOp>
-  createDestOps(triton::gpu::CmpFOp op, OpAdaptor adaptor,
+  createDestOps(arith::CmpFOp op, OpAdaptor adaptor,
                 ConversionPatternRewriter &rewriter, Type elemTy,
                 MultipleOperandsRange operands, Location loc) {
     return {rewriter.create<LLVM::FCmpOp>(
@@ -1890,7 +2135,7 @@ struct FDivOpConversion
     } else if (64 == bitwidth) {
       fdiv.o("rn").o("f64");
     } else {
-      assert(0 && bitwidth && "not supported");
+      llvm::report_fatal_error("Unsupported bitwidth");
     }
 
     auto res = ptxBuilder.newOperand(bitwidth == 32 ? "=r" : "=l");
@@ -2067,7 +2312,7 @@ struct SIToFPOpConversion
       return outVals;
     } else if (outElemTy.isBF16()) {
       auto value = rewriter.create<LLVM::SIToFPOp>(loc, f32_ty, operands[0][0]);
-      return {FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, value)};
+      return {convertFp32ToBf16(loc, rewriter, value)};
     } else {
       return {rewriter.create<LLVM::SIToFPOp>(loc, elemTy, operands[0][0])};
     }
@@ -2088,7 +2333,7 @@ struct FPToSIOpConversion
     auto inElemTy = getElementType(op.getIn());
     if (inElemTy.isBF16()) {
       auto value =
-          FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0][0]);
+          convertBf16ToFp32(loc, rewriter, operands[0][0]);
       return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, value)};
     } else {
       return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, operands[0][0])};
@@ -2111,8 +2356,7 @@ struct ExtFOpConversion
     if (inElemTy.isBF16()) {
       auto outElemTy = getElementType(op.getOut());
       assert(outElemTy.isF32() && "unsupported conversion");
-      return {
-          FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0][0])};
+      return {convertBf16ToFp32(loc, rewriter, operands[0][0])};
     } else {
       return {rewriter.create<LLVM::FPExtOp>(loc, elemTy, operands[0][0])};
     }
@@ -2134,8 +2378,7 @@ struct TruncFOpConversion
     if (outElemTy.isBF16()) {
       auto inElemTy = getElementType(op.getIn());
       assert(inElemTy.isF32() && "unsupported conversion");
-      return {
-          FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, operands[0][0])};
+      return {convertFp32ToBf16(loc, rewriter, operands[0][0])};
     } else {
       return {rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0][0])};
     }
@@ -2249,20 +2492,40 @@ struct IndexCastOpLowering
   }
 };
 
+struct SelectOpConversion
+    : ElementwiseOpConversionBase<mlir::arith::SelectOp, SelectOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::arith::SelectOp, SelectOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(mlir::arith::SelectOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    std::array<Value, 3> llvmOperands;
+    if (operands[0].size() == 2) {
+      // Case of scalar condition with tensor operands.
+      assert(op.getCondition().getType().isInteger(1));
+      llvmOperands = {adaptor.getCondition(), operands[0][0], operands[0][1]};
+    } else {
+      llvmOperands = {operands[0][0], operands[0][1], operands[0][2]};
+    }
+    return {rewriter.create<LLVM::SelectOp>(
+        loc, llvmOperands[1].getType(), llvmOperands,
+        adaptor.getAttributes().getValue())};
+  }
+};
+
 void populateElementwiseOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     int computeCapability, PatternBenefit benefit) {
-#define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
-  POPULATE_TERNARY_OP(triton::gpu::SelectOp, LLVM::SelectOp)
-  POPULATE_TERNARY_OP(arith::SelectOp, LLVM::SelectOp)
-#undef POPULATE_TERNARY_OP
-
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+      typeConverter, axisInfoAnalysis, benefit);
   POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
   POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
   POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
@@ -2286,7 +2549,8 @@ void populateElementwiseOpToLLVMPatterns(
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+      typeConverter, axisInfoAnalysis, benefit);
   POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
   POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
   POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
@@ -2302,29 +2566,33 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
-  patterns.add<AbsIOpConversion>(typeConverter, benefit);
-  patterns.add<AbsFOpConversion>(typeConverter, benefit);
-  patterns.add<CmpIOpConversion>(typeConverter, benefit);
-  patterns.add<CmpFOpConversion>(typeConverter, benefit);
+  patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<CmpIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<CmpFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<FDivOpConversion>(typeConverter, benefit);
-  patterns.add<FSubOpConversion>(typeConverter, benefit);
-  patterns.add<FAddOpConversion>(typeConverter, benefit);
-  patterns.add<FMulOpConversion>(typeConverter, benefit);
+  patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<ExtFOpConversion>(typeConverter, benefit);
-  patterns.add<TruncFOpConversion>(typeConverter, benefit);
-  patterns.add<FPToSIOpConversion>(typeConverter, benefit);
-  patterns.add<SIToFPOpConversion>(typeConverter, benefit);
-  patterns.add<IndexCastOpLowering>(typeConverter, benefit);
+  patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<IndexCastOpLowering>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<FpToFpOpConversion>(typeConverter, computeCapability, benefit);
+  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
+                                   computeCapability, benefit);
 
-  patterns.add<ExternElementwiseOpConversion>(typeConverter, benefit);
-  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
+  patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
+                                              benefit);
+  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter,
+                                                 axisInfoAnalysis, benefit);
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
-  patterns.add<ExpOpConversionApprox>(typeConverter, benefit);
+  patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
 }

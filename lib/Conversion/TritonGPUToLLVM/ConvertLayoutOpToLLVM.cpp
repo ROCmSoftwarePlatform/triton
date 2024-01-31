@@ -676,7 +676,8 @@ private:
                          inNumCTAsEachRep, multiDimRepId, inVec, paddedRepShape,
                          origRepShape, outOrd, vals, smemBase);
       } else {
-        assert(0 && "ConvertLayout with input layout not implemented");
+        llvm::report_fatal_error(
+            "ConvertLayout with input layout not implemented");
         return failure();
       }
 
@@ -713,7 +714,8 @@ private:
                          paddedRepShape, origRepShape, outOrd, outVals,
                          smemBase);
       } else {
-        assert(0 && "ConvertLayout with output layout not implemented");
+        llvm::report_fatal_error(
+            "ConvertLayout with output layout not implemented");
         return failure();
       }
     }
@@ -884,7 +886,7 @@ private:
     return success();
   }
 
-  // shared -> mma_operand
+  // shared -> mma_operand/mfma_operand
   LogicalResult
   lowerSharedToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                           ConversionPatternRewriter &rewriter) const {
@@ -1060,7 +1062,7 @@ private:
   }
 
 #ifdef USE_ROCM
-  // shared -> dot_operand if the result layout is mma
+  // shared -> dot_operand if the result layout is mfma
   Value lowerSharedToDotOperandMFMA(
       triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter, const MfmaEncodingAttr &mfmaLayout,
@@ -1159,7 +1161,7 @@ private:
     }
     return res;
   }
-}; // namespace triton::gpu::ConvertLayoutOp>
+};
 
 void populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,

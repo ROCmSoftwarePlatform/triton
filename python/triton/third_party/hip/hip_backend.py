@@ -8,8 +8,8 @@ from typing import Any, Tuple
 
 
 from triton.common import _build
-from triton.common.backend import BaseBackend, register_backend
-from triton.compiler.make_launcher import get_cache_manager, version_key, make_so_cache_key
+from triton.common.backend import BaseBackend, register_backend, compute_core_version_key
+from triton.compiler.make_launcher import get_cache_manager, make_so_cache_key
 from triton.compiler.utils import generate_cu_signature
 from triton.runtime import jit
 from triton.runtime.driver import HIPDriver
@@ -25,7 +25,7 @@ else:
 
 def make_stub(name, signature, constants, ids, **kwargs):
     # name of files that are cached
-    so_cache_key = make_so_cache_key(version_key(), signature, constants, ids, **kwargs)
+    so_cache_key = make_so_cache_key(compute_core_version_key(), signature, constants, ids, **kwargs)
     so_cache_manager = get_cache_manager(so_cache_key)
     so_name = f"{name}.so"
     # retrieve stub from cache if it exists
@@ -112,10 +112,13 @@ static inline void gpuAssert(hipError_t code, const char *file, int line)
    if (code != HIP_SUCCESS)
    {{
       const char* prefix = "Triton Error [HIP]: ";
-       const char* str = hipGetErrorString(code);
+      const char* str = hipGetErrorString(code);
       char err[1024] = {{0}};
       snprintf(err, 1024, "%s Code: %d, Messsage: %s", prefix, code, str );
+      PyGILState_STATE gil_state;
+      gil_state = PyGILState_Ensure();
       PyErr_SetString(PyExc_RuntimeError, err);
+      PyGILState_Release(gil_state);
    }}
 }}
 
@@ -201,15 +204,14 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
   // raise exception asap
   {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+  Py_BEGIN_ALLOW_THREADS;
   _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function{', ' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items()) if len(signature) > 0 else ''});
+  Py_END_ALLOW_THREADS;
 
   if (launch_exit_hook != Py_None) {{
     PyObject_CallObject(launch_exit_hook, args);
   }}
 
-  if(PyErr_Occurred()) {{
-    return NULL;
-  }}
   // return None
   Py_INCREF(Py_None);
   return Py_None;
@@ -298,16 +300,14 @@ def gpu_matrix_core_version() -> int:
 
 
 def get_amdgpu_arch_fulldetails():
-    # print("get_amdgpu_arch_fulldetails")
     """
-    get the amdgpu fulll ISA details for compiling:
+    get the amdgpu full ISA details for compiling:
     i.e., arch_triple: amdgcn-amd-amdhsa; arch_name: gfx906; arch_features: sramecc+:xnack-
     """
     try:
         # TODO: package rocm.cc with Triton
-        rocm_path_dir = os.getenv("ROCM_PATH", default="/opt/rocm")
-        rocminfo = subprocess.check_output(rocm_path_dir + '/bin/rocminfo').decode()
-        gfx_arch_details = re.search('amd.*', rocminfo).group(0).strip().split('--')
+        arch_info = _triton.get_arch_info()
+        gfx_arch_details = re.search('amd.*', arch_info).group(0).strip().split('--')
         arch_triple = gfx_arch_details[0]
         arch_name_features = gfx_arch_details[1].split(':')
         arch_name = arch_name_features[0]
@@ -317,13 +317,13 @@ def get_amdgpu_arch_fulldetails():
         gfx_arch = os.environ.get('MI_GPU_ARCH', arch_name)
         if gfx_arch is None:
             raise RuntimeError('gfx_arch is None (not specified)')
-
         mat_core_ver = gpu_matrix_core_version()
         capability = gpu_matrix_core_version() * 100
 
         return {"gfx_triple": arch_triple, "gfx_arch": gfx_arch, "gfx_features": arch_features,\
                  "capability": capability, "matrix_core_version": mat_core_ver}
-    except BaseException:
+    except BaseException as e:
+        print("Error: Attempting to get amgpu ISA Details {}".format(e))
         return None
 
 
@@ -414,10 +414,20 @@ def llir_to_amdgcn_and_hsaco(mod: Any, gfx_arch: str, gfx_triple: str, gfx_featu
 
 
 class HIPBackend(BaseBackend):
+    _cached_rocm_version_key = None
+
     def __init__(self, device_type: str) -> None:
         super(HIPBackend, self).__init__(device_type)
         self.driver = HIPDriver()
         self.stub_so_path = ""
+
+    def get_version_key(self):
+        if self._cached_rocm_version_key is None:
+            key = compute_core_version_key()
+            ### TODO: Append ROCM version here if needed
+
+            self._cached_rocm_version_key = key
+        return self._cached_rocm_version_key
 
     def is_standalone(self):
         return not HIP_BACKEND_MODE
@@ -439,10 +449,11 @@ class HIPBackend(BaseBackend):
             optimize_epilogue = other["optimize_epilogue"]
             tma_infos = other["tma_infos"]
             waves_per_eu = other["waves_per_eu"]
+            slice_k_tile = other["slice_k_tile"]
             matrix_instr_nonkdim = other["matrix_instr_nonkdim"]
 
             stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
-                               lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, warp_size, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue, matrix_instr_nonkdim))
+                               lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, warp_size, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue, matrix_instr_nonkdim, slice_k_tile))
             stages["llir"] = (lambda path: Path(path).read_text(),
                               lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos, waves_per_eu))
 
@@ -500,7 +511,6 @@ class HIPBackend(BaseBackend):
         return arch
 
     def make_launcher_stub(self, name, signature, constants, ids):
-        # print("HIPBackend.make_launcher_stub")
         self.stub_so_path = make_stub(name, signature, constants, ids)
         return self.stub_so_path
 

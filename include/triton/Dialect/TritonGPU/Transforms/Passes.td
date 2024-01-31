@@ -49,6 +49,26 @@ def TritonGPUStreamPipeline : Pass<"tritongpu-stream-pipeline", "mlir::ModuleOp"
                            "mlir::arith::ArithDialect"];
 }
 
+def TritonAMDGPUDotSlicing: Pass<"tritonamdgpu-dot-slicing", "mlir::ModuleOp"> {
+  let summary = "'DotOp' instruction slicing";
+
+  let description = [{
+    Slice 'DotOp' instruction into multiple smaller 'DotOp' instructions
+    in order to improve scheduling and latency hiding.
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUDotSlicingPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::arith::ArithDialect"];
+
+  let options = [
+    Option<"sliceKTile", "slice-k-tile",
+           "int32_t", /*default*/"0",
+           "slice size in k dimension">
+  ];
+}
+
 def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
   let summary = "prefetch";
 
@@ -99,12 +119,15 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
                            "mlir::triton::TritonDialect"];
 
   let options = [
-    Option<"matrixCoreVersion", "matrix-core-version",
-           "int32_t", /*default*/"0",
-           "device matrix core version">,
+    Option<"archGenerationName", "arch-generation-name",
+           "std::string", /*default=*/"std::string{}",
+           "GFX generation name of target device.">,
     Option<"matrixInstructionSize", "matrix-instruction-size",
            "int32_t", /*default*/"0",
-           "enforce matrix instruction MN size">
+           "enforce matrix instruction MN size">,
+    Option<"enableWmmaTransform", "enable-wmma-transform",
+           "bool", /*default*/"false",
+           "temporary option, required for lit tests only">
   ];
 }
 
@@ -160,6 +183,19 @@ def TritonGPUOptimizeEpilogue : Pass<"tritongpu-optimize-epilogue", "mlir::Modul
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
 
+}
+
+def TritonGPUOptimizeThreadLocality : Pass<"tritongpu-optimize-thread-locality", "mlir::ModuleOp"> {
+  let summary = "Reduce the cost of synchronization between threads in an SM";
+
+  let description = [{
+    Today, this optimizes reduction yielded by loop to be thread-local until after the loop completes.
+  }];
+
+  let constructor = "mlir::createTritonGPUOptimizeThreadLocalityPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
 }
 
 def TritonGPUReorderInstructions: Pass<"tritongpu-reorder-instructions", "mlir::ModuleOp"> {
