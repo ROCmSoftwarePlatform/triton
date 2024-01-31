@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 ## matmul stream-k implementation
 ## Credit goes to @pommedeterresautee
 ## See https://github.com/openai/triton/issues/1393
@@ -35,6 +34,7 @@ print(f"total SMs: {total_sm}")
 # Triton kernels
 # ---------------------------------------------------------------------------
 
+
 @triton.jit()
 def swizzle_tile(tile_id,
                  M, N, K,
@@ -63,83 +63,91 @@ def linear_tile(tile_id,
     return pid_m, pid_n
 
 @triton.jit()
-def streamk_gemm(
+def first_wave(
         A, B, C,
         M, N, K,
         stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
         total_full_tiles_streamk, total_partial_tiles_streamk, iters_per_tile,
-        total_tiles_streamk, total_programs_streamk, ACC_TYPE: tl.constexpr,
+        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, ACC_TYPE: tl.constexpr,
         GROUP_M: tl.constexpr,
-        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
 ):
     pid = tl.program_id(0)
+    start_iter = pid * total_full_tiles_streamk + tl.minimum(pid, total_partial_tiles_streamk)
+    last_iter = (pid + 1) * total_full_tiles_streamk + tl.minimum(pid + 1, total_partial_tiles_streamk)
 
-    # Determine whether we are in the first wave or full_tiles phase based on pid
-    is_first_wave = pid < total_programs_streamk and total_programs_streamk > 0
-
-    # Calculate starting and ending iterations for first wave
-    if not is_first_wave:
-        tile_id = tl.program_id(0) + total_tiles_streamk - total_programs_streamk
-        if GROUP_M > 0:
+    while start_iter < last_iter:
+        remainder = start_iter % iters_per_tile
+        end_iter = tl.minimum(start_iter + (iters_per_tile - remainder), last_iter)
+        # where are we in the grid
+        tile_id = start_iter // iters_per_tile
+        if GROUP_M  > 0:
             pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
         else:
             pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
 
-        # do matrix multiplication
         rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
         rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
         rk = tl.arange(0, BLOCK_K)
-        # pointers
-        A_BASE = A + rm[:, None] * stride_am + rk[None, :] * stride_ak
-        B_BASE = B + rk[:, None] * stride_bk + rn[None, :] * stride_bn
+        A_BASE = A + rm[:, None] * stride_am + rk[None, :] * stride_ak + BLOCK_K * stride_ak * remainder
+        B_BASE = B + rk[:, None] * stride_bk + rn[None, :] * stride_bn + BLOCK_K * stride_bk * remainder
         acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_TYPE)
-        for k in range(0, tl.cdiv(K, BLOCK_K)):
+
+        for current_iter in range(start_iter, end_iter):
             a = tl.load(A_BASE)
             b = tl.load(B_BASE)
             acc += tl.dot(a, b)
             A_BASE += BLOCK_K * stride_ak
             B_BASE += BLOCK_K * stride_bk
-     #   acc = acc.to(tl.float16)  # restore C.dtype.element_ty
-        # rematerialize rm and rn to save registers
- #       rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
- #       rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-        C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn
-        tl.store(C_, acc)
+
+        if remainder ==0 and end_iter % iters_per_tile ==0:
+            C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
+            tl.store(C_, acc)
+        else:
+            C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
+            tl.atomic_add(C_, acc)
+
+        start_iter = end_iter
+
+# similar to the reference matmul kernel
+@triton.jit()
+def full_tiles(
+        A, B, C,
+        M, N, K,
+        stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+        total_tiles_streamk,
+        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, ACC_TYPE: tl.constexpr,
+        GROUP_M: tl.constexpr,
+):
+    # first wave has done more tiles than there are SMs, we adjust pid
+    tile_id = tl.program_id(0) + total_tiles_streamk
+    if GROUP_M > 0:
+        pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
     else:
-       # start_iter = pid * total_full_tiles_streamk + tl.minimum(pid, total_partial_tiles_streamk)
-        start_iter = pid * total_full_tiles_streamk + tl.minimum(pid, total_partial_tiles_streamk)
-        last_iter = (pid + 1) * total_full_tiles_streamk + tl.minimum(pid + 1, total_partial_tiles_streamk)
-        while start_iter < last_iter:
-            remainder = start_iter % iters_per_tile
-            end_iter = tl.minimum(start_iter + (iters_per_tile - remainder), last_iter)
-            # where are we in the grid
-            tile_id = start_iter // iters_per_tile
-            if GROUP_M  > 0:
-                pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
-            else:
-                pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
+        pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
 
-            rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-            rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-            rk = tl.arange(0, BLOCK_K)
-            A_BASE = A + rm[:, None] * stride_am + rk[None, :] * stride_ak + BLOCK_K * stride_ak * remainder
-            B_BASE = B + rk[:, None] * stride_bk + rn[None, :] * stride_bn + BLOCK_K * stride_bk * remainder
-            acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_TYPE)
-            for current_iter in range(start_iter, end_iter):
-                a = tl.load(A_BASE)
-                b = tl.load(B_BASE)
-                acc += tl.dot(a, b)
-                A_BASE += BLOCK_K * stride_ak
-                B_BASE += BLOCK_K * stride_bk
+    # do matrix multiplication
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    rk = tl.arange(0, BLOCK_K)
+    # pointers
+    A = A + rm[:, None] * stride_am + rk[None, :] * stride_ak
+    B = B + rk[:, None] * stride_bk + rn[None, :] * stride_bn
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_TYPE)
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
+        a = tl.load(A)
+        b = tl.load(B)
+        acc += tl.dot(a, b)
+        A += BLOCK_K * stride_ak
+        B += BLOCK_K * stride_bk
+    acc = acc.to(tl.float16)  # restore C.dtype.element_ty
+    # rematerialize rm and rn to save registers
+#    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+#    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    C = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn
+    tl.store(C, acc)
 
-            if remainder ==0 and end_iter % iters_per_tile ==0:
-                C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
-                tl.store(C_, acc)
-            else:
-                C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
-                tl.atomic_add(C_, acc)
 
-            start_iter = end_iter
+
 # ---------------------------------------------------------------------------
 # Wrapper
 # ---------------------------------------------------------------------------
@@ -197,16 +205,13 @@ class matmul(torch.autograd.Function):
             print(f"{total_tiles_streamk=} + {total_blocking_tiles=} = {total_tiles=}")
             print(f"{total_programs_streamk=}")
             print(f"{total_blocking_tiles=}")
-            print(f"{total_full_tiles_streamk=}")
-            print(f"{total_partial_tiles_streamk=}")
             print(f"{iters_per_tile=}")
             print(f"{total_iters_streamk=}")
 
         # allocates output
         c = torch.zeros((M, N), device=device, dtype=a.dtype)
-        # allocates locks to sync work accross SMs
-        grids = total_programs_streamk + total_blocking_tiles
-        kk = streamk_gemm[(grids,)](
+
+        k1 = first_wave[(total_programs_streamk,)](
             a,
             b,
             c,
@@ -222,27 +227,49 @@ class matmul(torch.autograd.Function):
             total_full_tiles_streamk=total_full_tiles_streamk,
             total_partial_tiles_streamk=total_partial_tiles_streamk,
             iters_per_tile=iters_per_tile,
-            total_tiles_streamk=total_tiles_streamk,
-            total_programs_streamk= total_programs_streamk,
-            ACC_TYPE=ACC_TYPE,
-            GROUP_M=GROUP_M,
             BLOCK_M=BLK_M,
             BLOCK_N=BLK_N,
             BLOCK_K=BLK_K,
+            ACC_TYPE=ACC_TYPE,
+            GROUP_M=GROUP_M,
             num_stages=num_stages,
             num_warps=num_warps,
             waves_per_eu = waves_per_eu,
         )
         if matmul._debug:
-            print(f"{kk.n_regs} registers used, {kk.n_spills} spills")
-       #     print(kk.asm['ttgir'])
-       #     print(kk.asm['amdgcn'])
-
+            print(f"{k1.n_regs} registers used, {k1.n_spills} spills")
+        k2 = full_tiles[(total_blocking_tiles,)](
+            a,
+            b,
+            c,
+            M,
+            N,
+            K,
+            a.stride(0),
+            a.stride(1),
+            b.stride(0),
+            b.stride(1),
+            c.stride(0),
+            c.stride(1),
+            total_tiles_streamk=total_tiles_streamk,
+            BLOCK_M=BLK_M,
+            BLOCK_N=BLK_N,
+            BLOCK_K=BLK_K,
+            ACC_TYPE=ACC_TYPE,
+            GROUP_M=GROUP_M,
+            num_stages=num_stages,
+            num_warps=num_warps,
+            waves_per_eu = waves_per_eu,
+        )
+        if matmul._debug:
+            print(f"{k2.n_regs} registers used, {k2.n_spills} spills")
+ #           print(k2.asm['amdgcn'])
         return c
 
     @staticmethod
-    def forward(ctx, a: torch.Tensor, b: torch.Tensor, grid: int, BLK_M=128, BLK_N=128, BLK_K=32, two_tiles=True, num_stages=3, num_warps=4,  waves_per_eu = 2):
-        return matmul._call(a=a, b=b, total_programs_streamk=grid, BLK_M=BLK_M, BLK_N=BLK_N, BLK_K=BLK_K, two_tiles=two_tiles, num_warps=num_warps, num_stages=num_stages,  waves_per_eu = waves_per_eu)
+    def forward(ctx, a: torch.Tensor, b: torch.Tensor, grid: int, BLK_M=128, BLK_N=128, BLK_K=32, two_tiles=True, num_stages=3, num_warps=4, waves_per_eu = 2):
+        return matmul._call(a=a, b=b, total_programs_streamk=grid, BLK_M=BLK_M, BLK_N=BLK_N, BLK_K=BLK_K, two_tiles=two_tiles, num_warps=num_warps, num_stages=num_stages, waves_per_eu = waves_per_eu)
+
 
 # ---------------------------------------------------------------------------
 # Example and Benchmark
@@ -251,15 +278,18 @@ class matmul(torch.autograd.Function):
 perf = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
 
 m, n, k = 4864, 4096, 8256  # some problem size to test
-#m, n, k = 8192, 8192, 8192  # some problem size to test
+#m, n, k = 6912, 768, 256 # some problem size to test
+#m, n, k = 8192, 8192, 8192 # some problem size to test
 A = torch.randn(m, k, device="cuda", dtype=torch.float16)
 B = torch.randn(k, n, device="cuda", dtype=torch.float16)
-BLK_M = 256
-BLK_N = 128
+#A = torch.ones((m, k), device="cuda", dtype=torch.float16)
+#B = torch.ones((k, n), device="cuda", dtype=torch.float16)
+BLK_M = 128
+BLK_N = 256
 BLK_K = 32
-two_tiles = 'True'
-num_stages = 0
-num_warps = 8
+two_tiles='True'
+num_stages=0
+num_warps=4
 waves_per_eu = 0
 
 matmul.set_debug(True)
@@ -268,11 +298,9 @@ C = matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num
 matmul.set_debug(False)
 expected = A @ B
 
-#assert torch.allclose(C, expected, atol=1), f"max: {(C - expected).abs().max().item()}\n{C}\n{expected}"
-print("pass validation test")
+assert torch.allclose(C, expected, atol=1), f"max: {(C - expected).abs().max().item()}\n{C}\n{expected}"
 
 # for debugging, uncomment the following line
-# exit(0)
 
 triton_ms = triton.testing.do_bench(lambda: torch.matmul(A, B))
 print(f"PyTorch: {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
