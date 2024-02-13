@@ -1290,3 +1290,4 @@ def bench_varlen_flash_attention(
     return total_flops / ms * 1e-9
 
 bench_varlen_flash_attention.run(save_path=".", print_data=True)
+
