@@ -96,9 +96,8 @@ class MetaData():
         assert q.shape[-1] == k.shape[-1] and q.shape[-1] == v.shape[-1]
         # TODO: Change assert if we support qkl f8 and v f16
         assert q.dtype == k.dtype and q.dtype == v.dtype
-        # TODO: Fix assert to remove is-power-of-2 check once it is handled
         # TODO: Fix assert to check head size <=256 once supported
-        assert head_size <= 128 and ((head_size & (head_size-1)) == 0)
+        assert head_size <= 128
         assert o.shape == q.shape
         assert (nheads_q % nheads_k) == 0
 
@@ -163,6 +162,7 @@ def _attn_fwd_inner(
     OFFS_N: tl.constexpr,
     PRE_LOAD_V: tl.constexpr,
     MASK_STEPS: tl.constexpr,
+    PADDED_HEAD: tl.constexpr,
     ENABLE_DROPOUT: tl.constexpr,
     RETURN_ENCODED_SOFTMAX: tl.constexpr
 ):
@@ -170,9 +170,9 @@ def _attn_fwd_inner(
     for start_n in range (block_min, block_max, BLOCK_N):
         # For padded blocks, we will overrun the tensor size if
         # we load all BLOCK_N. For others, the blocks are all within range.
-        k = load_fn(K_block_ptr, False, MASK_STEPS and (n_extra_tokens != 0), "zero")
+        k = load_fn(K_block_ptr, PADDED_HEAD, MASK_STEPS and (n_extra_tokens != 0), "zero")
         if PRE_LOAD_V:
-            v = load_fn(V_block_ptr, MASK_STEPS and (n_extra_tokens != 0), False, "zero")
+            v = load_fn(V_block_ptr, MASK_STEPS and (n_extra_tokens != 0), PADDED_HEAD, "zero")
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         # We start from end of seqlen_k so only the first iteration would need
         # to be checked for padding if it is not a multiple of block_n
@@ -218,7 +218,7 @@ def _attn_fwd_inner(
         alpha = tl.math.exp2(m_i - m_ij)
         acc = acc * alpha[:, None]
         if not PRE_LOAD_V:
-            v = load_fn(V_block_ptr, MASK_STEPS and (n_extra_tokens != 0), False, "zero")
+            v = load_fn(V_block_ptr, MASK_STEPS and (n_extra_tokens != 0), PADDED_HEAD, "zero")
         # -- update m_i and l_i
         l_i = l_i * alpha + l_ij
         # update m_i and l_i
@@ -258,6 +258,7 @@ def attn_fwd(
     philox_seed,
     philox_offset_base,
     encoded_softmax,
+    actual_block_dmodel,
     max_seqlens_q, max_seqlens_k,
     hq, hk,
     VARLEN: tl.constexpr,
@@ -345,12 +346,13 @@ def attn_fwd(
     elif seqlen_k % BLOCK_N:
         need_padding = True
         n_extra_tokens = seqlen_k % BLOCK_N
+    padded_head = (actual_block_dmodel == BLOCK_DMODEL)
 
-    # Compute the QKV block pointers.
+    # Compute pointers for all the tensors used in this kernel.
     q_offset = off_z * stride_qz +  off_h_q * stride_qh + cu_seqlens_q_start * stride_qm
     Q_block_ptr = tl.make_block_ptr(
         base=Q + q_offset,
-        shape=(seqlen_q, BLOCK_DMODEL),
+        shape=(seqlen_q, actual_block_dmodel),
         strides=(stride_qm, stride_qk),
         offsets=(start_m * BLOCK_M, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
@@ -359,7 +361,7 @@ def attn_fwd(
     k_offset = off_z * stride_kz + off_h_k * stride_kh + cu_seqlens_k_start * stride_kn
     K_block_ptr = tl.make_block_ptr(
         base=K + k_offset,
-        shape=(BLOCK_DMODEL, seqlen_k),
+        shape=(actual_block_dmodel, seqlen_k),
         strides=(stride_kk, stride_kn),
         offsets=(0, 0),
         block_shape=(BLOCK_DMODEL, BLOCK_N),
@@ -368,7 +370,7 @@ def attn_fwd(
     v_offset = off_z * stride_vz + off_h_k * stride_vh + cu_seqlens_k_start * stride_vk
     V_block_ptr = tl.make_block_ptr(
         base=V + v_offset,
-        shape=(seqlen_k, BLOCK_DMODEL),
+        shape=(seqlen_k, actual_block_dmodel),
         strides=(stride_vk, stride_vn),
         offsets=(0, 0),
         block_shape=(BLOCK_N, BLOCK_DMODEL),
@@ -443,7 +445,7 @@ def attn_fwd(
             # IS_CAUSAL, ....
             False, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
             # _, MASK_STEPS, ...
-            PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX
+            PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, padded_head
         )
         block_min = block_max
         block_max = n_blocks * BLOCK_N
@@ -469,7 +471,7 @@ def attn_fwd(
             block_min, block_max, offs_n_causal, masked_blocks,  n_extra_tokens, bias_ptr,
             IS_CAUSAL, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
             # _, MASK_STEPS, ...
-            PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX
+            PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, padded_head
         )
     # epilogue
     acc = acc / l_i[:, None]
@@ -506,12 +508,15 @@ def attn_fwd(
     o_offset = off_z * stride_oz + cu_seqlens_q_start * stride_om + off_h_q * stride_oh
     O_block_ptr = tl.make_block_ptr(
         base=Out + o_offset,
-        shape=(seqlen_q, BLOCK_DMODEL),
+        shape=(seqlen_q, actual_block_dmodel),
         strides=(stride_om, stride_on),
         offsets=(start_m * BLOCK_M, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
         order=(1, 0)
     )
+    # Need boundary check on this to make sure the padding from the 
+    # Q and KV tensors in both dims are not part of what we store back.
+    # TODO: Do the boundary check optionally. 
     tl.store(O_block_ptr, acc, boundary_check=(0,1))
 
 @triton.jit
@@ -833,7 +838,8 @@ class _attention(torch.autograd.Function):
             philox_seed=philox_seed,
             philox_offset_base=philox_offset,
             encoded_softmax=encoded_softmax,
-            max_seqlens_q=metadata.max_seqlens_q, 
+            actual_block_dmodel=head_size,
+            max_seqlens_q=metadata.max_seqlens_q,
             max_seqlens_k=metadata.max_seqlens_k,
             hq=nheads_q, hk=nheads_k,
             IS_CAUSAL=metadata.causal,
@@ -940,6 +946,10 @@ attention = _attention.apply
                           (4, 48, 1001, 990, 64),
                           (1, 8, 8081, 7099, 64),
                           (1, 8, 16330, 15989, 128),
+                          (4, 4, 128, 33),
+                          (4, 4, 65, 65),
+                          (4, 4, 113, 90),
+                          (4, 4, 113, 1),
                           ])
 @pytest.mark.parametrize('causal', [False, True])
 @pytest.mark.parametrize('use_bias', [False])
