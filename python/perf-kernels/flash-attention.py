@@ -146,7 +146,7 @@ def load_fn(block_ptr, first, second, pad):
 def _attn_fwd_inner(
     acc, l_i, m_i, q,
     K_block_ptr, V_block_ptr,
-    start_m,
+    start_m, off_h,
     actual_seqlen_k,
     dropout_p,
     philox_seed,
@@ -185,13 +185,14 @@ def _attn_fwd_inner(
             # a solution is to always do BLOCK_M // BLOCK_N + 1 steps if not is_modulo_mn.
             # last step might get wasted but that is okay. check if this masking works For
             # that case.
-            if (start_n + BLOCK_N == block_max) and (n_extra_tokens != 0):
+            if (start_n == block_max) and (n_extra_tokens != 0):
                 boundary_m = tl.full([BLOCK_M], actual_seqlen_k, dtype=tl.int32)
                 size_n = (start_n - BLOCK_N) + OFFS_N[None,:]
                 mask = size_n < boundary_m[:,None]
                 qk = tl.where(mask, qk, float("-inf"))
         if IS_CAUSAL:
-            causal_mask = OFFS_M[:, None] >= ((start_n - BLOCK_N) + offs_n_causal[None, :])
+            causal_boundary = start_n - BLOCK_N + offs_n_causal
+            causal_mask = OFFS_M[:, None] >= causal_boundary[None, :]
             qk = tl.where(causal_mask, qk, float("-inf"))
         # -- compute qk ----
         qk += tl.dot(q, k)
@@ -420,8 +421,7 @@ def attn_fwd(
     # If seqlen_k is not multiple of BLOCK_N, last blocks is padded
     # and as a result is not a full block.
     block_min = 0
-    n_block_max = n_blocks * BLOCK_N
-    block_max = n_block_max - BLOCK_N
+    block_max = n_blocks * BLOCK_N
     K_block_ptr = tl.advance(K_block_ptr, (0, (n_blocks-1)*BLOCK_N))
     V_block_ptr = tl.advance(V_block_ptr, ((n_blocks-1)*BLOCK_N, 0))
     if bias_ptr is not None:
@@ -432,11 +432,11 @@ def attn_fwd(
     if masked_blocks > 0:
         # This call only handles masked blocks, and the masked blocks are
         # always the ones at the end, so set block_min accordingly.
-        block_min = n_block_max - masked_blocks * BLOCK_N
+        block_min = block_max - masked_blocks * BLOCK_N
         offs_n_causal = offs_n + (seqlen_q - seqlen_k)
         acc, l_i, m_i = _attn_fwd_inner(
             acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
-            start_m, seqlen_k,
+            start_m, off_h_q, seqlen_k,
             dropout_p, philox_seed, batch_philox_offset, encoded_softmax_block_ptr,
             block_min, block_max, offs_n_causal, masked_blocks, IS_CAUSAL,
             BLOCK_M, BLOCK_DMODEL, BLOCK_N,
@@ -462,7 +462,7 @@ def attn_fwd(
                                                    (0, -masked_blocks*BLOCK_N))
         acc, l_i, m_i = _attn_fwd_inner(
             acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
-            start_m, seqlen_k,
+            start_m, off_h_q, seqlen_k,
             dropout_p, philox_seed, batch_philox_offset, encoded_softmax_block_ptr,
             block_min, block_max, 0, 0, False,
             BLOCK_M, BLOCK_DMODEL, BLOCK_N,
@@ -993,8 +993,8 @@ def test_op_fwd(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype=torch.fl
     ref_out = torch.einsum('bhqk,bhkd->bhqd', p.half(), v)
     #print(f"tri = {tri_out[1][16][896][2]}")
     #print(f"ref = {ref_out[1][16][896][2]}")
-    print(f"tri = {tri_out[0][0][0][0]}")
-    print(f"ref = {ref_out[0][0][0][0]}")
+    print(f"tri = {tri_out[0][0][121][0]}")
+    print(f"ref = {ref_out[0][0][121][0]}")
     print(f"err = {torch.max(torch.abs(ref_out) - torch.abs(tri_out))}")
     # compare
     #torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
