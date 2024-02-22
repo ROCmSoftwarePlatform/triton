@@ -401,11 +401,12 @@ def attn_fwd(
         encoded_softmax_block_ptr = 0
 
     padded_block = n_extra_tokens != 0
+    # Here we compute how many n_blocks are full blocks, and how many are
+    # masked due to causal masking or non-pow BLOCK_N masking
     if IS_CAUSAL:
-        # Diagonal blocks aren't full. We don't need to check for
-        # padded blocks as that is handled when we handle the last causal
-        # block.
         n_full_blocks = n_blocks - BLOCK_M // BLOCK_N
+        if n_full_blocks > 0:
+            n_full_blocks -= padded_block and (seqlen_q > seqlen_k)
     else:
         n_full_blocks = n_blocks
         n_full_blocks -= padded_block
@@ -974,7 +975,7 @@ def test_op_fwd(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype=torch.fl
     #print(f"ref = {ref_out[1][16][896][2]}")
     print(f"tri = {tri_out[0][0][897][0]}")
     print(f"ref = {ref_out[0][0][897][0]}")
-    print(f"err = {torch.argmax(torch.abs(ref_out) - torch.abs(tri_out),keepdim=True)}")
+    print(f"err = {torch.max(torch.abs(ref_out) - torch.abs(tri_out))}")
     # compare
     #torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
