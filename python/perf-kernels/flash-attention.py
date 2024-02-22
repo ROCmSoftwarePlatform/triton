@@ -146,7 +146,7 @@ def load_fn(block_ptr, first, second, pad):
 def _attn_fwd_inner(
     acc, l_i, m_i, q,
     K_block_ptr, V_block_ptr,
-    start_m, off_h,
+    start_m,
     actual_seqlen_k,
     dropout_p,
     philox_seed,
@@ -155,6 +155,8 @@ def _attn_fwd_inner(
     block_min, block_max,
     offs_n_causal,
     masked_blocks,
+    n_extra_tokens,
+    bias_ptr,
     IS_CAUSAL: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
@@ -163,12 +165,10 @@ def _attn_fwd_inner(
     OFFS_N: tl.constexpr,
     PRE_LOAD_V: tl.constexpr,
     MASK_STEPS: tl.constexpr,
-    n_extra_tokens,
-    bias_ptr,
     ENABLE_DROPOUT: tl.constexpr,
     RETURN_ENCODED_SOFTMAX: tl.constexpr
 ):
-    # loop over k, v and update accumulator
+    # loop over k, v, and update accumulator
     for start_n in range (block_min, block_max, BLOCK_N):
         # For padded blocks, we will overrun the tensor size if
         # we load all BLOCK_N. For others, the blocks are all within range.
@@ -197,7 +197,7 @@ def _attn_fwd_inner(
         # -- compute qk ----
         qk += tl.dot(q, k)
         if bias_ptr is not None:
-            v = load_fn(V_block_ptr, False, MASK_STEPS and (n_extra_tokens != 0), "zero")
+            bias = load_fn(bias_ptr, False, MASK_STEPS and (n_extra_tokens != 0), "zero")
             # While bias is added after multiplying qk with sm_scale,
             # our optimization to use 2^x instead of e^x results in an additional
             # scale factor of log2(e) which we must also multiply the bias with.
@@ -236,7 +236,7 @@ def _attn_fwd_inner(
 
 @triton.jit
 def attn_fwd(
-    Q, K, V, bias, sm_scale, M, Out,
+    Q, K, V, bias, sm_scale, L, Out,
     stride_qz, stride_qh, stride_qm, stride_qk,
     stride_kz, stride_kh, stride_kn, stride_kk,
     stride_vz, stride_vh, stride_vk, stride_vn,
@@ -259,11 +259,11 @@ def attn_fwd(
     ENABLE_DROPOUT: tl.constexpr,
     RETURN_ENCODED_SOFTMAX: tl.constexpr
 ):
-    is_mqa = hq != hk
     start_m = tl.program_id(0)
     off_h_q = tl.program_id(1)
     off_z = tl.program_id(2)
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = tl.arange(0, BLOCK_N)
     if VARLEN:
         cu_seqlens_q_start = tl.load(cu_seqlens_q + off_z)
         cu_seqlens_q_end = tl.load(cu_seqlens_q + off_z + 1)
@@ -282,27 +282,27 @@ def attn_fwd(
         seqlen_k = max_seqlens_k
 
     # Now we compute whether we need to exit early due to causal masking.
-    # This is because for seqlen_q > seqlen_k, N rows of the attn scores
+    # This is because for seqlen_q > seqlen_k, M rows of the attn scores
     # are completely masked, resulting in 0s written to the output, and
     # inf written to LSE. We don't need to do any GEMMs in this case.
     # This block of code determines what N is, and if this WG is operating
-    # on those N rows.
+    # on those M rows.
     n_blocks = cdiv_fn(seqlen_k, BLOCK_N)
     if (IS_CAUSAL):
         # If seqlen_q == seqlen_k, the attn scores are a square matrix.
         # If seqlen_q != seqlen_k, attn scores are rectangular which means
         # the causal mask boundary is bottom right aligned, and ends at either
         # the top edge (seqlen_q < seqlen_k) or left edge.
-        n_blocks_q_greater_than_k = cdiv_fn(
+        # This captures the decrease in n_blocks if we have a rectangular attn matrix
+        n_blocks_seqlen = cdiv_fn(
             (start_m + 1) * BLOCK_M + seqlen_k - seqlen_q,
             BLOCK_N
         )
         # This is what adjusts the block_max for the current WG, only
-        # if IS_CAUSAL. Otherwise we want to always iterate through all blocks
-        n_blocks = min(n_blocks, n_blocks_q_greater_than_k)
-        # Remember that n_blocks is a number, not 0-based index. So if it equals 0
-        # (or is negative), it means we have 0 blocks that this WG has to process.
-        # So we exit early.
+        # if IS_CAUSAL. Otherwise we want to always iterate through all n_blocks
+        n_blocks = min(n_blocks, n_blocks_seqlen)
+        # If we have no blocks after adjusting for seqlen deltas, this WG is part of
+        # the blocks that are all 0. We exit early.
         if n_blocks <= 0:
             o_offset = off_z * stride_oz + cu_seqlens_q_start * stride_om + off_h_q * stride_oh
             O_block_ptr = tl.make_block_ptr(
@@ -316,14 +316,15 @@ def attn_fwd(
             acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=Out.type.element_ty)
             # We still need to write 0s to the result
             tl.store(O_block_ptr, acc.to(Out.type.element_ty), boundary_check=(0,1))
-            m_ptrs = M + off_z * hq * max_seqlens_q + off_h_q * max_seqlens_q + offs_m
+            l_ptrs = L + off_z * hq * max_seqlens_q + off_h_q * max_seqlens_q + offs_m
             # We store inf to LSE, not -inf because in the bwd pass, we subtract this
             # from qk which makes it -inf, such that exp(qk - inf) = 0 for these masked blocks.
-            m = tl.full([BLOCK_M], value=float("inf"), dtype=tl.float32)
-            tl.store(m_ptrs, m)
+            l = tl.full([BLOCK_M], value=float("inf"), dtype=tl.float32)
+            tl.store(l_ptrs, l)
             # TODO: Should dropout and return encoded softmax be handled here too?
             return
 
+    is_mqa = hq != hk
     off_h_k = off_h_q % hk if is_mqa else off_h_q
     need_padding = False
     n_extra_tokens = 0
@@ -334,6 +335,7 @@ def attn_fwd(
         need_padding = True
         n_extra_tokens = seqlen_k % BLOCK_N
 
+    # Compute the QKV block pointers.
     q_offset = off_z * stride_qz +  off_h_q * stride_qh + cu_seqlens_q_start * stride_qm
     Q_block_ptr = tl.make_block_ptr(
         base=Q + q_offset,
@@ -361,8 +363,6 @@ def attn_fwd(
         block_shape=(BLOCK_N, BLOCK_DMODEL),
         order=(1, 0)
     )
-    # initialize offsets
-    offs_n = tl.arange(0, BLOCK_N)
     if BIAS_TYPE != 0:
         bias_ptr = tl.make_block_ptr(
             base=bias + off_h_q * stride_bh,
@@ -374,17 +374,6 @@ def attn_fwd(
         )
     else:
         bias_ptr = None
-    # initialize pointer to m and l
-    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
-    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
-    acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
-    # scale sm_scale by log_2(e) and use
-    # 2^x instead of exp in the loop because CSE and LICM
-    # don't work as expected with `exp` in the loop
-    qk_scale = sm_scale * 1.44269504089
-    # load q: it will stay in SRAM throughout on NV GPUs but in VGPRs on AMD GPUs
-    q = tl.load(Q_block_ptr, boundary_check=(0,), padding_option="zero")
-    q = (q * qk_scale).to(Q_block_ptr.type.element_ty)
     if ENABLE_DROPOUT:
         batch_philox_offset = philox_offset_base + off_hz * seqlen_q * seqlen_k
     else:
@@ -403,14 +392,23 @@ def attn_fwd(
                 )
     else:
         encoded_softmax_block_ptr = 0
+    # initialize pointer to m and l
+    m_i = tl.full([BLOCK_M], float("-inf"), dtype=tl.float32)
+    l_i = tl.full([BLOCK_M], 1.0, dtype=tl.float32)
+    acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
+    # scale sm_scale by log_2(e) and use 2^x in the loop as we do not
+    # have native e^x support in HW.
+    qk_scale = sm_scale * 1.44269504089
+    # Q is loaded once at the beginning and shared by all N blocks.
+    q = tl.load(Q_block_ptr, boundary_check=(0,), padding_option="zero")
+    q = (q * qk_scale).to(Q_block_ptr.type.element_ty)
 
+    # Here we compute how many full and masked blocks we have.
     padded_block_k = n_extra_tokens != 0
     is_modulo_mn = not padded_block_k and (seqlen_q % BLOCK_M == 0)
-    # Here we compute how many n_blocks are full blocks, and how many are
-    # masked due to causal masking or non-pow BLOCK_N masking
     if IS_CAUSAL:
         # There are always at least BLOCK_M // BLOCK_N masked blocks.
-        # Additionally there might be one more due to unaligned seqlens.
+        # Additionally there might be one more due to dissimilar seqlens.
         masked_blocks = BLOCK_M // BLOCK_N + (not is_modulo_mn)
     else:
         # Padding on Q does not need to be masked in the FA loop.
@@ -418,25 +416,23 @@ def attn_fwd(
     # if IS_CAUSAL, not is_modulo_mn does not always result in an additional block.
     # In this case we might exceed n_blocks so pick the min.
     masked_blocks = min(masked_blocks, n_blocks)
-    # If seqlen_k is not multiple of BLOCK_N, last blocks is padded
-    # and as a result is not a full block.
     n_full_blocks = n_blocks - masked_blocks
     block_min = 0
     block_max = n_blocks * BLOCK_N
+    # Compute for full blocks. Here we set causal to false regardless of its actual
+    # value because there is no masking. Similarly we do not need padding.
     if n_full_blocks > 0:
         block_max = (n_blocks - masked_blocks) * BLOCK_N
         acc, l_i, m_i = _attn_fwd_inner(
             acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
-            start_m, off_h_q, seqlen_k,
+            start_m, seqlen_k,
             dropout_p, philox_seed, batch_philox_offset, encoded_softmax_block_ptr,
-            block_min, block_max, 0, 0, False,
-            BLOCK_M, BLOCK_DMODEL, BLOCK_N,
-            offs_m, offs_n,
-            PRE_LOAD_V,
-            False, 0,
-            bias_ptr,
-            ENABLE_DROPOUT,
-            RETURN_ENCODED_SOFTMAX
+            # _, _, offs_n_causal, masked_blocks, n_extra_tokens, _
+            block_min, block_max, 0, 0, 0, bias_ptr,
+            # IS_CAUSAL, ....
+            False, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
+            # _, MASK_STEPS, ...
+            PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX
         )
         block_min = block_max
         block_max = n_blocks * BLOCK_N
@@ -454,33 +450,21 @@ def attn_fwd(
                                                    (0, n_full_blocks))
         acc, l_i, m_i = _attn_fwd_inner(
             acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
-            start_m, off_h_q, seqlen_k,
+            start_m, seqlen_k,
             dropout_p, philox_seed, batch_philox_offset, encoded_softmax_block_ptr,
-            block_min, block_max, offs_n_causal, masked_blocks, IS_CAUSAL,
-            BLOCK_M, BLOCK_DMODEL, BLOCK_N,
-            offs_m, offs_n,
-            PRE_LOAD_V,
-            True, n_extra_tokens,
-            bias_ptr,
-            ENABLE_DROPOUT,
-            RETURN_ENCODED_SOFTMAX
+            block_min, block_max, offs_n_causal, masked_blocks,  n_extra_tokens, bias_ptr,
+            IS_CAUSAL, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
+            # _, MASK_STEPS, ...
+            PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX
         )
     # epilogue
-    # write back m
     acc = acc / l_i[:, None]
     if ENABLE_DROPOUT:
         acc = acc / (1 - dropout_p)
-    m_ptrs = M + off_z * hq * max_seqlens_q + off_h_q * max_seqlens_q + offs_m
-    # Check for last block_M
-    overflow_size = (start_m * BLOCK_M) - seqlen_q
-    if overflow_size > 0:
-        boundary = tl.full((BLOCK_M,), overflow_size, dtype=tl.int32)
-        # This is a > check because mask being 0 blocks the store.
-        m_ptrs_mask = boundary > tl.arange(0, BLOCK_M)
-        tl.store(m_ptrs, m_i + tl.math.log2(l_i), mask=m_ptrs_mask)
-    else:
-        tl.store(m_ptrs, m_i + tl.math.log2(l_i))
-    # write back O
+    # If seqlen_q > seqlen_k but the delta is not a multiple of BLOCK_M,
+    # then we have one block with a row of all NaNs which come from computing
+    # softmax over a row of all -infs (-inf - inf = NaN). We check for that here
+    # and store 0s where there are NaNs as these rows should've been zeroed out.
     end_m_idx = (start_m + 1) * BLOCK_M
     start_m_idx = start_m * BLOCK_M
     causal_start_idx = seqlen_q - seqlen_k
@@ -490,7 +474,20 @@ def attn_fwd(
         mask_m_offsets = start_m_idx + tl.arange(0, BLOCK_M)
         out_ptrs_mask = mask_m_offsets[:, None] >= out_mask_boundary[None, :]
         acc = tl.where(out_ptrs_mask, acc, 0)
+    # write back LSE
+    l_ptrs = L + off_z * hq * max_seqlens_q + off_h_q * max_seqlens_q + offs_m
+    # If seqlen_q not multiple of BLOCK_M, we need to mask out the last few rows.
+    # This is only true for the last M block. For others, overflow_size will be -ve
+    overflow_size = end_m_idx - seqlen_q
+    if overflow_size > 0:
+        boundary = tl.full((BLOCK_M,), BLOCK_M - overflow_size, dtype=tl.int32)
+        # This is a > check because mask being 0 blocks the store.
+        l_ptrs_mask = boundary > tl.arange(0, BLOCK_M)
+        tl.store(l_ptrs, m_i + tl.math.log2(l_i), mask=l_ptrs_mask)
+    else:
+        tl.store(l_ptrs, m_i + tl.math.log2(l_i))
         
+    # write back O
     o_offset = off_z * stride_oz + cu_seqlens_q_start * stride_om + off_h_q * stride_oh
     O_block_ptr = tl.make_block_ptr(
         base=Out + o_offset,
@@ -925,7 +922,7 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 @pytest.mark.parametrize('Z, H, N_CTX_Q, N_CTX_K, D_HEAD',
-                         [(4, 48, 1, 1, 64),
+                         [(4, 48, 1029, 269, 64),
                           #(4, 48, 987, 64),
                           #(4, 48, 2048, 64),
                           #(4, 48, 4096, 64),
@@ -967,7 +964,8 @@ def test_op_fwd(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype=torch.fl
 
     # triton implementation
     tri_out, _ = attention(q, k, v, o, input_metadata)
-    # reference implementation
+    # reference implementation:171
+
     scores = torch.einsum('bhqd,bhkd->bhqk', q, k).float() * sm_scale
     if causal:
         mask = torch.tril(torch.ones(N_CTX_Q, N_CTX_K, device="cuda"), 
@@ -989,7 +987,7 @@ def test_op_fwd(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype=torch.fl
     print(f"ref = {ref_out[0][0][0][0]}")
     print(f"err = {torch.max(torch.abs(ref_out) - torch.abs(tri_out))}")
     # compare
-    #torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
+    torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
 def varlen_input_helper(Z, HQ, HK, N_CTX, D_HEAD, dtype):
     torch.manual_seed(20)
