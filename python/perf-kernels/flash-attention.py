@@ -469,11 +469,12 @@ def attn_fwd(
     start_m_idx = start_m * BLOCK_M
     causal_start_idx = seqlen_q - seqlen_k
     acc = acc.to(Out.type.element_ty)
-    if causal_start_idx > start_m_idx and causal_start_idx < end_m_idx:
-        out_mask_boundary = tl.full((BLOCK_DMODEL,), causal_start_idx, dtype=tl.int32)
-        mask_m_offsets = start_m_idx + tl.arange(0, BLOCK_M)
-        out_ptrs_mask = mask_m_offsets[:, None] >= out_mask_boundary[None, :]
-        acc = tl.where(out_ptrs_mask, acc, 0)
+    if IS_CAUSAL:
+        if causal_start_idx > start_m_idx and causal_start_idx < end_m_idx:
+            out_mask_boundary = tl.full((BLOCK_DMODEL,), causal_start_idx, dtype=tl.int32)
+            mask_m_offsets = start_m_idx + tl.arange(0, BLOCK_M)
+            out_ptrs_mask = mask_m_offsets[:, None] >= out_mask_boundary[None, :]
+            acc = tl.where(out_ptrs_mask, acc, 0)
     # write back LSE
     l_ptrs = L + off_z * hq * max_seqlens_q + off_h_q * max_seqlens_q + offs_m
     # If seqlen_q not multiple of BLOCK_M, we need to mask out the last few rows.
@@ -922,21 +923,20 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 @pytest.mark.parametrize('Z, H, N_CTX_Q, N_CTX_K, D_HEAD',
-                         [(4, 48, 1029, 269, 64),
-                          #(4, 48, 987, 64),
-                          #(4, 48, 2048, 64),
-                          #(4, 48, 4096, 64),
-                          #(4, 48, 3989, 64),
-                          #(4, 48, 1024, 128),
-                          #(4, 48, 1021, 128),
-                          #(4, 48, 2048, 128),
-                          #(4, 48, 4096, 128),
-                          #(4, 16, 8192, 64),
-                          #(4, 16, 8080, 64),
-                          #(1, 16, 16384, 64),
-                          #(4, 48, 127, 64),
+                         [(4, 48, 1024, 1024, 64),
+                          (4, 48, 8192, 8192, 64),
+                          (2, 16, 16384, 16384, 128),
+                          (2, 16, 1020, 987, 128),
+                          (2, 16, 15498, 2, 128),
+                          (2, 16, 7, 16219, 64),
+                          (4, 48, 1, 1, 64),
+                          (4, 48, 1, 1, 128),
+                          (4, 48, 3, 3, 128),
+                          (4, 48, 1001, 990, 64),
+                          (1, 8, 8081, 7099, 64),
+                          (1, 8, 16330, 15989, 128),
                           ])
-@pytest.mark.parametrize('causal', [True])
+@pytest.mark.parametrize('causal', [False, True])
 @pytest.mark.parametrize('use_bias', [False])
 def test_op_fwd(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype=torch.float16):
     # TODO: using bias causes coredump for certain configs and must be fixed.
@@ -981,11 +981,9 @@ def test_op_fwd(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype=torch.fl
         nan_mask = torch.isnan(p)
         p[nan_mask==1] = 0
     ref_out = torch.einsum('bhqk,bhkd->bhqd', p.half(), v)
-    #print(f"tri = {tri_out[1][16][896][2]}")
-    #print(f"ref = {ref_out[1][16][896][2]}")
-    print(f"tri = {tri_out[0][0][0][0]}")
-    print(f"ref = {ref_out[0][0][0][0]}")
-    print(f"err = {torch.max(torch.abs(ref_out) - torch.abs(tri_out))}")
+    # print(f"tri = {tri_out[0][5][954][59]}")
+    # print(f"ref = {ref_out[0][5][954][59]}")
+    # print(f"err = {torch.rgmax(torch.abs(ref_out) - torch.abs(tri_out))}")
     # compare
     torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
