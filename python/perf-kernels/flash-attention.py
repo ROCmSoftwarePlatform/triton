@@ -798,13 +798,6 @@ class _attention(torch.autograd.Function):
             v_strides = (v.stride(0), v.stride(1), v.stride(2), v.stride(3))
             o_strides = (o.stride(0), o.stride(1), o.stride(2), o.stride(3))
 
-        # We've derived these previously from tuning the kernel
-        # TODO: Add autotuning
-        BLOCK_M = 256
-        BLOCK_N = 64 if head_size == 128 else 64
-        waves_per_eu = 2 if head_size == 128 else 3
-        num_warps = 8 if head_size == 128 else 4
-        pre_load_v = False if head_size == 128 else True
         grid = lambda META: (
             triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']),
             nheads_q,
