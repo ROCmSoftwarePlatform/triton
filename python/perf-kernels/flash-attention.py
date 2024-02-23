@@ -8,12 +8,10 @@ Credits: OpenAI kernel team, AMD ML Frameworks Triton team
 
 Features supported:
 
-1) Fwd + bwd kernel with causal masking
-2) Vector and matrix bias (currently fwd kernel only, no causal masking)
-3) Any sequence lengths without padding (currently fwd kernel only, no causal masking)
-4) fp8 (e5m2fnuz, QK GEMM in fwd kernel only)
-5) Support for different sequence lengths for q and k
-6) Nested tensor API currently does not support causal masking, dropout or bias.
+1) Fwd with causal masking
+2) Any sequence lengths without padding (currently fwd kernel only)
+3) Support for different sequence lengths for q and k
+4) Nested tensor API currently does not support dropout or bias.
 
 Not currently supported:
 
