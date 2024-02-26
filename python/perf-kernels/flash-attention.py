@@ -241,7 +241,9 @@ def _attn_fwd_inner(
        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1, num_warps=8),
        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1, num_warps=8),
-       triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
+       # TODO: This config fails with head_size not pow2 with data mismatches. Check why.
+    #    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
+       triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
    ],
    key=['hq', 'hk', 'IS_CAUSAL', 'dropout_p', 'BLOCK_DMODEL'],
 )
@@ -346,7 +348,7 @@ def attn_fwd(
     elif seqlen_k % BLOCK_N:
         need_padding = True
         n_extra_tokens = seqlen_k % BLOCK_N
-    padded_head = (actual_block_dmodel == BLOCK_DMODEL)
+    padded_head = (actual_block_dmodel != BLOCK_DMODEL)
 
     # Compute pointers for all the tensors used in this kernel.
     q_offset = off_z * stride_qz +  off_h_q * stride_qh + cu_seqlens_q_start * stride_qm
@@ -413,7 +415,7 @@ def attn_fwd(
     # have native e^x support in HW.
     qk_scale = sm_scale * 1.44269504089
     # Q is loaded once at the beginning and shared by all N blocks.
-    q = tl.load(Q_block_ptr, boundary_check=(0,), padding_option="zero")
+    q = load_fn(Q_block_ptr, True, padded_head, "zero")
     q = (q * qk_scale).to(Q_block_ptr.type.element_ty)
 
     # Here we compute how many full and masked blocks we have.
@@ -803,6 +805,19 @@ class _attention(torch.autograd.Function):
             v_strides = (v.stride(0), v.stride(1), v.stride(2), v.stride(3))
             o_strides = (o.stride(0), o.stride(1), o.stride(2), o.stride(3))
 
+        # Get closest power of 2 over or equal to 32.
+        unpadded_head_dims = {32, 64, 128}
+        if head_size not in unpadded_head_dims:
+            padded_d_model = None
+            for i in unpadded_head_dims:
+                if i > head_size:
+                    padded_d_model = i
+                    break
+            assert padded_d_model is not None
+        else:
+            padded_d_model = head_size
+
+
         grid = lambda META: (
             triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']),
             nheads_q,
@@ -844,7 +859,7 @@ class _attention(torch.autograd.Function):
             hq=nheads_q, hk=nheads_k,
             IS_CAUSAL=metadata.causal,
             VARLEN=metadata.varlen,
-            BLOCK_DMODEL=head_size,
+            BLOCK_DMODEL=padded_d_model,
             BIAS_TYPE=0 if metadata.bias is None else 1,
             ENABLE_DROPOUT=metadata.dropout_p > 0.0,
             RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax
@@ -946,10 +961,10 @@ attention = _attention.apply
                           (4, 48, 1001, 990, 64),
                           (1, 8, 8081, 7099, 64),
                           (1, 8, 16330, 15989, 128),
-                          (4, 4, 128, 33),
-                          (4, 4, 65, 65),
-                          (4, 4, 113, 90),
-                          (4, 4, 113, 1),
+                          (4, 4, 1024, 1024, 33),
+                          (4, 4, 65, 1019, 65),
+                          (4, 4, 128, 128, 65),
+                          (4, 4, 113, 123, 1),
                           ])
 @pytest.mark.parametrize('causal', [False, True])
 @pytest.mark.parametrize('use_bias', [False])
@@ -1156,23 +1171,23 @@ for mode in ['fwd']:
             configs.append(triton.testing.Benchmark(
                 x_names=['BATCH', 'H', 'N_CTX_Q', 'N_CTX_K'],
                 x_vals=[(16, 16, 1024, 1024),
-                        (8, 16, 2048, 2048),
-                        (4, 16, 4096, 4096),
-                        (2, 16, 8192, 8192),
-                        (1, 16, 16384, 16384),
-                        (2, 48, 1024, 1024),
-                        (2, 48, 2048, 1024),
-                        (2, 48, 4096, 8192),
-                        (2, 48, 8192, 4096),
-                        (2, 48, 16384, 8192),
-                        (8, 16, 1989, 15344),
-                        (4, 16, 4097, 163),
-                        (2, 16, 8122, 2159),
-                        (1, 16, 16281, 7),
-                        (2, 48, 1021, 1020),
-                        (2, 48, 2001, 2048),
-                        (2, 48, 3996, 9639),
-                        (2, 48, 8181, 1021),
+                        # (8, 16, 2048, 2048),
+                        # (4, 16, 4096, 4096),
+                        # (2, 16, 8192, 8192),
+                        # (1, 16, 16384, 16384),
+                        # (2, 48, 1024, 1024),
+                        # (2, 48, 2048, 1024),
+                        # (2, 48, 4096, 8192),
+                        # (2, 48, 8192, 4096),
+                        # (2, 48, 16384, 8192),
+                        # (8, 16, 1989, 15344),
+                        # (4, 16, 4097, 163),
+                        # (2, 16, 8122, 2159),
+                        # (1, 16, 16281, 7),
+                        # (2, 48, 1021, 1020),
+                        # (2, 48, 2001, 2048),
+                        # (2, 48, 3996, 9639),
+                        # (2, 48, 8181, 1021),
                         ],
                 line_arg='provider',
                 line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
@@ -1243,7 +1258,7 @@ def bench_flash_attention(
         total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
     return total_flops / ms * 1e-9
 
-bench_flash_attention.run(save_path=".", print_data=True)
+#bench_flash_attention.run(save_path=".", print_data=True)
 
 configs = []
 for mode in ['fwd']:
@@ -1305,4 +1320,4 @@ def bench_varlen_flash_attention(
     total_flops = 2 * flops_per_matmul
     return total_flops / ms * 1e-9
 
-bench_varlen_flash_attention.run(save_path=".", print_data=True)
+#bench_varlen_flash_attention.run(save_path=".", print_data=True)
