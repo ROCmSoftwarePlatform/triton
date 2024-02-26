@@ -230,7 +230,7 @@ def _attn_fwd_inner(
             bias_ptr = tl.advance(bias_ptr, (0, BLOCK_N))
         if RETURN_ENCODED_SOFTMAX:
             encoded_softmax_block_ptr = tl.advance(encoded_softmax_block_ptr, (0, BLOCK_N))
-    return acc, l_i, m_i
+    return acc, l_i, m_i 
 
 @triton.autotune(
    configs=[
@@ -454,7 +454,7 @@ def attn_fwd(
 
     tl.debug_barrier()
     # Remaining blocks, if any, are full / not masked.
-    if (masked_blocks > 0):
+    if (masked_blocks > 0): 
         if IS_CAUSAL:
             offs_n_causal = offs_n + (seqlen_q - seqlen_k)
         else:
@@ -464,7 +464,7 @@ def attn_fwd(
         if bias_ptr is not None:
             bias_ptr = tl.advance(bias_ptr, (0, n_full_blocks*BLOCK_N))
         if RETURN_ENCODED_SOFTMAX:
-            encoded_softmax_block_ptr = tl.advance(encoded_softmax_block_ptr,
+            encoded_softmax_block_ptr = tl.advance(encoded_softmax_block_ptr, 
                                                    (0, n_full_blocks))
         acc, l_i, m_i = _attn_fwd_inner(
             acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
@@ -516,9 +516,9 @@ def attn_fwd(
         block_shape=(BLOCK_M, BLOCK_DMODEL),
         order=(1, 0)
     )
-    # Need boundary check on this to make sure the padding from the
+    # Need boundary check on this to make sure the padding from the 
     # Q and KV tensors in both dims are not part of what we store back.
-    # TODO: Do the boundary check optionally.
+    # TODO: Do the boundary check optionally. 
     tl.store(O_block_ptr, acc, boundary_check=(0,1))
 
 @triton.jit
@@ -840,7 +840,7 @@ class _attention(torch.autograd.Function):
         philox_offset = 0x1D4B42
 
         if metadata.bias is not None:
-            bias_strides = (metadata.bias.stride(0), metadata.bias.stride(1),
+            bias_strides = (metadata.bias.stride(0), metadata.bias.stride(1), 
                             metadata.bias.stride(2), metadata.bias.stride(3))
         else:
             bias_strides = (0,0,0,0)
@@ -998,7 +998,7 @@ def test_op_fwd(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype=torch.fl
 
     scores = torch.einsum('bhqd,bhkd->bhqk', q, k).float() * sm_scale
     if causal:
-        mask = torch.tril(torch.ones(N_CTX_Q, N_CTX_K, device="cuda"),
+        mask = torch.tril(torch.ones(N_CTX_Q, N_CTX_K, device="cuda"), 
                           diagonal=N_CTX_K-N_CTX_Q)
         scores[:, :, mask==0] = float("-inf")
     if use_bias:
@@ -1171,23 +1171,23 @@ for mode in ['fwd']:
             configs.append(triton.testing.Benchmark(
                 x_names=['BATCH', 'H', 'N_CTX_Q', 'N_CTX_K'],
                 x_vals=[(16, 16, 1024, 1024),
-                        # (8, 16, 2048, 2048),
-                        # (4, 16, 4096, 4096),
-                        # (2, 16, 8192, 8192),
-                        # (1, 16, 16384, 16384),
-                        # (2, 48, 1024, 1024),
-                        # (2, 48, 2048, 1024),
-                        # (2, 48, 4096, 8192),
-                        # (2, 48, 8192, 4096),
-                        # (2, 48, 16384, 8192),
-                        # (8, 16, 1989, 15344),
-                        # (4, 16, 4097, 163),
-                        # (2, 16, 8122, 2159),
-                        # (1, 16, 16281, 7),
-                        # (2, 48, 1021, 1020),
-                        # (2, 48, 2001, 2048),
-                        # (2, 48, 3996, 9639),
-                        # (2, 48, 8181, 1021),
+                        (8, 16, 2048, 2048),
+                        (4, 16, 4096, 4096),
+                        (2, 16, 8192, 8192),
+                        (1, 16, 16384, 16384),
+                        (2, 48, 1024, 1024),
+                        (2, 48, 2048, 1024),
+                        (2, 48, 4096, 8192),
+                        (2, 48, 8192, 4096),
+                        (2, 48, 16384, 8192),
+                        (8, 16, 1989, 15344),
+                        (4, 16, 4097, 163),
+                        (2, 16, 8122, 2159),
+                        (1, 16, 16281, 7),
+                        (2, 48, 1021, 1020),
+                        (2, 48, 2001, 2048),
+                        (2, 48, 3996, 9639),
+                        (2, 48, 8181, 1021),
                         ],
                 line_arg='provider',
                 line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
@@ -1221,7 +1221,7 @@ def bench_flash_attention(
     # else:
     #     bias = None
     bias = None
-
+        
     # Bwd pass only supports causal=True right now
     if mode == 'bwd':
         causal = True
