@@ -162,9 +162,9 @@ def _attn_fwd_inner(
     OFFS_N: tl.constexpr,
     PRE_LOAD_V: tl.constexpr,
     MASK_STEPS: tl.constexpr,
-    PADDED_HEAD: tl.constexpr,
     ENABLE_DROPOUT: tl.constexpr,
-    RETURN_ENCODED_SOFTMAX: tl.constexpr
+    RETURN_ENCODED_SOFTMAX: tl.constexpr,
+    PADDED_HEAD: tl.constexpr
 ):
     # loop over k, v, and update accumulator
     for start_n in range (block_min, block_max, BLOCK_N):
