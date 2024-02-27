@@ -230,7 +230,7 @@ def _attn_fwd_inner(
             bias_ptr = tl.advance(bias_ptr, (0, BLOCK_N))
         if RETURN_ENCODED_SOFTMAX:
             encoded_softmax_block_ptr = tl.advance(encoded_softmax_block_ptr, (0, BLOCK_N))
-    return acc, l_i, m_i 
+    return acc, l_i, m_i
 
 @triton.autotune(
    configs=[
@@ -1221,7 +1221,7 @@ def bench_flash_attention(
     # else:
     #     bias = None
     bias = None
-        
+
     # Bwd pass only supports causal=True right now
     if mode == 'bwd':
         causal = True
@@ -1321,3 +1321,4 @@ def bench_varlen_flash_attention(
     return total_flops / ms * 1e-9
 
 bench_varlen_flash_attention.run(save_path=".", print_data=True)
+
