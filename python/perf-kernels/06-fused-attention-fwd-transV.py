@@ -318,15 +318,21 @@ def scale_fp8_tensor(
 
     return tensor_scaled_fp8, scale, 1.0/scale
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD, dtype',
-[ (*shape, dtype)
+
+@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD, dtype, fake_quant_ref',
+[ (*shape, dtype, fake_quant_ref)
     for shape in [
                   (4, 48, 1024, 128),
                   (4, 48, 2048, 128),
                   (4, 48, 4096, 128),
                   ]
-    for dtype in ['fp16', 'float8_e4m3fnuz']])
-def test_op_fwd(Z, H, N_CTX, D_HEAD, dtype):
+    for dtype, fake_quant_ref in [
+                                 ('fp16', False),
+                                 ('float8_e4m3fnuz', True),
+                                 ('float8_e4m3fnuz', False),
+                                 ]
+])
+def test_op_fwd(Z, H, N_CTX, D_HEAD, dtype, fake_quant_ref):
     torch.manual_seed(20)
     torch_dtype = name_to_torch_types[dtype]
     use_fp8 = torch_dtype in fp8_type_list
@@ -379,6 +385,20 @@ def test_op_fwd(Z, H, N_CTX, D_HEAD, dtype):
         assert q.isnan().sum() == 0, "There is Nan in q"
         assert k.isnan().sum() == 0, "There is Nan in k"
         assert v.isnan().sum() == 0, "There is Nan in v"
+
+        # Reference with fake quantization
+        if fake_quant_ref:
+            q_fake = q.float()
+            k_fake = k.float()
+            v_fake = v.float()
+            p_fake = torch.matmul(q_fake, k_fake.transpose(2,3)) * sm_scale * (1.0/q_scale) * (1.0/k_scale)
+            p_fake = torch.softmax(p_fake, dim=-1)
+            ref_amax_s = p_fake.abs().amax().reshape([1])
+            p_fake = (p_fake * s_scale).to(torch_dtype).float()
+            ref_out_fake = torch.matmul(p_fake, v_fake.transpose(2,3)) * (1.0/s_scale) * (1.0/v_scale) 
+            ref_amax_o = ref_out_fake.abs().amax().reshape([1])
+            ref_out_fake = (ref_out_fake * o_scale).to(torch_dtype).float() / o_scale
+
     # Triton kernel call
     tri_out, tri_amax_s, tri_amax_o = attention(q, k, v,
         sm_scale, 1.0/q_scale, 1.0/k_scale, 1.0/v_scale, s_scale, 1.0/s_scale, o_scale)
@@ -390,11 +410,20 @@ def test_op_fwd(Z, H, N_CTX, D_HEAD, dtype):
     # compare
     atol = 1.4e-1 if 'float8' in dtype else 1e-2
     rtol = 1e-2 if 'float8' in dtype else 0
+
     if use_fp8:
-        ref_amax_o = ref_out.abs().amax().reshape([1])
-        print('ref_amax_o=', ref_amax_o, ' tri_amax_o=', tri_amax_o)
-        torch.testing.assert_close(ref_amax_o, tri_amax_o.half(), atol=atol, rtol=0)
-    torch.testing.assert_close(ref_out, tri_out.half(), atol=atol, rtol=0)
+        if fake_quant_ref:
+            idx = torch.argmax( torch.abs((ref_out_fake - tri_out) ))
+            print('ref_amax_o=', ref_amax_o, ' tri_amax_o=', tri_amax_o)
+            torch.testing.assert_close(ref_amax_o, tri_amax_o, atol=atol, rtol=0)
+            torch.testing.assert_close(ref_out_fake, tri_out, atol=atol, rtol=0)
+        else:
+            ref_amax_o = ref_out.abs().amax().reshape([1])
+            print('ref_amax_o=', ref_amax_o, ' tri_amax_o=', tri_amax_o)
+            torch.testing.assert_close(ref_amax_o, tri_amax_o.half(), atol=atol, rtol=0)
+            torch.testing.assert_close(ref_out, tri_out.half(), atol=atol, rtol=0)
+    else:
+        torch.testing.assert_close(ref_out, tri_out.half(), atol=atol, rtol=0)
 
 
 try:
