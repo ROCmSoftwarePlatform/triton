@@ -5,7 +5,12 @@
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 
 namespace mlir {
+
+class Pass;
+
 namespace triton {
+
+std::unique_ptr<Pass> createTritonGPURegisterPressurePass();
 
 #define GEN_PASS_REGISTRATION
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"

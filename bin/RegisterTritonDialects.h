@@ -13,6 +13,7 @@
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/InitAllPasses.h"
 
 namespace mlir {
@@ -35,6 +36,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestMembarPass();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
+  mlir::triton::registerTritonGPURegisterPressurePass();
   mlir::triton::registerConvertNVGPUToLLVMPass();
 
   // TODO: register Triton & TritonGPU passes
@@ -43,5 +45,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
                   mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
                   mlir::arith::ArithDialect, mlir::scf::SCFDialect,
                   mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
+                  mlir::ROCDL::ROCDLDialect,
                   mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect>();
 }

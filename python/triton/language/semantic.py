@@ -1210,7 +1210,7 @@ def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty, target) -> bool:
 
 
 def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_num_imprecise_acc: int,
-        out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
+        out_dtype: tl.dtype, matrix_instr_nonkdim: list[int], builder: ir.builder) -> tl.tensor:
 
     def assert_dtypes_valid(lhs_dtype, rhs_dtype, target):
         # Checks for non-cuda archs
@@ -1267,7 +1267,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
             and rhs.shape[1].value >= 16, \
             f"All values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 16!"
     if is_hip():
-        assert lhs.shape[0].value >= 4 and lhs.shape[1].value >= 16 \
+        assert lhs.shape[0].value >= 4 and lhs.shape[1].value >= 4 \
             and rhs.shape[1].value >= 4, \
             f"All values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 4!"
 
@@ -1341,6 +1341,8 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
         ret_ty = tl.block_type(ret_dot_scalar_ty, [M, N])
         ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32, max_num_imprecise_acc),
                         ret_ty)
+        if len(matrix_instr_nonkdim) > 0:
+            ret.handle.set_attr("tt.matrix_instr_nonkdim", ir.make_attr(matrix_instr_nonkdim, ret.handle.get_context()))
         return cast(ret, ret_scalar_ty, builder)
 
     _0 = builder.create_splat(_0, [M, N])

@@ -56,6 +56,35 @@ public:
             srcMfmaEncoding.getIsTransposed() &&
             dstDotOp.getParent() == srcMfmaEncoding)
           return;
+        auto dotOperandEncoding =
+            dstDotOp.getParent().dyn_cast<triton::gpu::MfmaEncodingAttr>();
+        if (dotOperandEncoding) {
+          if (srcMfmaEncoding.getMDim() == 4 &&
+              srcMfmaEncoding.getNDim() == 64 &&
+              srcMfmaEncoding.getIsTransposed() &&
+              dstDotOp.getKWidth() == 4 &&
+              dstDotOp.getOpIdx() == 0 &&
+              dotOperandEncoding.getMDim() == 4 &&
+              dotOperandEncoding.getNDim() == 4 &&
+              srcMfmaEncoding.getWarpsPerCTA()[1] == 1)
+            return;
+          if (srcMfmaEncoding.getMDim() == 64 &&
+              srcMfmaEncoding.getNDim() == 4 &&
+              !srcMfmaEncoding.getIsTransposed() &&
+              dstDotOp.getKWidth() == 4 &&
+              dstDotOp.getOpIdx() == 0 &&
+              dotOperandEncoding.getMDim() == 4 &&
+              dotOperandEncoding.getNDim() == 4 &&
+              srcMfmaEncoding.getWarpsPerCTA()[0] == 1)
+            return;
+          if (srcMfmaEncoding.getWarpsPerCTA()[1] == 1 &&
+              dstDotOp.getOpIdx() == 0 &&
+              dstDotOp.getKWidth() == 4 &&
+              (srcMfmaEncoding.getMDim() == 32 ||
+              srcMfmaEncoding.getMDim() == 16) &&
+              srcMfmaEncoding.getIsTransposed())
+            return;
+        }
       }
 #endif
       auto tmpType = RankedTensorType::get(

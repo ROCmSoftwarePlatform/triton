@@ -37,4 +37,25 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
     ];
 }
 
+def TritonGPURegisterPressure : Pass<"tritongpu-register-pressure", "mlir::ModuleOp"> {
+  let summary = "analyze register pressure and print a report";
+
+  let description = [{
+  }];
+
+  let constructor = "mlir::triton::createTritonGPURegisterPressurePass()";
+
+  let dependentDialects = ["mlir::arith::ArithDialect",
+                           "mlir::math::MathDialect",
+                           "mlir::gpu::GPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::LLVM::LLVMDialect",
+                           "mlir::tensor::TensorDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::ROCDL::ROCDLDialect",
+                           "mlir::NVVM::NVVMDialect"];
+}
+
 #endif

@@ -8,6 +8,11 @@
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/GCNAsmFormat.h"
 
+static void check_non_zero(mlir::Value v) {
+  if (auto cst = llvm::dyn_cast<mlir::LLVM::ConstantOp>(*v.getDefiningOp()))
+    assert(!cst.getValueAttr().cast<mlir::IntegerAttr>().getValue().isZero());
+}
+
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 // Operators
 #define inttoptr(...) rewriter.create<LLVM::IntToPtrOp>(loc, __VA_ARGS__)
@@ -18,7 +23,7 @@
 #define fpext(...) rewriter.create<LLVM::FPExtOp>(loc, __VA_ARGS__)
 #define trunc(...) rewriter.create<LLVM::TruncOp>(loc, __VA_ARGS__)
 #define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
-#define urem(...) rewriter.create<LLVM::URemOp>(loc, __VA_ARGS__)
+#define urem(a, b) (check_non_zero(b), rewriter.create<LLVM::URemOp>(loc, a, b))
 #define add(...) rewriter.create<LLVM::AddOp>(loc, __VA_ARGS__)
 #define sub(...) rewriter.create<LLVM::SubOp>(loc, __VA_ARGS__)
 #define fadd(...) rewriter.create<LLVM::FAddOp>(loc, __VA_ARGS__)

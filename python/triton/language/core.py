@@ -1042,7 +1042,7 @@ def expand_dims(input, axis, _builder=None):
 
 
 @builtin
-def dot(input, other, acc=None, allow_tf32=True, max_num_imprecise_acc=None, out_dtype=float32, _builder=None):
+def dot(input, other, acc=None, allow_tf32=True, max_num_imprecise_acc=None, out_dtype=float32, matrix_instr_nonkdim=[], _builder=None):
     """
     Returns the matrix product of two blocks.
 
@@ -1056,7 +1056,7 @@ def dot(input, other, acc=None, allow_tf32=True, max_num_imprecise_acc=None, out
     allow_tf32 = _constexpr_to_value(allow_tf32)
     out_dtype = _constexpr_to_value(out_dtype)
     max_num_imprecise_acc = _constexpr_to_value(max_num_imprecise_acc)
-    return semantic.dot(input, other, acc, allow_tf32, max_num_imprecise_acc, out_dtype, _builder)
+    return semantic.dot(input, other, acc, allow_tf32, max_num_imprecise_acc, out_dtype, matrix_instr_nonkdim, _builder)
 
 
 # -----------------------

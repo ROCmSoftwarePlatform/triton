@@ -174,9 +174,28 @@ public:
 
     unsigned mDim = 0;
     unsigned nDim = 0;
-    if (enforcedNonKDim != 0) {
-      mDim = enforcedNonKDim;
-      nDim = enforcedNonKDim;
+    auto matrixNonKDimAttr =
+        dot.getOperation()->getDiscardableAttr("tt.matrix_instr_nonkdim");
+    if (matrixNonKDimAttr) {
+      auto instrNonKDim =
+          matrixNonKDimAttr.cast<mlir::DenseIntElementsAttr>().getValues<int>();
+      mDim = instrNonKDim[0];
+      nDim = instrNonKDim[1];
+    } else if (enforcedNonKDim != 0) {
+      if (enforcedNonKDim == 32 || enforcedNonKDim == 16 ||
+          enforcedNonKDim == 4) {
+        mDim = enforcedNonKDim;
+        nDim = enforcedNonKDim;
+      } else if (enforcedNonKDim == 464) {
+        mDim = 4;
+        nDim = 64;
+      } else if (enforcedNonKDim == 644) {
+        mDim = 64;
+        nDim = 4;
+      } else {
+        llvm::report_fatal_error("Invalid MFMA nonKDim option, supported "
+                                 "values are: 32, 16, 4, 464, 644");
+      }
     } else {
       int minSize = std::min(resShape[0], resShape[1]);
       if (minSize >= 32) {

@@ -58,16 +58,23 @@ def _attn_fwd_inner(acc, l_i, m_i, q,
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = tl.where(mask, qk, float("-inf"))
-        qk += tl.dot(q, k)
+        qk += tl.dot(q, k, matrix_instr_nonkdim=[4, 64])
+        #tl.device_print("qk1", qk)
         m_ij = tl.maximum(m_i, tl.max(qk, 1))
+        #tl.device_print("m_ij", m_ij)
         qk = qk - m_ij[:, None]
+        #tl.device_print("qk2", qk)
         p = tl.math.exp2(qk)
+        #tl.device_print("p", p)
         # -- update output accumulator --
         alpha = tl.math.exp2(m_i - m_ij)
+        #tl.device_print("alpha", alpha)
         acc = acc * alpha[:, None]
+        #tl.device_print("acc1", acc)
         if not pre_load_v:
             v = tl.load(V_block_ptr)
-        acc += tl.dot(p.to(v.dtype), v)
+        acc += tl.dot(p.to(v.dtype), v, matrix_instr_nonkdim=[4, 4])
+        #tl.device_print("acc2", acc)
         # -- update m_i and l_i
         l_ij = tl.sum(p, 1)
         l_i = l_i * alpha + l_ij
@@ -83,13 +90,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,
 # re-tuning.
 @triton.autotune(
    configs=[
-       triton.Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'waves_per_eu': 2, 'slice_k_tile': 0, 'pre_load_v': False}, num_stages=1, num_warps=8),
-       triton.Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'waves_per_eu': 2, 'slice_k_tile': 32, 'pre_load_v': False}, num_stages=1, num_warps=8),
-       triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'slice_k_tile': 0, 'pre_load_v': False}, num_stages=1, num_warps=4),
-       triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'slice_k_tile': 32, 'pre_load_v': False}, num_stages=1, num_warps=4),
-       triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'waves_per_eu': 2, 'slice_k_tile': 0, 'pre_load_v': False}, num_stages=1, num_warps=8),
-       triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'slice_k_tile': 0, 'pre_load_v': True}, num_stages=1, num_warps=4),
-       triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'slice_k_tile': 0, 'pre_load_v': False}, num_stages=1, num_warps=4),
+       triton.Config({'BLOCK_M': 16, 'BLOCK_N': 64, 'waves_per_eu': 3, 'slice_k_tile': 0, 'pre_load_v': True}, num_stages=1, num_warps=1),
    ],
    key=['Z', 'H', 'N_CTX', 'STAGE', 'BLOCK_DMODEL'],
 )
@@ -557,14 +558,8 @@ class _attention(torch.autograd.Function):
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q, dtype=v.dtype)
         if torch.version.hip is None:
-            BLOCK_M = 128
-            BLOCK_N = 64 if Lk <= 64 else 32
-            num_stages = 4 if Lk <= 64 else 3
-            num_warps = 4 if Lk <= 64 else 8
-            # Tuning for H100
-            if torch.cuda.get_device_capability()[0] == 9:
-                num_warps = 8
-                num_stages = 7 if Lk >= 64 else 3
+            BLOCK_M = 16
+            BLOCK_N = 64
         stage = 3 if causal else 1
         grid = lambda META: (
             triton.cdiv(q.shape[2], META['BLOCK_M']),
@@ -646,8 +641,10 @@ name_to_torch_types = {
     'fp16': torch.float16,
 }
 
+TORCH_HAS_FP8E5B16 = False
 if TORCH_HAS_FP8E5B16:
     name_to_torch_types['fp8'] = torch.float8_e5m2fnuz
+TORCH_HAS_FP8 = False
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD, dtype',
 [ (*shape, dtype)
@@ -685,6 +682,31 @@ def test_op_fwd(Z, H, N_CTX, D_HEAD, causal, dtype):
     rtol = 1e-2 if dtype == 'fp8' else 0
     torch.testing.assert_close(ref_out, tri_out, atol=atol, rtol=rtol)
 
+@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD',
+                         [(1, 1, 128, 64),
+                          ])
+@pytest.mark.parametrize('causal', [False, True])
+def test_op_fwd_mfma4(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
+    torch.manual_seed(20)
+    q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
+    k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
+    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
+    if TORCH_HAS_FP8:
+        q = q.to(torch_dtype)
+        k = k.to(torch_dtype)
+    sm_scale = 0.5
+    dout = torch.randn_like(q, dtype=torch.float16)
+    # reference implementation
+    M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
+    p = torch.matmul(q.half(), k.transpose(2, 3).half()) * sm_scale
+    if causal:
+        p[:, :, M == 0] = float("-inf")
+    p = torch.softmax(p.float(), dim=-1).half()
+    ref_out = torch.matmul(p, v)
+    # triton implementation
+    tri_out = attention(q, k, v, causal, sm_scale)
+    # compare
+    torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=1e-2)
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD',
                          [(4, 48, 1024, 64),
@@ -808,4 +830,4 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype
     return total_flops / ms * 1e-9
 
 # only works on post-Ampere GPUs right now
-bench_flash_attention.run(save_path=".", print_data=True)
+# bench_flash_attention.run(save_path=".", print_data=True)

@@ -5,6 +5,10 @@ include "mlir/Dialect/Arith/IR/ArithOps.td"
 include "triton/Dialect/Triton/IR/TritonOps.td"
 include "mlir/IR/PatternBase.td"
 
+def CopyAttrMFMA: NativeCodeCallVoid<
+  "auto matrixCoreAttr = $0.getDefiningOp()->getDiscardableAttr(\"tt.matrix_instr_nonkdim\");"
+  "if (matrixCoreAttr)"
+  "$1.getDefiningOp()->setAttr(\"tt.matrix_instr_nonkdim\", matrixCoreAttr)">;
 
 // AddIOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
 // AddFOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
@@ -13,23 +17,28 @@ include "mlir/IR/PatternBase.td"
 // AddFOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
 def CombineDotAddIPattern : Pat<
         (Arith_AddIOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc)),
-        (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc),
-        [(Constraint<CPred<"isZero($0)">> $c)]>;
+        (TT_DotOp:$dst $a, $b, $d, $allowTF32, $maxNumImpreciseAcc),
+        [(Constraint<CPred<"isZero($0)">> $c)],
+        [(CopyAttrMFMA $res, $dst)]>;
 def CombineDotAddFPattern : Pat<
         (Arith_AddFOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc), $fastmath),
-        (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc),
+        (TT_DotOp:$dst $a, $b, $d, $allowTF32, $maxNumImpreciseAcc),
         [(Constraint<CPred<"isZero($0)">> $c),
-         (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc)]>;
+         (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc)],
+        [(CopyAttrMFMA $res, $dst)]>;
+
 
 def CombineDotAddIRevPattern : Pat<
         (Arith_AddIOp (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc), $d),
-        (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc),
-        [(Constraint<CPred<"isZero($0)">> $c)]>;
+        (TT_DotOp:$dst $a, $b, $d, $allowTF32, $maxNumImpreciseAcc),
+        [(Constraint<CPred<"isZero($0)">> $c)],
+        [(CopyAttrMFMA $res, $dst)]>;
 def CombineDotAddFRevPattern : Pat<
         (Arith_AddFOp (TT_DotOp:$res $a, $b, $c, $allowTF32, $maxNumImpreciseAcc), $d, $fastmath),
-        (TT_DotOp $a, $b, $d, $allowTF32, $maxNumImpreciseAcc),
+        (TT_DotOp:$dst $a, $b, $d, $allowTF32, $maxNumImpreciseAcc),
         [(Constraint<CPred<"isZero($0)">> $c),
-         (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc)]>;
+         (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc)],
+        [(CopyAttrMFMA $res, $dst)]>;
 
 // TODO: this fails for addptr(addptr(ptr, i32), i64)
 // Commented out until fixed
