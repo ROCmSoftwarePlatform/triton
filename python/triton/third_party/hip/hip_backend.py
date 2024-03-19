@@ -61,9 +61,9 @@ def ty_to_cpp(ty):
         "fp64": "double",
     }[ty]
 
-
 def generate_launcher_hip(constants, signature, ids):
     start_desc = len(signature)
+    warp_size = _triton.get_warp_size()
     #signature = generate_cu_signature(constants, signature, ids)
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
@@ -128,7 +128,7 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
   // printf("_launch hip kernel\\n");
   void *params[] = {{ {', '.join(f"&arg{i}" for i in params)} }};
   if (gridX*gridY*gridZ > 0) {{
-      HIP_CHECK(hipModuleLaunchKernel(function, gridX, gridY, gridZ, 64*num_warps, 1, 1, shared_memory, stream, params, 0));
+      HIP_CHECK(hipModuleLaunchKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
     }}
   }}
 
@@ -274,6 +274,11 @@ def get_amdgcn_bitcode_paths(gfx_arch: str):
     # print(f"amdgcn_bitcode_paths: {amdgcn_bitcode_paths}")
     return amdgcn_bitcode_paths
 
+def get_arch_name() -> str:
+    arch_info = _triton.get_arch_info()
+    gfx_arch_details = re.search('amd.*', arch_info).group(0).strip().split('--')
+    arch_name_features = gfx_arch_details[1].split(':')
+    return arch_name_features[0]
 
 def gpu_matrix_core_version() -> int:
     """ Determine matrix core type available on current GPU.
@@ -298,7 +303,6 @@ def gpu_matrix_core_version() -> int:
         return 3
     return 0
 
-
 def get_amdgpu_arch_fulldetails():
     """
     get the amdgpu full ISA details for compiling:
@@ -319,9 +323,10 @@ def get_amdgpu_arch_fulldetails():
             raise RuntimeError('gfx_arch is None (not specified)')
         mat_core_ver = gpu_matrix_core_version()
         capability = gpu_matrix_core_version() * 100
+        warp_size = _triton.get_warp_size()
 
         return {"gfx_triple": arch_triple, "gfx_arch": gfx_arch, "gfx_features": arch_features,\
-                 "capability": capability, "matrix_core_version": mat_core_ver}
+                 "capability": capability, "matrix_core_version": mat_core_ver, "warp_size": warp_size}
     except BaseException as e:
         print("Error: Attempting to get amgpu ISA Details {}".format(e))
         return None
@@ -451,9 +456,10 @@ class HIPBackend(BaseBackend):
             waves_per_eu = other["waves_per_eu"]
             slice_k_tile = other["slice_k_tile"]
             matrix_instr_nonkdim = other["matrix_instr_nonkdim"]
+            kpack = other["kpack"]
 
             stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
-                               lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, warp_size, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue, matrix_instr_nonkdim, slice_k_tile))
+                               lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, warp_size, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue, matrix_instr_nonkdim, slice_k_tile, kpack))
             stages["llir"] = (lambda path: Path(path).read_text(),
                               lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos, waves_per_eu))
 
@@ -507,7 +513,6 @@ class HIPBackend(BaseBackend):
         arch["num_warps"] = 4
         arch["num_stages"] = 2
         arch["num_ctas"] = 1
-        arch["warp_size"] = 64
         return arch
 
     def make_launcher_stub(self, name, signature, constants, ids):

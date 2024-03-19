@@ -171,7 +171,7 @@ public:
 private:
   std::unique_ptr<mlir::OpBuilder> builder;
   std::unique_ptr<mlir::Location> lastLoc;
-  bool lineInfoEnabled = !triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
+  bool lineInfoEnabled = !mlir::triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
 };
 
 static std::string locationToString(mlir::Location loc) {
@@ -1737,7 +1737,7 @@ void init_triton_ir(py::module &&m) {
       .def(py::init<mlir::MLIRContext *>())
       .def("enable_debug",
            [](mlir::PassManager &self) {
-             if (!::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP"))
+             if (!mlir::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP"))
                return;
              self.getContext()->disableMultithreading();
              auto printingFlags = mlir::OpPrintingFlags();
@@ -1875,9 +1875,10 @@ void init_triton_ir(py::module &&m) {
                  mlir::createTritonGPUAccelerateMatmulPass(computeCapability));
            })
       .def("add_tritonamdgpu_accelerate_matmul_pass",
-           [](mlir::PassManager &self, const std::string archGenName, int instrSize) {
+           [](mlir::PassManager &self, const std::string archGenName,
+              int instrSize, int kpack) {
              self.addPass(mlir::createTritonAMDGPUAccelerateMatmulPass(
-                 archGenName, instrSize));
+                 archGenName, instrSize, kpack));
            })
       .def("add_tritongpu_optimize_dot_operands_pass",
            [](mlir::PassManager &self) {
@@ -1929,8 +1930,8 @@ void init_triton_ir(py::module &&m) {
 void init_triton_env_vars(py::module &m) {
   m.def("get_env_vars", []() -> std::map<std::string, bool> {
     std::map<std::string, bool> envVars;
-    for (const auto &envVar : triton::ENV_VARS) {
-      envVars[envVar] = triton::tools::getBoolEnv(envVar);
+    for (const auto &envVar : mlir::triton::ENV_VARS) {
+      envVars[envVar] = mlir::triton::tools::getBoolEnv(envVar);
     }
     return envVars;
   });
@@ -1994,10 +1995,7 @@ void init_triton_translation(py::module &m) {
       ret::take_ownership);
 
   m.def(
-      "get_warp_size",
-      []() {
-        return std::get<1>(getArchInfo());
-      },
+      "get_warp_size", []() { return std::get<1>(getArchInfo()); },
       ret::take_ownership);
 
   m.def(
@@ -2067,7 +2065,7 @@ void init_triton_translation(py::module &m) {
             ofs.close();
 
             auto lineInfoOption =
-                triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO")
+                mlir::triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO")
                     ? ""
                     : " -lineinfo";
             auto fmadOption = enable_fp_fusion ? "" : " --fmad=false";
