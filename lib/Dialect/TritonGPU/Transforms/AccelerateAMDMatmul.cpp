@@ -158,9 +158,8 @@ public:
 
   /// @brief Choose MFMA instruction parameters
   /// @param dot target dot operation
-  /// @return pair {nonKDim, kDim} sizes of one MFMA instruction arguments
-  std::tuple<int64_t, int64_t, int64_t>
-  chooseMfmaDimensions(tt::DotOp dot) const {
+  /// @return selected mfma instruction
+  MfmaInsn chooseMfmaDimensions(tt::DotOp dot) const {
     // number of matrix elements along k dim per one MFMA intruction
     unsigned kDim = 0;
     auto opType = dot.getA().getType().cast<RankedTensorType>();
@@ -175,8 +174,20 @@ public:
     unsigned mDim = 0;
     unsigned nDim = 0;
     if (enforcedNonKDim != 0) {
-      mDim = enforcedNonKDim;
-      nDim = enforcedNonKDim;
+      if (enforcedNonKDim == 32 || enforcedNonKDim == 16 ||
+          enforcedNonKDim == 4) {
+        mDim = enforcedNonKDim;
+        nDim = enforcedNonKDim;
+      } else if (enforcedNonKDim == 464) {
+        mDim = 4;
+        nDim = 64;
+      } else if (enforcedNonKDim == 644) {
+        mDim = 64;
+        nDim = 4;
+      } else {
+        llvm::report_fatal_error("Invalid MFMA nonKDim option, supported "
+                                 "values are: 32, 16, 4, 464, 644");
+      }
     } else {
       int minSize = std::min(resShape[0], resShape[1]);
       if (minSize >= 32) {
@@ -188,6 +199,8 @@ public:
         nDim = 16;
       }
       if (minSize < 16) {
+        assert(opType.getShape()[1] >= 64 &&
+               "k should be at least 64 to use this layout");
         if (resShape[0] < 16 && resShape[1] >= 64) {
           mDim = 4;
           nDim = 64;
@@ -195,8 +208,6 @@ public:
           mDim = 64;
           nDim = 4;
         } else {
-          assert(opType.getShape()[1] >= 64 &&
-                 "k should be at least 64 to use this layout");
           mDim = 4;
           nDim = 4;
         }
@@ -215,7 +226,7 @@ public:
     assert(mDim != 0 && nDim != 0);
     assert(resShape[0] % mDim == 0 && resShape[1] % nDim == 0);
     assert(opType.getShape()[1] % kDim == 0);
-    return {mDim, nDim, kDim};
+    return maybeMfmaInsn.value();
   }
 
   mlir::LogicalResult
@@ -247,7 +258,10 @@ public:
 
     ttg::MfmaEncodingAttr mfmaEnc;
 
-    auto [mDim, nDim, kDim] = chooseMfmaDimensions(dotOp);
+    auto instr = chooseMfmaDimensions(dotOp);
+    auto mDim = instr.getMDim();
+    auto nDim = instr.getNDim();
+    auto kDim = instr.getKDim();
 
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
@@ -278,33 +292,24 @@ public:
 
     // kWidth is initialized as k_base, which is the number of elements hold by
     // one thread per mfma instruction
-    auto kWidth = -1;
-    // in mfma 32x32 case argument matrix groups elements in 2 groups
-    // in mfma 16x16 case argument matrix groups elements in 4 groups
-    // in mfma 4x4 case argument matrix groups in 16 groups
-    if (mDim == 32 && nDim == 32)
-      kWidth = kDim / 2;
-    if (mDim == 16 && nDim == 16)
-      kWidth = kDim / 4;
-    if (mDim == 4 && nDim == 4)
-      kWidth = kDim / 16;
-    if (mDim == 4 && nDim == 64 || mDim == 64 && nDim == 4)
-      kWidth = kDim;
-    assert(kWidth != -1);
+    auto kWidthA = instr.getKBaseA();
+    auto kWidthB = instr.getKBaseB();
 
     // We want to extend kWidth by kpack (kpack=1 means no extension)
     // to increase ds_read vector size
     // However, in FA, the second dot can only use kWidth = k_bse since it's
     // limited by the result of the first dot, which is of mfmaLayout.
-    if (!isSecondDot(dotOp))
-      kWidth *= kpack;
+    if (!isSecondDot(dotOp)) {
+      kWidthA *= kpack;
+      kWidthB *= kpack;
+    }
 
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(),
-        ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth));
+        ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidthA));
     auto newBType = RankedTensorType::get(
         oldBType.getShape(), oldBType.getElementType(),
-        ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth));
+        ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidthB));
     a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);
     auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newRetType, a, b,

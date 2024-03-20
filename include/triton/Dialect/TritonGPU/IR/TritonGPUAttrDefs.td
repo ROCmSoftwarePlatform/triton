@@ -131,6 +131,7 @@ compared to 1*64 when the hasLeadingOffset is false.
 
         if (mfmaEnc) {
           int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
+          int nonKDimNum = 1 - kDimNum;
           if (needTrans)
             kDimNum = 1 - kDimNum;
           bool isKDimInner = (order[0] == kDimNum);
@@ -154,6 +155,15 @@ compared to 1*64 when the hasLeadingOffset is false.
             auto nonKDim = dotOpEnc.getOpIdx() == 0 ? mDim : nDim;
             if (4 == nonKDim)
                maxPhase = 4;
+            // if maxPhase * perPhase is larger than one block of warps,
+            // fallback to unswizzled tensor.
+            // Shared to dot op conversion requires that swizzling patern
+            // fits into one block of warps.
+            auto warpsPerCTA = mfmaEnc.getWarpsPerCTA();
+            if (maxPhase * perPhase > nonKDim * warpsPerCTA[nonKDimNum]) {
+              assert(isKDimInner);
+              maxPhase = 1;
+            }
             assert(maxPhase > 0);
 
             return get(context, vecSize, perPhase, maxPhase, order, CTALayout);

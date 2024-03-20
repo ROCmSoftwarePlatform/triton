@@ -304,12 +304,17 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
         llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
         return {};
       }
-    } else if (parentLayout.isa<MfmaEncodingAttr>()) {
+    } else if (auto mfmaLayout = parentLayout.dyn_cast<MfmaEncodingAttr>()) {
       auto opIdx = dotLayout.getOpIdx();
+      auto kWidth = dotLayout.getKWidth();
       if (opIdx == 0) {
-        return {4, 1};
+        int repeats =
+            (mfmaLayout.getMDim() == 64 && mfmaLayout.getNDim() == 4) ? 16 : 1;
+        return {1, kWidth * repeats};
       } else if (opIdx == 1) {
-        return {1, 4};
+        int repeats =
+            (mfmaLayout.getMDim() == 4 && mfmaLayout.getNDim() == 64) ? 16 : 1;
+        return {kWidth * repeats, 1};
       } else {
         assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
         return {};
@@ -457,6 +462,8 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout,
                    parentLayout.dyn_cast<MfmaEncodingAttr>()) {
       auto parentShapePerCTA = getShapePerCTATile(parentLayout, tensorShape);
       auto opIdx = dotLayout.getOpIdx();
+
+      assert(parentMfmaLayout.getMDim() == 32);
 
       if (opIdx == 0) {
         return {parentShapePerCTA[0], 32};
@@ -1102,16 +1109,13 @@ DotOperandEncodingAttr::getMFMAElemsPerInstr() const {
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
   int64_t kWidth = getKWidth();
   constexpr int waveSize = 64; // MFMA is used on wave64 architectures only
-  int kGroups = -1;
-  if (mDim == nDim)
-    kGroups = waveSize / mDim;
-  if (mDim == 64 && nDim == 4 || mDim == 4 && nDim == 64)
-    kGroups = 1;
+  auto nonKDim = getOpIdx() == 0 ? mDim : nDim;
+  int kGroups = waveSize / nonKDim;
   int64_t kDim = kWidth * kGroups;
   if (getOpIdx() == 0)
-    return {mDim, kDim};
+    return {nonKDim, kDim};
   else
-    return {kDim, nDim};
+    return {kDim, nonKDim};
 }
 
 SmallVector<int64_t>
@@ -1902,6 +1906,18 @@ struct TritonGPUInferLayoutInterface
     // Verify that the encodings are valid.
     if (!aEncoding || !bEncoding)
       return op->emitError("mismatching encoding between A and B operands");
+#ifdef USE_ROCM
+    auto aParentEncoding =
+        aEncoding.getParent().dyn_cast_or_null<MfmaEncodingAttr>();
+    auto bParentEncoding =
+        bEncoding.getParent().dyn_cast_or_null<MfmaEncodingAttr>();
+    if (aParentEncoding != bParentEncoding)
+      return op->emitError(
+          "mismatching parent encoding between A and B operands");
+    if (aParentEncoding != nullptr &&
+        aParentEncoding.getMDim() != aParentEncoding.getNDim())
+      return success();
+#endif // USE_ROCM
     if (aEncoding.getKWidth() != bEncoding.getKWidth())
       return op->emitError("mismatching kWidth between A and B operands");
     return success();

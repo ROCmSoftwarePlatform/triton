@@ -158,14 +158,12 @@ llvm::SmallVector<llvm::SmallVector<Value>> computeTensorElemMappingInBlock(
     if (iNonKDim == 32)
       laneHOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
     else {
-      // In this configuration wave contains 16 copies of same data
-      if ((iKDim == 1 || iKDim == 4) && iNonKDim == 4) {
+      // shortcut for 64x64 tile size.
+      // In this case warp do not wrap, so no need to introduce this offset
+      if (iNonKDim == 64)
         laneHOffset = i32_val(0);
-      } else {
-        assert(iKDim * iNonKDim / numOfElems == 64 &&
-               "seems no all threads in wave contain unique elements");
+      else
         laneHOffset = mul(udiv(laneId, nonKDim), i32_val(numOfElems));
-      }
     }
 
     for (int loadId = 0; loadId < loadsPerThread; ++loadId) {
@@ -346,7 +344,7 @@ fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
         // 32 33 34 35 ... 63
         // 32 33 34 35 ... 63
         Value halfOffset;
-        if ((iKDim == 1 || iKDim == 4) && iNonKDim == 4)
+        if (iNonKDim == 64)
           halfOffset = i32_val(0);
         else
           halfOffset =
@@ -456,6 +454,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int numSubBlocks = 1;
   if ((mfmaInstrK == 4 || mfmaInstrK == 1) && mfmaInstrNonK == 4)
     numSubBlocks = 16;
+  assert(numSubBlocks == 1 &&
+         "after reworking layout, there should be no redundency");
   int numOfElems = mfmaInstrNonK * mfmaInstrK * numSubBlocks / iWaveSize;
   assert(numOfElems >= 1);
 

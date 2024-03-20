@@ -175,7 +175,8 @@ struct MfmaInsnAttr {
   unsigned n;
   unsigned k;
   // k_base refers to the number of elements per thread
-  unsigned k_base;
+  unsigned k_base_a;
+  unsigned k_base_b;
   llvm::StringRef insn;
 };
 
@@ -223,7 +224,8 @@ public:
   unsigned getMDim();
   unsigned getNDim();
   StringRef getInsnName();
-  unsigned getKBase();
+  unsigned getKBaseA();
+  unsigned getKBaseB();
 };
 } // namespace mlir
 
