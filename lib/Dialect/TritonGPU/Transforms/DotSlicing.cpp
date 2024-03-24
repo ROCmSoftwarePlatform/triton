@@ -123,6 +123,9 @@ struct TritonAMDGPUDotSlicingPass
       sliceOffsets.push_back(0);
     }
 
+    bool sliceInPlace = firstOpToSlice->getBlock() == dotOp->getBlock();
+    builder.setInsertionPoint(sliceInPlace ? dotOp : firstOpToSlice);
+
     auto viewPtr = builder.create<ttg::ViewSliceOp>(
         dotOp.getLoc(),
         RankedTensorType::get(sliceSizes, ptrTensorType.getElementType(),
@@ -141,6 +144,7 @@ struct TritonAMDGPUDotSlicingPass
       if (loopIter == 0) {
         eraseOps.push_back(currOp);
       }
+      builder.setInsertionPoint(sliceInPlace ? dotOp : currOp);
       slicedOp = builder.clone(*currOp, mapping);
 
       // The 'load', 'convert_layout', and 'elementwise' operations each have
@@ -446,6 +450,7 @@ struct TritonAMDGPUDotSlicingPass
         auto slicedOperandB = getSlicedDotOperand(
             firstOpToSliceB, dotOp, 1, i, this->sliceKTile, builder, eraseOps);
 
+        builder.setInsertionPoint(dotOp);
         auto slicedDot = builder.create<tt::DotOp>(
             dotOp.getLoc(), dotResTy, slicedOperandA, slicedOperandB, slicedAcc,
             dotOp.getAllowTF32(), dotOp.getMaxNumImpreciseAcc());

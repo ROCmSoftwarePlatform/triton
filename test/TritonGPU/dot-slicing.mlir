@@ -8,24 +8,27 @@
 
 // CHECK: %[[Q_VIEW_SLICE_1:.+]] = triton_gpu.view_slice %[[Q_PTR:.+]][0, 0] [128, 32] [1, 1] : tensor<128x128x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]> to tensor<128x32x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]>
 // CHECK: %[[LOAD_Q_1:.+]] = tt.load %[[Q_VIEW_SLICE_1]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #[[SLICE_Q_LAYOUT]]>
+// CHECK: %[[Q_VIEW_SLICE_2:.+]] = triton_gpu.view_slice %[[Q_PTR:.+]][0, 32] [128, 32] [1, 1] : tensor<128x128x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]> to tensor<128x32x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]>
+// CHECK: %[[LOAD_Q_2:.+]] = tt.load %[[Q_VIEW_SLICE_2]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #[[SLICE_Q_LAYOUT]]>
+// CHECK: %[[Q_VIEW_SLICE_3:.+]] = triton_gpu.view_slice %[[Q_PTR:.+]][0, 64] [128, 32] [1, 1] : tensor<128x128x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]> to tensor<128x32x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]>
+// CHECK: %[[LOAD_Q_3:.+]] = tt.load %[[Q_VIEW_SLICE_3]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #[[SLICE_Q_LAYOUT]]>
+// CHECK: %[[Q_VIEW_SLICE_4:.+]] = triton_gpu.view_slice %[[Q_PTR:.+]][0, 96] [128, 32] [1, 1] : tensor<128x128x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]> to tensor<128x32x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]>
+// CHECK: %[[LOAD_Q_4:.+]] = tt.load %[[Q_VIEW_SLICE_4]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #[[SLICE_Q_LAYOUT]]>
+
+// CHECK:  scf.for
+
 // CHECK: %[[K_VIEW_SLICE_1:.+]] = triton_gpu.view_slice %[[K_PTR:.+]][0, 0] [32, 128] [1, 1] : tensor<128x128x!tt.ptr<f16, 1>, #[[SLICE_K_LAYOUT]]> to tensor<32x128x!tt.ptr<f16, 1>, #[[SLICE_K_LAYOUT]]>
 // CHECK: %[[LOAD_K_1:.+]] = tt.load %[[K_VIEW_SLICE_1]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf16, #[[SLICE_K_LAYOUT]]>
 // CHECK:  %[[QK_DOT_1:.+]] = tt.dot %[[QK_DOT_ARG_1:.+]], %[[QK_DOT_ARG_2:.+]], %[[QK_DOT_ARG_3:.+]] {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mfma, kWidth = 4}>> * tensor<32x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mfma, kWidth = 4}>> -> tensor<128x128xf32, #mfma>
 
-// CHECK: %[[Q_VIEW_SLICE_2:.+]] = triton_gpu.view_slice %[[Q_PTR:.+]][0, 32] [128, 32] [1, 1] : tensor<128x128x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]> to tensor<128x32x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]>
-// CHECK: %[[LOAD_Q_2:.+]] = tt.load %[[Q_VIEW_SLICE_2]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #[[SLICE_Q_LAYOUT]]>
 // CHECK: %[[K_VIEW_SLICE_2:.+]] = triton_gpu.view_slice %[[K_PTR:.+]][32, 0] [32, 128] [1, 1] : tensor<128x128x!tt.ptr<f16, 1>, #[[SLICE_K_LAYOUT]]> to tensor<32x128x!tt.ptr<f16, 1>, #[[SLICE_K_LAYOUT]]>
 // CHECK: %[[LOAD_K_2:.+]] = tt.load %[[K_VIEW_SLICE_2]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf16, #[[SLICE_K_LAYOUT]]>
 // CHECK: %[[QK_DOT_2:.+]] = tt.dot %[[QK_DOT_ARG_2:.+]], %[[QK_DOT_ARG_2:.+]], %[[QK_DOT_1]] {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mfma, kWidth = 4}>> * tensor<32x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mfma, kWidth = 4}>> -> tensor<128x128xf32, #mfma>
 
-// CHECK: %[[Q_VIEW_SLICE_3:.+]] = triton_gpu.view_slice %[[Q_PTR:.+]][0, 64] [128, 32] [1, 1] : tensor<128x128x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]> to tensor<128x32x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]>
-// CHECK: %[[LOAD_Q_3:.+]] = tt.load %[[Q_VIEW_SLICE_3]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #[[SLICE_Q_LAYOUT]]>
 // CHECK: %[[K_VIEW_SLICE_3:.+]] = triton_gpu.view_slice %[[K_PTR:.+]][64, 0] [32, 128] [1, 1] : tensor<128x128x!tt.ptr<f16, 1>, #[[SLICE_K_LAYOUT]]> to tensor<32x128x!tt.ptr<f16, 1>, #[[SLICE_K_LAYOUT]]>
 // CHECK: %[[LOAD_K_3:.+]] = tt.load %[[K_VIEW_SLICE_3]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf16, #[[SLICE_K_LAYOUT]]>
 // CHECK: %[[QK_DOT_3:.+]] = tt.dot %[[QK_DOT_ARG_3:.+]], %[[QK_DOT_ARG_3:.+]], %[[QK_DOT_2]] {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mfma, kWidth = 4}>> * tensor<32x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mfma, kWidth = 4}>> -> tensor<128x128xf32, #mfma>
 
-// CHECK: %[[Q_VIEW_SLICE_4:.+]] = triton_gpu.view_slice %[[Q_PTR:.+]][0, 96] [128, 32] [1, 1] : tensor<128x128x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]> to tensor<128x32x!tt.ptr<f16, 1>, #[[SLICE_Q_LAYOUT]]>
-// CHECK: %[[LOAD_Q_4:.+]] = tt.load %[[Q_VIEW_SLICE_4]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #[[SLICE_Q_LAYOUT]]>
 // CHECK: %[[K_VIEW_SLICE_4:.+]] = triton_gpu.view_slice %[[K_PTR:.+]][96, 0] [32, 128] [1, 1] : tensor<128x128x!tt.ptr<f16, 1>, #[[SLICE_K_LAYOUT]]> to tensor<32x128x!tt.ptr<f16, 1>, #[[SLICE_K_LAYOUT]]>
 // CHECK: %[[LOAD_K_4:.+]] = tt.load %[[K_VIEW_SLICE_4]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf16, #[[SLICE_K_LAYOUT]]>
 // CHECK: %[[QK_DOT_4:.+]] = tt.dot %[[QK_DOT_ARG_4:.+]], %[[QK_DOT_ARG_4:.+]], %[[QK_DOT_3]] {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mfma, kWidth = 4}>> * tensor<32x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mfma, kWidth = 4}>> -> tensor<128x128xf32, #mfma>
