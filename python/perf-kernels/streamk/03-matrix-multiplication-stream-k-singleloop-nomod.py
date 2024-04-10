@@ -39,15 +39,15 @@ print(f"total SMs: {total_sm}")
 def swizzle_tile(tile_id,
                  M, N, K,
                  BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-                 GROUP_M: tl.constexpr
+                 GROUP_SIZE_M: tl.constexpr
                  ):
     grid_m = tl.cdiv(M, BLOCK_M)
     grid_n = tl.cdiv(N, BLOCK_N)
     # re-order program ID for better L2 performance
-    width = GROUP_M * grid_n
+    width = GROUP_SIZE_M * grid_n
     group_id = tile_id // width
-    group_size = tl.minimum(grid_m - group_id * GROUP_M, GROUP_M)
-    pid_m = group_id * GROUP_M + (tile_id % group_size)
+    group_size = tl.minimum(grid_m - group_id * GROUP_SIZE_M, GROUP_SIZE_M)
+    pid_m = group_id * GROUP_SIZE_M + (tile_id % group_size)
     pid_n = (tile_id % width) // group_size
     return pid_m, pid_n
 
@@ -56,7 +56,7 @@ def swizzle_tile(tile_id,
 def linear_tile(tile_id,
                 M, N, K,
                 BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-                GROUP_M: tl.constexpr
+                GROUP_SIZE_M: tl.constexpr
                 ):
     pid_m = tile_id // tl.cdiv(N, BLOCK_N)
     pid_n = tile_id % tl.cdiv(N, BLOCK_N)
@@ -69,7 +69,7 @@ def first_wave(
         stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
         total_full_tiles_streamk, total_partial_tiles_streamk, iters_per_tile,
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, ACC_TYPE: tl.constexpr,
-        GROUP_M: tl.constexpr,
+        GROUP_SIZE_M: tl.constexpr,
 ):
     pid = tl.program_id(0)
     start_iter = pid * total_full_tiles_streamk + tl.minimum(pid, total_partial_tiles_streamk)
@@ -80,10 +80,10 @@ def first_wave(
         end_iter = tl.minimum(start_iter + (iters_per_tile - remainder), last_iter)
         # where are we in the grid
         tile_id = start_iter // iters_per_tile
-        if GROUP_M  > 0:
-            pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
+        if GROUP_SIZE_M  > 0:
+            pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
         else:
-            pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
+            pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
 
         rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
         rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
@@ -116,14 +116,14 @@ def full_tiles(
         stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
         total_tiles_streamk,
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, ACC_TYPE: tl.constexpr,
-        GROUP_M: tl.constexpr,
+        GROUP_SIZE_M: tl.constexpr,
 ):
     # first wave has done more tiles than there are SMs, we adjust pid
     tile_id = tl.program_id(0) + total_tiles_streamk
-    if GROUP_M > 0:
-        pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
+    if GROUP_SIZE_M > 0:
+        pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
     else:
-        pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
+        pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
 
     # do matrix multiplication
     rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -161,7 +161,7 @@ class matmul(torch.autograd.Function):
         matmul._debug = debug
 
     @staticmethod
-    def _call(a: torch.Tensor, b: torch.Tensor, total_programs_streamk: int, BLK_M: int, BLK_N: int, BLK_K: int, two_tiles: bool, num_stages: int, num_warps: int, waves_per_eu: int):
+    def _call(a: torch.Tensor, b: torch.Tensor, total_programs_streamk: int, BLK_M: int, BLK_N: int, BLK_K: int, gsize_m: int, two_tiles: bool, num_stages: int, num_warps: int, waves_per_eu: int):
         device = a.device
 
         assert a.is_contiguous() and b.is_contiguous(), "non-contiguous inputs are not supported"
@@ -175,7 +175,6 @@ class matmul(torch.autograd.Function):
         total_blocks_M = triton.cdiv(M, BLK_M)
         total_blocks_N = triton.cdiv(N, BLK_N)
         iters_per_tile = triton.cdiv(K, BLK_K)
-        GROUP_M = 0  # 0 to disable swizzling
         total_tiles = total_blocks_M * total_blocks_N
 
         if total_programs_streamk > 0:  # Stream-K
@@ -231,7 +230,7 @@ class matmul(torch.autograd.Function):
             BLOCK_N=BLK_N,
             BLOCK_K=BLK_K,
             ACC_TYPE=ACC_TYPE,
-            GROUP_M=GROUP_M,
+            GROUP_SIZE_M=gsize_m,
             num_stages=num_stages,
             num_warps=num_warps,
             waves_per_eu = waves_per_eu,
@@ -256,7 +255,7 @@ class matmul(torch.autograd.Function):
             BLOCK_N=BLK_N,
             BLOCK_K=BLK_K,
             ACC_TYPE=ACC_TYPE,
-            GROUP_M=GROUP_M,
+            GROUP_SIZE_M=gsize_m,
             num_stages=num_stages,
             num_warps=num_warps,
             waves_per_eu = waves_per_eu,
@@ -267,8 +266,8 @@ class matmul(torch.autograd.Function):
         return c
 
     @staticmethod
-    def forward(ctx, a: torch.Tensor, b: torch.Tensor, grid: int, BLK_M=128, BLK_N=128, BLK_K=32, two_tiles=True, num_stages=3, num_warps=4, waves_per_eu = 2):
-        return matmul._call(a=a, b=b, total_programs_streamk=grid, BLK_M=BLK_M, BLK_N=BLK_N, BLK_K=BLK_K, two_tiles=two_tiles, num_warps=num_warps, num_stages=num_stages, waves_per_eu = waves_per_eu)
+    def forward(ctx, a: torch.Tensor, b: torch.Tensor, grid: int, BLK_M = 128, BLK_N = 128, BLK_K = 32, gsize_m = 1, two_tiles = True, num_stages = 3, num_warps = 4, waves_per_eu = 2):
+        return matmul._call(a = a, b = b, total_programs_streamk = grid, BLK_M = BLK_M, BLK_N = BLK_N, BLK_K = BLK_K, gsize_m = gsize_m, two_tiles = two_tiles, num_warps = num_warps, num_stages = num_stages, waves_per_eu = waves_per_eu)
 
 
 # ---------------------------------------------------------------------------
@@ -284,16 +283,17 @@ A = torch.randn(m, k, device="cuda", dtype=torch.float16)
 B = torch.randn(k, n, device="cuda", dtype=torch.float16)
 #A = torch.ones((m, k), device="cuda", dtype=torch.float16)
 #B = torch.ones((k, n), device="cuda", dtype=torch.float16)
-BLK_M = 128
+BLK_M = 256
 BLK_N = 256
 BLK_K = 32
+gsize_m = 2
 two_tiles='True'
 num_stages=0
-num_warps=4
+num_warps=8
 waves_per_eu = 0
 
 matmul.set_debug(True)
-C = matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu)
+C = matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu)
 #exit(0)
 matmul.set_debug(False)
 expected = A @ B
@@ -305,16 +305,16 @@ assert torch.allclose(C, expected, atol=1), f"max: {(C - expected).abs().max().i
 triton_ms = triton.testing.do_bench(lambda: torch.matmul(A, B))
 print(f"PyTorch: {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu))
 print(f"hybrid stream-k (grid={total_sm}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm * 2, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm * 2, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu))
 print(f"hybrid stream-k (grid={total_sm * 2}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, 0, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, 0, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu))
 print(f"tile matmul (grid=0): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-exit(0)
+#exit(0)
 # ---------------------------------------------------------------------------
 # Log-sampled benchmark
 # ---------------------------------------------------------------------------
@@ -355,7 +355,7 @@ for idx, (m, n, k) in enumerate(shapes):
             nb_sm.append(total_tile)
         nb_sm += random.sample(range(2, total_sm * 2, 2), 10)
         for sm in nb_sm:
-            triton_ms = triton.testing.do_bench(lambda: wrapper_matmul(A, B, sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu))
+            triton_ms = triton.testing.do_bench(lambda: wrapper_matmul(A, B, sm, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu))
             max_disc = (output - expected).abs().max().item()
             # large tolerance to accomodate for large K (rounding due to half precision), we just want to catch bugs.
             assert max_disc <= 5., f"pb size: {m}x{n}x{k} - max discrepancy: {max_disc} - sm: {sm}, 2 tiles: {two_tiles}\n{output}\n{expected}"
