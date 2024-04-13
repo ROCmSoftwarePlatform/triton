@@ -406,6 +406,7 @@ matmul.set_debug(False)
 expected = A @ B
 
 assert torch.allclose(C, expected, atol=1), f"max: {(C - expected).abs().max().item()}\n{C}\n{expected}"
+print("results check pass")
 
 # for debugging, uncomment the following line
 
