@@ -108,6 +108,39 @@ def first_wave(
 
         start_iter = end_iter
 
+@triton.jit
+def partialsum(
+        C, partials,
+        M, N, K,
+        stride_cm, stride_cn,
+        total_full_tiles_streamk, total_partial_tiles_streamk, iters_per_tile,
+        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, ACC_TYPE: tl.constexpr,
+        GROUP_SIZE_M: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
+    start_iter = pid * total_full_tiles_streamk + tl.minimum(pid, total_partial_tiles_streamk)
+    last_iter = (pid + 1) * total_full_tiles_streamk + tl.minimum(pid + 1, total_partial_tiles_streamk)
+
+    while start_iter < last_iter:
+        remainder = start_iter % iters_per_tile
+        end_iter = tl.minimum(start_iter + (iters_per_tile - remainder), last_iter)
+        tile_id = start_iter // iters_per_tile
+        if GROUP_SIZE_M  == 1:
+            pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
+        else:
+            pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
+
+        rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
+        partials_ = partials + tile_id * BLOCK_M * BLOCK_N + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
+
+        if remainder != 0:
+            acc = tl.load(C_)
+            acc1 = tl.load(partials_)
+            acc += acc1
+            tl.store(C_, acc)
+
 @triton.jit()
 def first_wave_atomic(
         A, B, C,
@@ -154,40 +187,6 @@ def first_wave_atomic(
 
         start_iter = end_iter
 
-@triton.jit
-def partialsum(
-    C,
-    partials,
-    total_full_tiles_streamk, total_partial_tiles_streamk, iters_per_tile,
-    stride_cm, stride_cn,
-    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
-    SPLIT_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr,
-    ACTIVATION: tl.constexpr):
-
-    pid = tl.program_id(axis=0)
-    start_iter = pid * total_full_tiles_streamk + tl.minimum(pid, total_partial_tiles_streamk)
-    last_iter = (pid + 1) * total_full_tiles_streamk + tl.minimum(pid + 1, total_partial_tiles_streamk)
-
-    while start_iter < last_iter:
-        remainder = start_iter % iters_per_tile
-        end_iter = tl.minimum(start_iter + (iters_per_tile - remainder), last_iter)
-        tile_id = start_iter // iters_per_tile
-        if GROUP_SIZE_M  == 1:
-            pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
-        else:
-            pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
-
-        rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-        rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-        C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
-        partials_ = partials + tile_id * BLOCK_M * BLOCK_N + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
-
-        if remainder != 0:
-            acc = tl_load(C_)
-            acc1 = tl_load(partials_)
-            acc += acc1
-            tl.store(C_, acc)
             
 # similar to the reference matmul kernel
 @triton.jit()
@@ -323,6 +322,9 @@ class matmul(torch.autograd.Function):
         k11 = partialsum[(total_programs_streamk,)](
             c,
             partial_buf,
+            M,
+            N,
+            K,
             c.stride(0),
             c.stride(1),
             total_full_tiles_streamk=total_full_tiles_streamk,
