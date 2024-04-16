@@ -99,15 +99,19 @@ def first_wave(
             A_BASE += BLOCK_K * stride_ak
             B_BASE += BLOCK_K * stride_bk
 
+        acc = acc.to(tl.float16)  # restore C.dtype.element_ty
         if end_iter % iters_per_tile ==0:
             C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
+            # save all full tiles and the first partial tile if there is
             tl.store(C_, acc)
         else:
-            partials_ = partials + tile_id*BLOCK_M*BLOCK_N + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
+            partials_ = partials + rm[:, None]*stride_cm + rn[None,:]*stride_cn # compute inside the if/else to avoid spilling!
+            # save the last partial tile if there is to the partial buffer
             tl.store(partials_, acc)
 
         start_iter = end_iter
 
+# sum the partial buffer back to C
 @triton.jit
 def partialsum(
         C, partials,
@@ -119,11 +123,9 @@ def partialsum(
 ):
     pid = tl.program_id(axis=0)
     start_iter = pid * total_full_tiles_streamk + tl.minimum(pid, total_partial_tiles_streamk)
-    last_iter = (pid + 1) * total_full_tiles_streamk + tl.minimum(pid + 1, total_partial_tiles_streamk)
 
-    while start_iter < last_iter:
-        remainder = start_iter % iters_per_tile
-        end_iter = tl.minimum(start_iter + (iters_per_tile - remainder), last_iter)
+    remainder = start_iter % iters_per_tile
+    if remainder != 0:  #  # check if the first partial tile exist
         tile_id = start_iter // iters_per_tile
         if GROUP_SIZE_M  == 1:
             pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
@@ -133,13 +135,12 @@ def partialsum(
         rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
         rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
         C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
-        partials_ = partials + tile_id * BLOCK_M * BLOCK_N + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
+        partials_ = partials + rm[:, None] * stride_cm + rn[None,:] * stride_cn # compute inside the if/else to avoid spilling!
 
-        if remainder != 0:
-            acc = tl.load(C_)
-            acc1 = tl.load(partials_)
-            acc += acc1
-            tl.store(C_, acc)
+        acc = tl.load(C_)
+        acc1 = tl.load(partials_)
+        acc += acc1
+        tl.store(C_, acc)
 
 @triton.jit()
 def first_wave_atomic(
@@ -262,8 +263,8 @@ class matmul(torch.autograd.Function):
             total_tiles_streamk = total_tiles % total_programs_streamk
             # for two-tile Stream-K + data-parallel from original paper
             if two_tiles and total_tiles - total_tiles_streamk > total_programs_streamk:
-                total_tiles_streamk += total_programs_streamk
-              #  total_tiles_streamk = total_tiles_streamk
+              #  total_tiles_streamk += total_programs_streamk
+                total_tiles_streamk = total_tiles_streamk
             # remaining tiles are computed using classical blocking
             total_blocking_tiles = total_tiles - total_tiles_streamk
             total_iters_streamk = total_tiles_streamk * iters_per_tile
@@ -290,7 +291,8 @@ class matmul(torch.autograd.Function):
 
         # allocates output
         c = torch.zeros((M, N), device=device, dtype=a.dtype)
-        partial_buf = torch.zeros((BLK_M, BLK_N, total_tiles), device=device, dtype=a.dtype)
+        partial_buf = torch.zeros((M, N), device=device, dtype=a.dtype)
+ #       partial_buf = torch.zeros((BLK_M*BLK_N, total_programs_streamk), device=device, dtype=a.dtype)
 
         k1 = first_wave[(total_programs_streamk,)](
             a,
@@ -383,9 +385,9 @@ class matmul(torch.autograd.Function):
 
 perf = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
 
-m, n, k = 4864, 4096, 8256  # some problem size to test
+#m, n, k = 4864, 4096, 8256  # some problem size to test
 #m, n, k = 6912, 768, 256 # some problem size to test
-#m, n, k = 8192, 8192, 8192 # some problem size to test
+m, n, k = 8192, 8192, 8192 # some problem size to test
 A = torch.randn(m, k, device="cuda", dtype=torch.float16)
 B = torch.randn(k, n, device="cuda", dtype=torch.float16)
 #A = torch.ones((m, k), device="cuda", dtype=torch.float16)
@@ -416,8 +418,8 @@ print(f"PyTorch: {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu))
 print(f"hybrid stream-k (grid={total_sm}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm * 2, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu))
-print(f"hybrid stream-k (grid={total_sm * 2}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
+#triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm * 2, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu))
+#print(f"hybrid stream-k (grid={total_sm * 2}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
 triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, 0, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu))
 print(f"tile matmul (grid=0): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
