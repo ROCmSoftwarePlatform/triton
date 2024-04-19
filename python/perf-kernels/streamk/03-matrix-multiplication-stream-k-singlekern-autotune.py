@@ -40,15 +40,15 @@ tuning_full_space = True
 def swizzle_tile(tile_id,
                  M, N, K,
                  BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-                 GROUP_SIZE_M: tl.constexpr
+                 GROUP_M: tl.constexpr
                  ):
     grid_m = tl.cdiv(M, BLOCK_M)
     grid_n = tl.cdiv(N, BLOCK_N)
     # re-order program ID for better L2 performance
-    width = GROUP_SIZE_M * grid_n
+    width = GROUP_M * grid_n
     group_id = tile_id // width
-    group_size = tl.minimum(grid_m - group_id * GROUP_SIZE_M, GROUP_SIZE_M)
-    pid_m = group_id * GROUP_SIZE_M + (tile_id % group_size)
+    group_size = tl.minimum(grid_m - group_id * GROUP_M, GROUP_M)
+    pid_m = group_id * GROUP_M + (tile_id % group_size)
     pid_n = (tile_id % width) // group_size
     return pid_m, pid_n
 
@@ -57,7 +57,7 @@ def swizzle_tile(tile_id,
 def linear_tile(tile_id,
                 M, N, K,
                 BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-                GROUP_SIZE_M: tl.constexpr
+                GROUP_M: tl.constexpr
                 ):
     pid_m = tile_id // tl.cdiv(N, BLOCK_N)
     pid_n = tile_id % tl.cdiv(N, BLOCK_N)
@@ -70,7 +70,7 @@ def get_tile_config(M, N, K,
     total_blocks_M = tl.cdiv(M, BLOCK_M)
     total_blocks_N = tl.cdiv(N, BLOCK_N)
     iters_per_tile = tl.cdiv(K, BLOCK_K)
-#    GROUP_SIZE_M = 0  # 0 to disable swizzling
+#    GROUP_M = 0  # 0 to disable swizzling
     total_tiles = total_blocks_M * total_blocks_N
     if total_programs_streamk > 0:  # Stream-K
         # last wave may occupy less than total_programs_streamk SMs
@@ -122,36 +122,39 @@ def get_full_tuning_space():
     if not tuning_full_space:
         return configs
 
-    block_mn_range = [128, 256]
-    block_k_range = [16, 32, 64]
+    block_mn_range = [32, 64, 128, 256]
+    block_k_range = [32, 64]
     num_warps_range = [1, 2, 4, 8]
-#    group_m_range = [0, 1, 2, 4, 8]
-    group_m_range = [4, 8]
+    group_m_range = [1, 2, 4, 8]
     # For now we see better perf with num_stages=0 for all gemm configs we care
     # But keep this explicit so that we do not forget we may need to set it to
     # other values in the future
     num_stage_range = [0]
     waves_per_eu_range =[0]
+    matrix_instr_nonkdim_range = [16, 32]
+    kpack_range = [1, 2]
 
     for block_m in block_mn_range:
         for block_n in block_mn_range:
             for block_k in block_k_range:
                 for num_warps in num_warps_range:
                     for group_m in group_m_range:
-                        for num_waves_per_eu in waves_per_eu_range:
-                            for num_stages in num_stage_range:
-                                configs.append(triton.Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'GROUP_SIZE_M': group_m, 'waves_per_eu': num_waves_per_eu}, num_stages=num_stages, num_warps=num_warps))
+                        for num_stages in num_stage_range:
+                            for num_waves_per_eu in waves_per_eu_range:
+                                for matrix_instr_nonkdim in matrix_instr_nonkdim_range:
+                                    for kpack in kpack_range:
+                                        configs.append(triton.Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'GROUP_M': group_m, 'waves_per_eu': num_waves_per_eu, 'matrix_instr_nonkdim': matrix_instr_nonkdim, 'kpack': kpack}, num_stages=num_stages, num_warps=num_warps,))
 
     return configs
-
+#To do: we need update the default autotune configuration once we go through the whole performance test sets.
 @triton.autotune(
    configs= get_full_tuning_space() if tuning_full_space else [
-       triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 16, 'GROUP_SIZE_M': 8, 'waves_per_eu': 0}, num_warps=4, num_stages=0),
-       triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 16, 'GROUP_SIZE_M': 8, 'waves_per_eu': 2}, num_warps=4, num_stages=0),
-       triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 16, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0}, num_warps=4, num_stages=0),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 16, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2}, num_warps=4, num_stages=0),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 64, 'GROUP_SIZE_M': 16, 'waves_per_eu': 0}, num_warps=4, num_stages=0),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 16, 'GROUP_SIZE_M': 0, 'waves_per_eu': 0}, num_warps=4, num_stages=4),
+       triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 16, 'GROUP_M': 8, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 1}, num_warps=4, num_stages=0),
+       triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 16, 'GROUP_M': 8, 'waves_per_eu': 2, 'matrix_instr_nonkdim': 16, 'kpack': 1}, num_warps=4, num_stages=0),
+       triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 16, 'GROUP_M': 4, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 1}, num_warps=4, num_stages=0),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 16, 'GROUP_M': 4, 'waves_per_eu': 2, 'matrix_instr_nonkdim': 16, 'kpack': 1}, num_warps=4, num_stages=0),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 64, 'GROUP_M': 16, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 1}, num_warps=4, num_stages=0),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 16, 'GROUP_M': 0, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 1}, num_warps=4, num_stages=4),
     ],
     key=['M', 'N', 'K'],
 #    prune_configs_by={
@@ -171,7 +174,7 @@ def streamk_gemm(
         total_programs_streamk,
         two_tiles,
         ACC_TYPE: tl.constexpr,
-        GROUP_SIZE_M: tl.constexpr,
+        GROUP_M: tl.constexpr,
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
 ):
     pid = tl.program_id(0)
@@ -183,10 +186,10 @@ def streamk_gemm(
     # Calculate starting and ending iterations for first wave
     if not is_first_wave:
         tile_id = tl.program_id(0) + total_tiles_streamk - total_programs_streamk
-        if GROUP_SIZE_M > 0:
-            pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
+        if GROUP_M > 0:
+            pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
         else:
-            pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
+            pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
 
         # do matrix multiplication
         rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -220,10 +223,10 @@ def streamk_gemm(
             end_iter = tl.minimum(start_iter + (iters_per_tile - remainder), last_iter)
             # where are we in the grid
             tile_id = start_iter // iters_per_tile
-            if GROUP_SIZE_M  > 0:
-                pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
+            if GROUP_M  > 0:
+                pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
             else:
-                pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
+                pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
 
             rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
             rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
@@ -264,7 +267,7 @@ class matmul(torch.autograd.Function):
         matmul._debug = debug
 
     @staticmethod
-    def _call(a: torch.Tensor, b: torch.Tensor, total_programs_streamk: int, BLOCK_M: int, BLOCK_N: int, BLOCK_K: int, gsize_m: int, two_tiles: bool, num_stages: int, num_warps: int, waves_per_eu: int):
+    def _call(a: torch.Tensor, b: torch.Tensor, total_programs_streamk: int, BLOCK_M: int, BLOCK_N: int, BLOCK_K: int, gsize_m: int, two_tiles: bool, num_stages: int, num_warps: int, waves_per_eu: int, mfmaInstrSize, kpack):
         def compute_total_blocking_tiles(M, N, BLOCK_M, BLOCK_N, two_tiles, total_programs_streamk):
             total_blocks_M = triton.cdiv(M, BLOCK_M)
             total_blocks_N = triton.cdiv(N, BLOCK_N)
@@ -353,7 +356,7 @@ class matmul(torch.autograd.Function):
             total_programs_streamk= total_programs_streamk,
             two_tiles = two_tiles,
             ACC_TYPE=ACC_TYPE,
-#            GROUP_SIZE_M=GROUP_SIZE_M,
+#            GROUP_M=GROUP_M,
 #            BLOCK_M=BLOCK_M,
 #            BLOCK_N=BLOCK_N,
 #            BLOCK_K=BLOCK_K,
@@ -368,8 +371,8 @@ class matmul(torch.autograd.Function):
         return c
 
     @staticmethod
-    def forward(ctx, a: torch.Tensor, b: torch.Tensor, grid: int, BLOCK_M = 128, BLOCK_N = 128, BLOCK_K = 32, gsize_m = 1, two_tiles = True, num_stages = 3, num_warps = 4,  waves_per_eu = 2):
-        return matmul._call(a = a, b = b, total_programs_streamk = grid, BLOCK_M = BLOCK_M, BLOCK_N = BLOCK_N, BLOCK_K = BLOCK_K, gsize_m = gsize_m, two_tiles = two_tiles, num_warps = num_warps, num_stages = num_stages,  waves_per_eu = waves_per_eu)
+    def forward(ctx, a: torch.Tensor, b: torch.Tensor, grid: int, BLOCK_M = 128, BLOCK_N = 128, BLOCK_K = 32, gsize_m = 1, two_tiles = True, num_stages = 3, num_warps = 4, waves_per_eu = 2, mfmaInstrSize = 16, kpack = 1):
+        return matmul._call(a = a, b = b, total_programs_streamk = grid, BLOCK_M = BLOCK_M, BLOCK_N = BLOCK_N, BLOCK_K = BLOCK_K, gsize_m = gsize_m, two_tiles = two_tiles, num_warps = num_warps, num_stages = num_stages,  waves_per_eu = waves_per_eu,  mfmaInstrSize = mfmaInstrSize, kpack = kpack)
 
 # ---------------------------------------------------------------------------
 # Example and Benchmark
@@ -378,9 +381,10 @@ class matmul(torch.autograd.Function):
 perf = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
 
 #m, n, k = 1792, 7424, 4864  # some problem size to test
-m, n, k = 8192, 8192, 8192  # some problem size to test
-A = torch.randn(m, k, device="cuda", dtype=torch.float32)
-B = torch.randn(k, n, device="cuda", dtype=torch.float32)
+#m, n, k = 8192, 8192, 8192  # some problem size to test
+m, n, k = 4096, 4096, 8192  # some problem size to test
+A = torch.randn(m, k, device="cuda", dtype=torch.float16)
+B = torch.randn(k, n, device="cuda", dtype=torch.float16)
 #A = torch.ones((m, k), device="cuda", dtype=torch.float16)
 #B = torch.ones((k, n), device="cuda", dtype=torch.float16)
 BLOCK_M = 256
@@ -389,11 +393,13 @@ BLOCK_K = 16
 gsize_m = 2
 two_tiles = True
 num_stages = 0
-num_warps = 4
-waves_per_eu = 2
+num_warps = 8
+waves_per_eu = 0
+mfmaInstrSize = 16
+kpack = 1
 
 matmul.set_debug(True)
-C = matmul.apply(A, B, total_sm, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu)
+C = matmul.apply(A, B, total_sm, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack)
 matmul.set_debug(False)
 expected = A @ B
 
@@ -406,15 +412,15 @@ print("pass validation test")
 triton_ms = triton.testing.do_bench(lambda: torch.matmul(A, B))
 print(f"PyTorch: {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
 print(f"hybrid stream-k (grid={total_sm}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 print(f'SIZE: {m},{n},{k}   Best tuning config: ({streamk_gemm.get_best_config()})')
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm * 2, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm * 2, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
 print(f"hybrid stream-k (grid={total_sm * 2}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 print(f'SIZE: {m},{n},{k}   Best tuning config: ({streamk_gemm.get_best_config()})')
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, 0, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, 0, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
 print(f"tile matmul (grid=0): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 print(f'SIZE: {m},{n},{k}   Best tuning config: ({streamk_gemm.get_best_config()})')
 
@@ -424,6 +430,7 @@ exit(0)
 # ---------------------------------------------------------------------------
 
 # tried to reproduce the tests described in the paper
+perf = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
 num_samples = 1000  # 32768
 step = 256
 values = ((torch.logspace(torch.tensor(step).log2(), torch.tensor(8192).log2(), num_samples, base=2) / step).round() * step).unique().tolist()
@@ -459,7 +466,7 @@ for idx, (m, n, k) in enumerate(shapes):
             nb_sm.append(total_tile)
         nb_sm += random.sample(range(2, total_sm * 2, 2), 10)
         for sm in nb_sm:
-            triton_ms = triton.testing.do_bench(lambda: wrapper_matmul(A, B, sm, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu))
+            triton_ms = triton.testing.do_bench(lambda: wrapper_matmul(A, B, sm, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
             max_disc = (output - expected).abs().max().item()
             # large tolerance to accomodate for large K (rounding due to half precision), we just want to catch bugs.
             assert max_disc <= 5., f"pb size: {m}x{n}x{k} - max discrepancy: {max_disc} - sm: {sm}, 2 tiles: {two_tiles}\n{output}\n{expected}"
