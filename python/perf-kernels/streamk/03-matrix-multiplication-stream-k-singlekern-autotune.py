@@ -11,11 +11,19 @@
 # sudo nvidia-smi -i 0 -pl 350  # 400 for A100
 # sudo nvidia-smi -i 0 -lgc 1005
 from typing import Optional
+import glob
+import sys
+import os
+import argparse
+import yaml
+import subprocess
+
 
 import torch
 import triton
 import triton.language as tl
 import random
+import pandas as pd
 
 #from triton.runtime.driver import CudaUtils
 import json
@@ -93,39 +101,15 @@ def get_tile_config(M, N, K,
 
     return iters_per_tile, total_tiles_streamk, total_full_tiles_streamk, total_partial_tiles_streamk, total_iters_streamk
 
-# pruned some unreasonable config
-def prune_configs(configs, named_args):
-    # call only for full tuning space
-    if not tuning_full_space:
-        return configs
-
-    SIZE_M = named_args["A"].shape[0]
-    SIZE_N = named_args["B"].shape[1]
-    SIZE_K = named_args["A"].shape[1]
-
-    pruned_configs = []
-    for config in configs:
-        kw = config.kwargs
-        BLOCK_M, BLOCK_N, BLOCK_K =\
-            kw["BLOCK_M"], kw["BLOCK_N"], kw["BLOCK_K"]
-        if SIZE_M <=32 and BLOCK_SIZE_M != 32:
-            continue
-        if SIZE_N <=32 and BLOCK_SIZE_N != 32:
-            continue
-
-        pruned_configs.append(config)
-
-    return pruned_configs
-
 def get_full_tuning_space():
     configs = []
     if not tuning_full_space:
         return configs
 
-    block_mn_range = [32, 64, 128, 256]
-    block_k_range = [32, 64]
+    block_mn_range = [16, 32, 64, 128, 256]
+    block_k_range = [16, 32, 64]
     num_warps_range = [1, 2, 4, 8]
-    group_m_range = [1, 2, 4, 8]
+    group_m_range = [1, 2, 4, 8, 16, 32]
     # For now we see better perf with num_stages=0 for all gemm configs we care
     # But keep this explicit so that we do not forget we may need to set it to
     # other values in the future
@@ -146,6 +130,76 @@ def get_full_tuning_space():
                                         configs.append(triton.Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'GROUP_M': group_m, 'waves_per_eu': num_waves_per_eu, 'matrix_instr_nonkdim': matrix_instr_nonkdim, 'kpack': kpack}, num_stages=num_stages, num_warps=num_warps,))
 
     return configs
+
+# pruned some unreasonable config
+def prune_configs(configs, named_args):
+    # call only for full tuning space
+    if not tuning_full_space:
+        return configs
+
+    SIZE_M = named_args["A"].shape[0]
+    SIZE_N = named_args["B"].shape[1]
+    SIZE_K = named_args["A"].shape[1]
+
+    pruned_configs = []
+
+    if SIZE_M < 32 or SIZE_N < 32:
+        mfma = 16
+    else:
+        mfma = 32
+
+    large_gemm = False
+    if SIZE_M >= 2048 and SIZE_N >=2048:
+        large_gemm = True
+
+    for config in configs:
+        kw = config.kwargs
+        BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M, matrix_instr_nonkdim, kpack =\
+            kw["BLOCK_M"], kw["BLOCK_N"], kw["BLOCK_K"], kw["GROUP_M"], kw["matrix_instr_nonkdim"], kw["kpack"]
+        
+        if matrix_instr_nonkdim > mfma:
+            continue
+        if mfma == 4 and BLOCK_K < 64:
+            continue
+        # some layouts could not work properly in case
+        # number elemens per thread is less 1
+        if BLOCK_M * BLOCK_N < 64:
+            continue
+
+        if BLOCK_M < matrix_instr_nonkdim or BLOCK_N < matrix_instr_nonkdim:
+            continue
+        if SIZE_M <= matrix_instr_nonkdim and BLOCK_M != matrix_instr_nonkdim:
+            continue
+        if SIZE_N <= matrix_instr_nonkdim and BLOCK_N != matrix_instr_nonkdim:
+            continue
+        # Skip BLOCK_SIZE that is too large compare to M/N
+        # unless BLOCK_SIZE is already small enough
+        if BLOCK_M > SIZE_M * 2 and BLOCK_M != 16:
+            continue
+        if BLOCK_N > SIZE_N * 2 and BLOCK_N != 16:
+            continue
+        # skip large GROUP_M
+        if GROUP_M * BLOCK_M > SIZE_M and GROUP_M != 1:
+            continue
+
+        if SIZE_M <=32 and BLOCK_M != 32:
+            continue
+        if SIZE_N <=32 and BLOCK_N != 32:
+            continue
+
+        if large_gemm:
+            if BLOCK_M < 64 or BLOCK_N < 64:
+                continue
+            if BLOCK_K < 64:
+                continue
+            if num_warps < 4:
+                continue
+
+        pruned_configs.append(config)
+
+    size_str = f'SIZE: {SIZE_M} {SIZE_N} {SIZE_K}'
+    print(f"{size_str} nConfigs: {len(pruned_configs)}")
+    return pruned_configs
 #To do: we need update the default autotune configuration once we go through the whole performance test sets.
 @triton.autotune(
    configs= get_full_tuning_space() if tuning_full_space else [
@@ -157,11 +211,11 @@ def get_full_tuning_space():
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 16, 'GROUP_M': 0, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 1}, num_warps=4, num_stages=4),
     ],
     key=['M', 'N', 'K'],
-#    prune_configs_by={
-#        'early_config_prune': prune_configs,
-#        'perf_model': None,
-#        "top_k": None
-#    },
+    prune_configs_by={
+        'early_config_prune': prune_configs,
+        'perf_model': None,
+        "top_k": None
+    },
     reset_to_zero = ['C'],
 )
 @triton.jit()
