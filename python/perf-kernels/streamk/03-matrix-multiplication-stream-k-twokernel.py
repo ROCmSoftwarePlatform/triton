@@ -312,6 +312,7 @@ if True:
         print("Shape mismatch:", C.shape, expected.shape)
 
     assert torch.allclose(C, expected, atol=1), f"max: {(C - expected).abs().max().item()}\n{C}\n{expected}"
+    print("error check passed")
 
 # for debugging, uncomment the following line
 quantiles = [0.5, 0.2, 0.8]
