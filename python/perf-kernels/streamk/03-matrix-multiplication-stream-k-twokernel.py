@@ -173,7 +173,7 @@ def matmul(a, b, total_programs_streamk, BLK_M, BLK_N, BLK_K, two_tiles, num_sta
 #    M, K = a.shape
 #    _, N = b.shape
     # accumulator types
-    M=6192
+    M=6912
     N=768
     K=256
     ACC_TYPE = tl.float32 if a.dtype in [torch.float16, torch.bfloat16, torch.float32] else tl.int32
@@ -290,7 +290,7 @@ set_debug = False
 m, n, k = 6912, 768, 256 # some problem size to test
 #m, n, k = 8192, 8192, 8192 # some problem size to test
 A = torch.randn(m, k, device="cuda", dtype=torch.float16)
-B = torch.randn(k, n, device="cuda", dtype=torch.float16)
+B = torch.randn(n, k, device="cuda", dtype=torch.float16).T
 #A = torch.ones((m, k), device="cuda", dtype=torch.float16)
 #B = torch.ones((k, n), device="cuda", dtype=torch.float16)
 BLK_M = 64
@@ -308,6 +308,8 @@ if True:
 #exit(0)
 #matmul.set_debug(False)
     expected = A @ B
+    if C.shape != expected.shape:
+        print("Shape mismatch:", C.shape, expected.shape)
 
     assert torch.allclose(C, expected, atol=1), f"max: {(C - expected).abs().max().item()}\n{C}\n{expected}"
 
