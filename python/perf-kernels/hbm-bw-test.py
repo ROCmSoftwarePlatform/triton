@@ -33,12 +33,14 @@ def copy_kernel(
     # This is just cdiv(x,y)
     NUM_ITERS: tl.constexpr = (NUM_ELEMENTS + BLOCK_SIZE - 1) // BLOCK_SIZE
     IRREGULAR_SIZE: tl.constexpr = NUM_ELEMENTS % BLOCK_SIZE
+    acc = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
     if IRREGULAR_SIZE:
         hi = hi - IRREGULAR_SIZE
     # Move buffer in chunks of block_size
     for idx in range(lo, hi, BLOCK_SIZE):
         offsets = idx + tl.arange(0, BLOCK_SIZE)
         in_vals = tl.load(input_ptr + offsets)
+        acc += in_vals
         if not READ_ONLY:
             tl.store(output_ptr + offsets, in_vals)
     # Unroll last irregular iter in case the total sized moved by this WG
@@ -52,9 +54,13 @@ def copy_kernel(
         if not READ_ONLY:
             tl.store(output_ptr + offsets, in_vals, mask=mask)
 
-def copy(src: torch.Tensor, block_size, wgs, dst=None):
+    if READ_ONLY:
+        tl.store(output_ptr + tl.arange(0, BLOCK_SIZE), acc)
+
+def copy(src: torch.Tensor, block_size, wgs, dst: torch.Tensor):
     assert src.is_cuda
     vector_size = src.numel()
+    assert dst.numel() == vector_size or dst.numel() == block_size
     size_per_wg = vector_size / wgs
     assert size_per_wg >= block_size, \
            "Too many WGS. Please increase the size of the buffer using -size." \
@@ -62,7 +68,8 @@ def copy(src: torch.Tensor, block_size, wgs, dst=None):
     grid = (wgs, 1, 1)
     # Each WG will move these many elements
     n_elements = triton.cdiv(vector_size, wgs)
-    read_only = dst is None
+    # If we want to read only, we do a dummy write of a single block size back to HBM
+    read_only = dst.numel() != src.numel()
     copy_kernel[grid](
         src, dst,
         NUM_ELEMENTS=n_elements, BLOCK_SIZE=block_size,
@@ -92,7 +99,6 @@ def run_benchmark_suite(vector_size, block_size, num_cores, read_only):
     import bisect
     for i in num_cu_aligned_wgs:
         bisect.insort(x_vals, i)
-    print(f"wgs = {x_vals}")
     configs.append(triton.testing.Benchmark(
         x_names=['wgs'],  # Argument names to use as an x-axis for the plot.
         x_vals=x_vals,
@@ -110,12 +116,15 @@ def run_benchmark_suite(vector_size, block_size, num_cores, read_only):
     def benchmark(size, provider, wgs):
         aligned_size = align_size_to_wgs(size, wgs)
         src_tensor = torch.randn(aligned_size, device='cuda')
-        dst_tensor = None
+        dst_tensor = torch.empty(block_size, device='cuda')
         if not read_only:
             dst_tensor = torch.empty_like(src_tensor)
-        ms = triton.testing.do_bench(lambda: copy(src_tensor, block_size, wgs, dst=dst_tensor))
+        ms = triton.testing.do_bench(lambda: copy(src_tensor, block_size, wgs, dst_tensor))
         # 8 because 4 bytes from load, 4 from store.
-        gbps = lambda ms: 8 * size / ms * 1e3 / 1024**3
+        if read_only:
+            gbps = lambda ms: 4 * size / ms * 1e3 / 1024**3
+        else:
+            gbps = lambda ms: 8 * size / ms * 1e3 / 1024**3
         return gbps(ms)
 
     benchmark.run(print_data=True, show_plots=True)
@@ -174,7 +183,7 @@ def main():
     if num_elements % args.block_size:
         print("Note! This config is suboptimal. It is recommended to use a buffer that"\
                f" is a multiple of wgs x block size = {num_wgs * args.block_size} elements.")
-    dst_tensor = torch.empty_like(src_tensor) if rw else None
+    dst_tensor = torch.empty_like(src_tensor) if rw else torch.empty(args.block_size, device='cuda')
     triton_ms = triton.testing.do_bench(lambda:copy(src_tensor, args.block_size, num_wgs, dst=dst_tensor), warmup=1, rep=1)
     print(f"Triton bandwidth = {gbps(triton_ms)} GiB/s")
 
