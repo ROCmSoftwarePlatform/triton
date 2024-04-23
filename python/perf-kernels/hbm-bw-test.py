@@ -67,7 +67,7 @@ def copy(src: torch.Tensor, block_size, wgs, dst=None):
         src, dst,
         NUM_ELEMENTS=n_elements, BLOCK_SIZE=block_size,
         VECTOR_SIZE=vector_size, READ_ONLY=read_only,
-        num_warps=4
+        num_warps=4,
     )
 
 def get_reference(x, wgs, gbps):
@@ -81,37 +81,44 @@ def get_reference(x, wgs, gbps):
                       f"{torch.max(torch.abs(err))}"
     return bw
 
-# configs = []
-# for bounds_check in [True, False]:
-#     configs.append(triton.testing.Benchmark(
-#         x_names=['wgs'],  # Argument names to use as an x-axis for the plot.
-#         x_vals=[
-#             (2**i) for i in range (0,12)
-#         ],  # Different possible values for `x_name`.
-#         x_log=True,  # x axis is logarithmic.
-#         line_arg='provider',  # Argument name whose value corresponds to a different line in the plot.
-#         line_vals=['triton', 'torch'],  # Possible values for `line_arg`.
-#         line_names=['Triton', 'Torch'],  # Label name for the lines.
-#         styles=[('blue', '-'), ('green', '-')],  # Line styles.
-#         ylabel='GiB/s',  # Label name for the y-axis.
-#         plot_name=f'size={size}-bounds_check={bounds_check}',  # Name for the plot. Used also as a file name for saving the plot.
-#         args={'size':size, 'bounds_check':bounds_check},  # Values for function arguments not in `x_names` and `y_name`.
-#     ))
+def align_size_to_wgs(size, wgs):
+    return (size // wgs) * wgs
 
-# @triton.testing.perf_report(configs)
-# def benchmark(size, provider, wgs, bounds_check):
-#     x = torch.rand(size, device='cuda', dtype=torch.float32)
-#     quantiles = [0.5, 0.2, 0.8]
-#     if provider == 'torch':
-#         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.clone(x), quantiles=quantiles)
-#     if provider == 'triton':
-#         ms, min_ms, max_ms = triton.testing.do_bench(lambda: copy(x, wgs, bounds_check), quantiles=quantiles)
-#     # 8 because 4 bytes from load, 4 from store.
-#     gbps = lambda ms: 8 * size / ms * 1e3 / 1024**3
-#     return gbps(ms), gbps(max_ms), gbps(min_ms)
+def run_benchmark_suite(vector_size, block_size, num_cores, read_only):
+    configs = []
+    # Define WGs in powers of 2 from 1 - 2048.
+    x_vals = [(2**i) for i in range (0, 12)]
+    num_cu_aligned_wgs = [(num_cores*i) for i in range (1,5)]
+    import bisect
+    for i in num_cu_aligned_wgs:
+        bisect.insort(x_vals, i)
+    print(f"wgs = {x_vals}")
+    configs.append(triton.testing.Benchmark(
+        x_names=['wgs'],  # Argument names to use as an x-axis for the plot.
+        x_vals=x_vals,
+        x_log=True,  # x axis is logarithmic.
+        line_arg='provider',  # Argument name whose value corresponds to a different line in the plot.
+        line_vals=['triton'],  # Possible values for `line_arg`.
+        line_names=['Triton'],  # Label name for the lines.
+        styles=[('blue', '-'), ('green', '-')],  # Line styles.
+        ylabel='GiB/s',  # Label name for the y-axis.
+        plot_name=f'size={vector_size}',  # Name for the plot. Used also as a file name for saving the plot.
+        args={'size':vector_size},  # Values for function arguments not in `x_names` and `y_name`.
+    ))
 
+    @triton.testing.perf_report(configs)
+    def benchmark(size, provider, wgs):
+        aligned_size = align_size_to_wgs(size, wgs)
+        src_tensor = torch.randn(aligned_size, device='cuda')
+        dst_tensor = None
+        if not read_only:
+            dst_tensor = torch.empty_like(src_tensor)
+        ms = triton.testing.do_bench(lambda: copy(src_tensor, block_size, wgs, dst=dst_tensor))
+        # 8 because 4 bytes from load, 4 from store.
+        gbps = lambda ms: 8 * size / ms * 1e3 / 1024**3
+        return gbps(ms)
 
-# benchmark.run(print_data=True, show_plots=True)
+    benchmark.run(print_data=True, show_plots=True)
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -123,12 +130,20 @@ def parse_args():
     parser.add_argument("-size", type=int, default=1024, help="Size of buffer moved, in MiB")
     parser.add_argument("-num_wgs", type=int, default=0, help="Number of workgroups to use")
     parser.add_argument("-block_size", type=int, default=16384, help="Block size per iteration to load / store")
+    parser.add_argument("-run_sweep", action='store_true', default=False, help="Run sweep of B/W vs workgroups")
     return parser.parse_args()
 
 def main():
     args = parse_args()
     torch.manual_seed(0)
     num_cores = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
+    size = args.size
+    rw = args.direction == "read_write"
+    num_elements = size * 1024 * 1024 // 4
+    if args.run_sweep:
+        assert args.num_wgs == 0, "If running the benchmark suite, please do not specify the number of WGs to use."
+        run_benchmark_suite(num_elements, args.block_size, num_cores, not rw)
+        return
     if args.num_wgs == 0:
         # num_wgs not user specified - get from device properties
         num_wgs = num_cores
@@ -141,15 +156,12 @@ def main():
             print(f"Note! Your device has {num_cores} cores. It is recommended to use"\
                    " a number for workgroups that is a multiple of this number."\
                    f" You have currently chosen {num_wgs}.")
-    size = args.size
-    num_elements = size * 1024 * 1024 // 4
-    num_elements_rounded = (num_elements // num_wgs) * num_wgs
+    num_elements_rounded = align_size_to_wgs(num_elements, num_wgs)
     if num_elements != num_elements_rounded:
         print(f"Removing last {num_elements - num_elements_rounded} elements to "\
-               "get a tensor size aligned to multiple of number of workgroups.")
+            "get a tensor size aligned to multiple of number of workgroups.")
     num_elements = num_elements_rounded
     src_tensor = torch.randn(num_elements, device="cuda")
-    rw = args.direction == "read_write"
     if rw:
         # 8 because 4B for read. 4B for write.
         gbps = lambda ms: 8 * num_elements / ms * 1e3 / 1024**3
