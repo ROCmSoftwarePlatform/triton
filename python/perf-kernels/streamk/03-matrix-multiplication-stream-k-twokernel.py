@@ -163,7 +163,7 @@ def full_tiles(
 # Wrapper
 # ---------------------------------------------------------------------------
 
-def matmul(a, b, total_programs_streamk, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack):
+def matmul(a, b, c, total_programs_streamk, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack):
     device = a.device
 
     set_debug = False
@@ -215,7 +215,6 @@ def matmul(a, b, total_programs_streamk, BLK_M, BLK_N, BLK_K, two_tiles, num_sta
 #        print(f"{total_iters_streamk=}")
 
     # allocates output
-    c = torch.zeros((M, N), device=device, dtype=a.dtype)
 ##    if total_programs_streamk > 0:
 ##        k1 = first_wave[(total_programs_streamk,)](
 ##            a,
@@ -291,6 +290,7 @@ m, n, k = 6912, 768, 256 # some problem size to test
 #m, n, k = 8192, 8192, 8192 # some problem size to test
 A = torch.randn(m, k, device="cuda", dtype=torch.float16)
 B = torch.randn(n, k, device="cuda", dtype=torch.float16).T
+C = torch.zeros((m, n), device='cuda', dtype=A.dtype)
 #A = torch.ones((m, k), device="cuda", dtype=torch.float16)
 #B = torch.ones((k, n), device="cuda", dtype=torch.float16)
 BLK_M = 64
@@ -304,7 +304,7 @@ mfmaInstrSize = 16
 kpack = 2
 
 if True:
-    C = matmul(A, B, total_sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack)
+    C = matmul(A, B, C, total_sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack)
 #exit(0)
 #matmul.set_debug(False)
     expected = A @ B
@@ -320,13 +320,13 @@ quantiles = [0.5, 0.2, 0.8]
 triton_ms = triton.testing.do_bench(lambda: torch.matmul(A, B))
 print(f"PyTorch: {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms, triton_min_ms, triton_max_ms = triton.testing.do_bench(lambda: matmul(A, B, total_sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack),  quantiles=quantiles)
+triton_ms, triton_min_ms, triton_max_ms = triton.testing.do_bench(lambda: matmul(A, B, C, total_sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack),  quantiles=quantiles)
 print(f"hybrid stream-k (grid={total_sm}): {triton_min_ms:.3f} ms  {perf(triton_min_ms):.3f} tflops")
 
-triton_ms, triton_min_ms, triton_max_ms = triton.testing.do_bench(lambda: matmul(A, B, total_sm * 2, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack),  quantiles=quantiles)
+triton_ms, triton_min_ms, triton_max_ms = triton.testing.do_bench(lambda: matmul(A, B, C, total_sm * 2, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack),  quantiles=quantiles)
 print(f"hybrid stream-k (grid={total_sm * 2}): {triton_min_ms:.3f} ms  {perf(triton_min_ms):.3f} tflops")
 
-triton_ms, triton_min_ms, triton_max_ms = triton.testing.do_bench(lambda: matmul(A, B, 0, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack),  quantiles=quantiles)
+triton_ms, triton_min_ms, triton_max_ms = triton.testing.do_bench(lambda: matmul(A, B, C, 0, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack),  quantiles=quantiles)
 print(f"tile matmul (grid=0): {triton_min_ms:.3f} ms  {perf(triton_min_ms):.3f} tflops")
 
 exit(0)
