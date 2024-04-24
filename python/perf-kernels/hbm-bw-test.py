@@ -30,8 +30,7 @@ def copy_kernel(
     lo = pid * NUM_ELEMENTS
     # Offset until which to read for this WG.
     hi = lo + NUM_ELEMENTS
-    # This is just cdiv(x,y)
-    NUM_ITERS: tl.constexpr = (NUM_ELEMENTS + BLOCK_SIZE - 1) // BLOCK_SIZE
+    NUM_ITERS: tl.constexpr = triton.cdiv(NUM_ELEMENTS, BLOCK_SIZE)
     IRREGULAR_SIZE: tl.constexpr = NUM_ELEMENTS % BLOCK_SIZE
     acc = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
     if IRREGULAR_SIZE:
