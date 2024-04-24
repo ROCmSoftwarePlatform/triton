@@ -367,7 +367,7 @@ def attn_fwd(
             return
 
     is_mqa = hq != hk
-    off_h_k = off_h_q % hk if is_mqa else off_h_q
+    off_h_k = tl.where(is_mqa, off_h_q % hk, off_h_q)
     need_padding = False
     n_extra_tokens = 0
     if seqlen_k < BLOCK_N:
