@@ -199,7 +199,7 @@ def prune_configs(configs, named_args):
        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 16, 'GROUP_M': 8, 'waves_per_eu': 2, 'matrix_instr_nonkdim': 16, 'kpack': 1}, num_warps=4, num_stages=0),
        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 16, 'GROUP_M': 4, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 1}, num_warps=4, num_stages=0),
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 16, 'GROUP_M': 4, 'waves_per_eu': 2, 'matrix_instr_nonkdim': 16, 'kpack': 1}, num_warps=4, num_stages=0),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 64, 'GROUP_M': 16, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 1}, num_warps=4, num_stages=0),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 64, 'GROUP_M': 16, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 2}, num_warps=4, num_stages=0),
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 16, 'GROUP_M': 0, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 1}, num_warps=4, num_stages=4),
     ],
     key=['M', 'N', 'K'],
@@ -420,13 +420,13 @@ class matmul(torch.autograd.Function):
 
 perf = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
 
-#M, N, K = 1792, 7424, 4864  # some problem size to test
-#M, N, K = 8192, 8192, 8192  # some problem size to test
-M, N, K = 4096, 4096, 8192  # some problem size to test
+#m, n, k = 1792, 7424, 4864  # some problem size to test
+#m, n, k = 8192, 8192, 8192  # some problem size to test
+m, n, k = 4096, 4096, 8192  # some problem size to test
 device = 'cuda'
-A = torch.randn(M, K, device = device, dtype = torch.float16)
-B = torch.randn(N, K, device = device, dtype = torch.float16).T
-C = torch.zeros((M, N), device = device, dtype = A.dtype)
+A = torch.randn(m, k, device = device, dtype = torch.float16)
+B = torch.randn(n, k, device = device, dtype = torch.float16).T
+C = torch.zeros((m, n), device = device, dtype = A.dtype)
 #assert a.is_contiguous() and b.is_contiguous(), "non-contiguous inputs are not supported"
 # checks constraints
 assert A.shape[1] == B.shape[0], "incompatible dimensions"
@@ -434,7 +434,7 @@ assert A.shape[1] == B.shape[0], "incompatible dimensions"
 #B = torch.ones((k, n), device="cuda", dtype=torch.float16)
 BLOCK_M = 256
 BLOCK_N = 128
-BLOCK_K = 16
+BLOCK_K = 32
 gsize_m = 2
 two_tiles = True
 num_stages = 0
@@ -444,7 +444,7 @@ mfmaInstrSize = 16
 kpack = 1
 
 matmul.set_debug(True)
-C = matmul.apply(A, B, C, total_sm, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack)
+C = matmul.apply(A, B, C, total_sm, m, n, k, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack)
 matmul.set_debug(False)
 expected = A @ B
 
@@ -457,19 +457,19 @@ print("pass validation test")
 triton_ms = triton.testing.do_bench(lambda: torch.matmul(A, B))
 print(f"PyTorch: {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, C, total_sm, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, C, total_sm, m, n, k, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
 print(f"hybrid stream-k (grid={total_sm}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 print(f'SIZE: {m},{n},{k}   Best tuning config: ({streamk_gemm.get_best_config()})')
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, C, total_sm * 2, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, C, total_sm * 2, m, n, k, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
 print(f"hybrid stream-k (grid={total_sm * 2}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 print(f'SIZE: {m},{n},{k}   Best tuning config: ({streamk_gemm.get_best_config()})')
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, C, 0, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, C, 0, m, n, k, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
 print(f"tile matmul (grid=0): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 print(f'SIZE: {m},{n},{k}   Best tuning config: ({streamk_gemm.get_best_config()})')
 
-exit(0)
+#exit(0)
 # ---------------------------------------------------------------------------
 # Log-sampled benchmark
 # ---------------------------------------------------------------------------
@@ -492,8 +492,7 @@ for idx, (m, n, k) in enumerate(shapes):
 
     A = torch.randn(m, k, device="cuda", dtype=torch.float16)
     B = torch.randn(k, n, device="cuda", dtype=torch.float16)
-    C = torch.zeros((m, n), device = device, dtype = A.dtype)
-    output: Optional[torch.Tensor] = None
+    output: Optional[torch.Tensor] = torch.zeros((m, n), device = device, dtype = A.dtype)
 
 
     def wrapper_matmul(*args, **kwargs):
@@ -512,8 +511,10 @@ for idx, (m, n, k) in enumerate(shapes):
             nb_sm.append(total_tile)
         nb_sm += random.sample(range(2, total_sm * 2, 2), 10)
         for sm in nb_sm:
-            triton_ms = triton.testing.do_bench(lambda: wrapper_matmul(A, B, C, sm, m, n, k, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
-            max_disc = (output - expected).abs().max().item()
+            triton_ms = triton.testing.do_bench(lambda: wrapper_matmul(A, B, output, sm, m, n, k, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
+            C = torch.zeros((m, n), device = device, dtype = A.dtype)
+            C = matmul.apply(A, B, C, total_sm, m, n, k, BLOCK_M, BLOCK_N, BLOCK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack)
+            max_disc = (C - expected).abs().max().item()
             # large tolerance to accomodate for large K (rounding due to half precision), we just want to catch bugs.
             assert max_disc <= 5., f"pb size: {m}x{n}x{k} - max discrepancy: {max_disc} - sm: {sm}, 2 tiles: {two_tiles}\n{output}\n{expected}"
             Best_tuning_config=f'SIZE: {m},{n},{k}   Best tuning config: ({streamk_gemm.get_best_config()})'
