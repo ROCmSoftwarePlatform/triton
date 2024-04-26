@@ -1150,12 +1150,12 @@ def varlen_input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype):
                           (1, 8, 8, 8081, 7099, 64),
                           (1, 4, 4, 16330, 15989, 128),
                           (4, 4, 1, 1024, 1024, 33),
-                          (4, 4, 1, 65, 1019, 65),
+                          (4, 4, 2, 65, 1018, 65),
                           (4, 4, 4, 128, 128, 65),
                           (4, 4, 4, 113, 123, 1),
                           ])
-@pytest.mark.parametrize('causal', [False])
-@pytest.mark.parametrize('use_alibi', [False])
+@pytest.mark.parametrize('causal', [True, False])
+@pytest.mark.parametrize('use_alibi', [True, False])
 def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, dtype=torch.float16):
     torch.manual_seed(20)
     q, k, v, input_metadata = input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype)
@@ -1207,7 +1207,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, dtype=to
         p[nan_mask==1] = 0
     ref_out = torch.einsum('bhqk,bhkd->bhqd', p.half(), v)
     # compare
-    #torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
+    torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
 @pytest.mark.parametrize('Z, H, N_CTX_Q, N_CTX_K, D_HEAD',
                          [(4, 48, 1024, 1024, 64),
