@@ -27,7 +27,7 @@ random.seed(123)
 #cuda_utils = CudaUtils()
 #total_sm = cuda_utils.get_device_properties(device)["multiprocessor_count"]
 #total_sm = 110 # for MI250
-total_sm = 304 # for MI300X
+total_sm = 1208 # for MI300X
 print(f"total SMs: {total_sm}")
 
 # ---------------------------------------------------------------------------
@@ -118,7 +118,7 @@ def partialsum(
         M, N, K,
         stride_cm, stride_cn,
         total_full_tiles_streamk, total_partial_tiles_streamk, iters_per_tile,
-        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, ACC_TYPE: tl.constexpr,
+        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
         GROUP_SIZE_M: tl.constexpr,
 ):
     pid = tl.program_id(axis=0)
@@ -235,21 +235,18 @@ def full_tiles(
 
 class matmul(torch.autograd.Function):
 
-    _debug = True
+    _debug = False
 
     @staticmethod
     def set_debug(debug: bool):
         matmul._debug = debug
 
     @staticmethod
-    def _call(a: torch.Tensor, b: torch.Tensor, total_programs_streamk: int, BLK_M: int, BLK_N: int, BLK_K: int, gsize_m: int, two_tiles: bool, num_stages: int, num_warps: int, waves_per_eu: int, mfmaInstrSize: int, kpack: int):
+    def _call(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, total_programs_streamk: int, M: int, N: int, K: int, BLK_M: int, BLK_N: int, BLK_K: int, gsize_m: int, two_tiles: bool, num_stages: int, num_warps: int, waves_per_eu: int, mfmaInstrSize: int, kpack: int):
         device = a.device
 
-        assert a.is_contiguous() and b.is_contiguous(), "non-contiguous inputs are not supported"
+#        assert a.is_contiguous() and b.is_contiguous(), "non-contiguous inputs are not supported"
         # checks constraints
-        assert a.shape[1] == b.shape[0], "incompatible dimensions"
-        M, K = a.shape
-        _, N = b.shape
         # accumulator types
         ACC_TYPE = tl.float32 if a.dtype in [torch.float16, torch.bfloat16, torch.float32] else tl.int32
         # compute grid (work to do per SM on the first wave)
@@ -289,17 +286,101 @@ class matmul(torch.autograd.Function):
             print(f"{iters_per_tile=}")
             print(f"{total_iters_streamk=}")
 
-        # allocates output
-        c = torch.zeros((M, N), device=device, dtype=a.dtype)
-        partial_buf = torch.zeros((M, N), device=device, dtype=a.dtype)
 
-        not_use_atomic = True
-        if not_use_atomic:
-            k1 = first_wave[(total_programs_streamk,)](
+        not_use_atomic = False
+        if total_programs_streamk >0:
+            if not_use_atomic:
+                partial_buf = torch.zeros((m, n), device='cuda', dtype=A.dtype)
+                k1 = first_wave[(total_programs_streamk,)](
+                    a,
+                    b,
+                    c,
+                    partial_buf,
+                    M,
+                    N,
+                    K,
+                    a.stride(0),
+                    a.stride(1),
+                    b.stride(0),
+                    b.stride(1),
+                    c.stride(0),
+                    c.stride(1),
+                    total_full_tiles_streamk=total_full_tiles_streamk,
+                    total_partial_tiles_streamk=total_partial_tiles_streamk,
+                    iters_per_tile=iters_per_tile,
+                    BLOCK_M=BLK_M,
+                    BLOCK_N=BLK_N,
+                    BLOCK_K=BLK_K,
+                    ACC_TYPE=ACC_TYPE,
+                    GROUP_SIZE_M=gsize_m,
+                    num_stages=num_stages,
+                    num_warps=num_warps,
+                    waves_per_eu = waves_per_eu,
+                    matrix_instr_nonkdim = mfmaInstrSize,
+                    kpack = kpack
+                )
+
+                k11 = partialsum[(total_programs_streamk,)](
+                    c,
+                    partial_buf,
+                    M,
+                    N,
+                    K,
+                    c.stride(0),
+                    c.stride(1),
+                    total_full_tiles_streamk=total_full_tiles_streamk,
+                    total_partial_tiles_streamk=total_partial_tiles_streamk,
+                    iters_per_tile=iters_per_tile,
+                    BLOCK_M=BLK_M,
+                    BLOCK_N=BLK_N,
+                    BLOCK_K=BLK_K,
+                    GROUP_SIZE_M=gsize_m,
+                    num_stages=num_stages,
+                    num_warps=num_warps,
+                    waves_per_eu = waves_per_eu,
+                    matrix_instr_nonkdim = mfmaInstrSize,
+                    kpack = kpack
+                )
+                if matmul._debug:
+                    print(f"{k1.n_regs} registers used, {k1.n_spills} spills")
+                    print(f"{k11.n_regs} registers used, {k11.n_spills} spills")
+            else:
+                k1 = first_wave_atomic[(total_programs_streamk,)](
+                    a,
+                    b,
+                    c,
+                    M,
+                    N,
+                    K,
+                    a.stride(0),
+                    a.stride(1),
+                    b.stride(0),
+                    b.stride(1),
+                    c.stride(0),
+                    c.stride(1),
+                    total_full_tiles_streamk=total_full_tiles_streamk,
+                    total_partial_tiles_streamk=total_partial_tiles_streamk,
+                    iters_per_tile=iters_per_tile,
+                    BLOCK_M=BLK_M,
+                    BLOCK_N=BLK_N,
+                    BLOCK_K=BLK_K,
+                    ACC_TYPE=ACC_TYPE,
+                    GROUP_SIZE_M=gsize_m,
+                    num_stages=num_stages,
+                    num_warps=num_warps,
+                    waves_per_eu = waves_per_eu,
+                    matrix_instr_nonkdim = mfmaInstrSize,
+                    kpack = kpack
+                )
+
+                if matmul._debug:
+                    print(f"{k1.n_regs} registers used, {k1.n_spills} spills")
+
+        if total_blocking_tiles > 0:
+            k2 = full_tiles[(total_blocking_tiles,)](
                 a,
                 b,
                 c,
-                partial_buf,
                 M,
                 N,
                 K,
@@ -309,32 +390,7 @@ class matmul(torch.autograd.Function):
                 b.stride(1),
                 c.stride(0),
                 c.stride(1),
-                total_full_tiles_streamk=total_full_tiles_streamk,
-                total_partial_tiles_streamk=total_partial_tiles_streamk,
-                iters_per_tile=iters_per_tile,
-                BLOCK_M=BLK_M,
-                BLOCK_N=BLK_N,
-                BLOCK_K=BLK_K,
-                ACC_TYPE=ACC_TYPE,
-                GROUP_SIZE_M=gsize_m,
-                num_stages=num_stages,
-                num_warps=num_warps,
-                waves_per_eu = waves_per_eu,
-                matrix_instr_nonkdim = mfmaInstrSize,
-                kpack = kpack
-            )
-
-            k11 = partialsum[(total_programs_streamk,)](
-                c,
-                partial_buf,
-                M,
-                N,
-                K,
-                c.stride(0),
-                c.stride(1),
-                total_full_tiles_streamk=total_full_tiles_streamk,
-                total_partial_tiles_streamk=total_partial_tiles_streamk,
-                iters_per_tile=iters_per_tile,
+                total_tiles_streamk=total_tiles_streamk,
                 BLOCK_M=BLK_M,
                 BLOCK_N=BLK_N,
                 BLOCK_K=BLK_K,
@@ -347,73 +403,14 @@ class matmul(torch.autograd.Function):
                 kpack = kpack
             )
             if matmul._debug:
-                print(f"{k1.n_regs} registers used, {k1.n_spills} spills")
-                print(f"{k11.n_regs} registers used, {k11.n_spills} spills")
-        else:
-            k1 = first_wave_atomic[(total_programs_streamk,)](
-                a,
-                b,
-                c,
-                M,
-                N,
-                K,
-                a.stride(0),
-                a.stride(1),
-                b.stride(0),
-                b.stride(1),
-                c.stride(0),
-                c.stride(1),
-                total_full_tiles_streamk=total_full_tiles_streamk,
-                total_partial_tiles_streamk=total_partial_tiles_streamk,
-                iters_per_tile=iters_per_tile,
-                BLOCK_M=BLK_M,
-                BLOCK_N=BLK_N,
-                BLOCK_K=BLK_K,
-                ACC_TYPE=ACC_TYPE,
-                GROUP_SIZE_M=gsize_m,
-                num_stages=num_stages,
-                num_warps=num_warps,
-                waves_per_eu = waves_per_eu,
-                matrix_instr_nonkdim = mfmaInstrSize,
-                kpack = kpack
-            )
-
-            if matmul._debug:
-                print(f"{k1.n_regs} registers used, {k1.n_spills} spills")
-
-        k2 = full_tiles[(total_blocking_tiles,)](
-            a,
-            b,
-            c,
-            M,
-            N,
-            K,
-            a.stride(0),
-            a.stride(1),
-            b.stride(0),
-            b.stride(1),
-            c.stride(0),
-            c.stride(1),
-            total_tiles_streamk=total_tiles_streamk,
-            BLOCK_M=BLK_M,
-            BLOCK_N=BLK_N,
-            BLOCK_K=BLK_K,
-            ACC_TYPE=ACC_TYPE,
-            GROUP_SIZE_M=gsize_m,
-            num_stages=num_stages,
-            num_warps=num_warps,
-            waves_per_eu = waves_per_eu,
-            matrix_instr_nonkdim = mfmaInstrSize,
-            kpack = kpack
-        )
-        if matmul._debug:
-            print(f"{k2.n_regs} registers used, {k2.n_spills} spills")
- #           print(k2.asm['amdgcn'])
+                print(f"{k2.n_regs} registers used, {k2.n_spills} spills")
+     #           print(k2.asm['amdgcn'])
         return c
 
     @staticmethod
-    def forward(ctx, a: torch.Tensor, b: torch.Tensor, grid: int, BLK_M = 128, BLK_N = 128, BLK_K = 32, gsize_m = 1, two_tiles = True, num_stages = 3, num_warps = 4, waves_per_eu = 2, mfmaInstrSize = 16, kpack = 1):
-        return matmul._call(a = a, b = b, total_programs_streamk = grid, BLK_M = BLK_M, BLK_N = BLK_N, BLK_K = BLK_K, gsize_m = gsize_m, two_tiles = two_tiles, num_warps = num_warps, num_stages = num_stages, waves_per_eu = waves_per_eu, mfmaInstrSize = mfmaInstrSize, kpack = kpack)
+    def forward(ctx, a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, grid: int,  M: int, N: int, K: int, BLK_M = 128, BLK_N = 128, BLK_K = 32, gsize_m = 1, two_tiles = True, num_stages = 3, num_warps = 4, waves_per_eu = 2, mfmaInstrSize = 16, kpack = 1):
+        matmul._call(a = a, b = b, c = c, total_programs_streamk = grid, M = M, N = N, K = K, BLK_M = BLK_M, BLK_N = BLK_N, BLK_K = BLK_K, gsize_m = gsize_m, two_tiles = two_tiles, num_warps = num_warps, num_stages = num_stages, waves_per_eu = waves_per_eu, mfmaInstrSize = mfmaInstrSize, kpack = kpack)
+        return c
 
 
 # ---------------------------------------------------------------------------
@@ -423,17 +420,21 @@ class matmul(torch.autograd.Function):
 perf = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
 
 #m, n, k = 4864, 4096, 8256  # some problem size to test
-m, n, k = 6912, 768, 256 # some problem size to test
+#m, n, k = 6912, 768, 256 # some problem size to test
 #m, n, k = 8192, 8192, 8192 # some problem size to test
+m, n, k = 1024, 2816, 2560
 A = torch.randn(m, k, device="cuda", dtype=torch.float16)
-B = torch.randn(k, n, device="cuda", dtype=torch.float16)
-#A = torch.ones((m, k), device="cuda", dtype=torch.float16)
-#B = torch.ones((k, n), device="cuda", dtype=torch.float16)
+B = torch.randn(n, k, device="cuda", dtype=torch.float16).T
+C = torch.zeros((m, n), device='cuda', dtype=A.dtype)
+#A = torch.ones((M, K), device="cuda", dtype=torch.float16)
+#B = torch.ones((K, N), device="cuda", dtype=torch.float16)
+if matmul._debug:
+    assert A.shape[1] == B.shape[0], "incompatible dimensions"
 BLK_M = 64
 BLK_N = 64
-BLK_K = 32
+BLK_K = 64
 gsize_m = 4
-two_tiles='True'
+two_tiles= True
 num_stages=0
 num_warps=4
 waves_per_eu = 0
@@ -441,7 +442,7 @@ mfmaInstrSize = 16
 kpack = 2
 
 matmul.set_debug(True)
-C = matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack)
+C = matmul.apply(A, B, C, total_sm, m, n, k, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack)
 #exit(0)
 matmul.set_debug(False)
 expected = A @ B
@@ -454,16 +455,16 @@ print("results check pass")
 triton_ms = triton.testing.do_bench(lambda: torch.matmul(A, B))
 print(f"PyTorch: {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, C, total_sm, m, n, k, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack))
 print(f"hybrid stream-k (grid={total_sm}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm * 2, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, C, total_sm * 2, m, n, k, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack))
 print(f"hybrid stream-k (grid={total_sm * 2}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, 0, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, C, 0, m, n, k, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack))
 print(f"tile matmul (grid=0): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-exit(0)
+#exit(0)
 # ---------------------------------------------------------------------------
 # Log-sampled benchmark
 # ---------------------------------------------------------------------------
@@ -485,8 +486,8 @@ for idx, (m, n, k) in enumerate(shapes):
 
     A = torch.randn(m, k, device="cuda", dtype=torch.float16)
     B = torch.randn(k, n, device="cuda", dtype=torch.float16)
-    output: Optional[torch.Tensor] = None
-
+    C = torch.zeros((m, n), device='cuda', dtype=A.dtype)
+    output: Optional[torch.Tensor] = torch.zeros((m, n), device='cuda', dtype=A.dtype)
 
     def wrapper_matmul(*args, **kwargs):
         global output
@@ -504,8 +505,10 @@ for idx, (m, n, k) in enumerate(shapes):
             nb_sm.append(total_tile)
         nb_sm += random.sample(range(2, total_sm * 2, 2), 10)
         for sm in nb_sm:
-            triton_ms = triton.testing.do_bench(lambda: wrapper_matmul(A, B, sm, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack))
-            max_disc = (output - expected).abs().max().item()
+            triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, output, sm, m, n, k, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
+            C = torch.zeros((m, n), device="cuda", dtype=A.dtype)
+            C = matmul.apply(A, B, C, sm, m, n, k, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack)
+            max_disc = (C - expected).abs().max().item()
             # large tolerance to accomodate for large K (rounding due to half precision), we just want to catch bugs.
             assert max_disc <= 5., f"pb size: {m}x{n}x{k} - max discrepancy: {max_disc} - sm: {sm}, 2 tiles: {two_tiles}\n{output}\n{expected}"
             info = {
@@ -522,7 +525,7 @@ for idx, (m, n, k) in enumerate(shapes):
         "k": k,
         "triton": measures,
         "pytorch_ms": pytorch_ms,
-        "speedup": pytorch_ms / best_triton_ms,
+        "speedup": best_triton_ms / pytorch_ms,
     }
     results.append(d)
     measures = list()
