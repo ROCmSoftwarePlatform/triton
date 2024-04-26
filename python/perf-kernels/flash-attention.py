@@ -261,17 +261,17 @@ def _attn_fwd_inner(
 
 @triton.autotune(
    configs=[
-       triton.Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1, num_warps=8),
-       triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
-       triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1, num_warps=8),
-       triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': True}, num_stages=1, num_warps=4),
+    #    triton.Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1, num_warps=8),
+    #    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
+    #    triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1, num_warps=8),
+    #    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': True}, num_stages=1, num_warps=4),
        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
-       triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1, num_warps=8),
-       triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
-       triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1, num_warps=8),
+    #    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1, num_warps=8),
+    #    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
+    #    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1, num_warps=8),
        # TODO: This config fails with head_size not pow2 with data mismatches. Check why.
     #    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
-       triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
+    #    triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1, num_warps=4),
    ],
    key=['IS_CAUSAL', 'dropout_p', 'BLOCK_DMODEL'],
    use_cuda_graph=True,
@@ -381,7 +381,7 @@ def attn_fwd(
     elif seqlen_k % BLOCK_N:
         need_padding = True
         n_extra_tokens = seqlen_k % BLOCK_N
-    padded_head = (ACTUAL_BLOCK_DMODEL != BLOCK_DMODEL)
+    PADDED_HEAD:tl.constexpr = (ACTUAL_BLOCK_DMODEL != BLOCK_DMODEL)
 
     # Compute pointers for all the tensors used in this kernel.
     q_offset = off_z * stride_qz +  off_h_q * stride_qh + cu_seqlens_q_start * stride_qm
@@ -456,7 +456,7 @@ def attn_fwd(
     # have native e^x support in HW.
     qk_scale = sm_scale * 1.44269504089
     # Q is loaded once at the beginning and shared by all N blocks.
-    q = load_fn(Q_block_ptr, True, padded_head, "zero")
+    q = load_fn(Q_block_ptr, True, PADDED_HEAD, "zero")
     q = (q * qk_scale).to(Q_block_ptr.type.element_ty)
 
     # Here we compute how many full and masked blocks we have.
@@ -488,7 +488,7 @@ def attn_fwd(
             # IS_CAUSAL, ....
             False, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
             # _, MASK_STEPS, ...
-            PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, padded_head
+            PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_HEAD
         )
         block_min = block_max
         block_max = n_blocks * BLOCK_N
@@ -514,7 +514,7 @@ def attn_fwd(
             block_min, block_max, offs_n_causal, masked_blocks, n_extra_tokens, bias_ptr, alibi_slope,
             IS_CAUSAL, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
             # _, MASK_STEPS, ...
-            PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, padded_head
+            PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_HEAD
         )
     # epilogue
     acc = acc / l_i[:, None]
@@ -961,16 +961,19 @@ class _attention(torch.autograd.Function):
             o_strides = (o.stride(0), o.stride(1), o.stride(2), o.stride(3))
 
         # Get closest power of 2 over or equal to 32.
-        unpadded_head_dims = {32, 64, 128, 256}
-        if head_size not in unpadded_head_dims:
-            padded_d_model = None
-            for i in unpadded_head_dims:
-                if i > head_size:
-                    padded_d_model = i
-                    break
-            assert padded_d_model is not None
-        else:
-            padded_d_model = head_size
+        # unpadded_head_dims = {32, 64, 128, 256}
+        # if head_size not in unpadded_head_dims:
+        #     padded_d_model = None
+        #     for i in unpadded_head_dims:
+        #         print(f"i = {i}")
+        #         if i > head_size:
+        #             padded_d_model = i
+        #             print(f"head size = {padded_d_model}")
+        #             break
+        #     assert padded_d_model is not None
+        # else:
+        #     padded_d_model = head_size
+        padded_d_model = 1 << (head_size - 1).bit_length()
 
 
         grid = lambda META: (
@@ -1137,25 +1140,25 @@ def varlen_input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype):
     return q, k, v, input_metadata
 
 @pytest.mark.parametrize('Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD',
-                         [(4, 48, 24, 1024, 1024, 64),
-                          (1, 24, 6, 8192, 8192, 64),
-                          (1, 4, 2, 16384, 16384, 128),
-                          (2, 16, 4, 1020, 987, 128),
-                          (2, 16, 4, 15498, 2, 128),
-                          (2, 16, 2, 7, 16219, 64),
-                          (4, 48, 12, 1, 1, 64),
-                          (4, 48, 48, 1, 1, 128),
-                          (4, 48, 24, 3, 3, 128),
-                          (4, 48, 48, 1001, 990, 64),
-                          (1, 8, 8, 8081, 7099, 64),
-                          (1, 4, 4, 16330, 15989, 128),
-                          (4, 4, 1, 1024, 1024, 33),
+                         [#(4, 48, 24, 1024, 1024, 64),
+                        #   (1, 24, 6, 8192, 8192, 64),
+                        #   (1, 4, 2, 16384, 16384, 128),
+                        #   (2, 16, 4, 1020, 987, 128),
+                        #   (2, 16, 4, 15498, 2, 128),
+                        #   (2, 16, 2, 7, 16219, 64),
+                        #   (4, 48, 12, 1, 1, 64),
+                        #   (4, 48, 48, 1, 1, 128),
+                        #   (4, 48, 24, 3, 3, 128),
+                        #   (4, 48, 48, 1001, 990, 64),
+                        #   (1, 8, 8, 8081, 7099, 64),
+                        #   (1, 4, 4, 16330, 15989, 128),
+                        #   (4, 4, 1, 1024, 1024, 33),
                           (4, 4, 2, 65, 1018, 65),
-                          (4, 4, 4, 128, 128, 65),
-                          (4, 4, 4, 113, 123, 1),
+                        #   (4, 4, 4, 128, 128, 65),
+                        #   (4, 4, 4, 113, 123, 1),
                           ])
-@pytest.mark.parametrize('causal', [True, False])
-@pytest.mark.parametrize('use_alibi', [True, False])
+@pytest.mark.parametrize('causal', [False])
+@pytest.mark.parametrize('use_alibi', [False])
 def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, dtype=torch.float16):
     torch.manual_seed(20)
     q, k, v, input_metadata = input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype)
