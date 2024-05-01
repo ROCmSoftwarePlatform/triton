@@ -654,15 +654,14 @@ private:
       auto offset = tripleIt->first;
       auto range = tripleIt->second;
       tripleMap.erase(tripleIt);
-      auto bufferIt =
-          llvm::find_if(xBuffers, [&](auto *buffer) {
-            auto xRange = bufferRange[buffer];
-            bool res = xRange.intersects(range);
-            for (const auto &val : tripleMap)
-              res = res &&
-                    !val.second.intersects(xRange); // only one buffer intersect
-            return res;
-          });
+      auto bufferIt = llvm::find_if(xBuffers, [&](auto *buffer) {
+        auto xRange = bufferRange[buffer];
+        bool res = xRange.intersects(range);
+        for (auto val : tripleMap)
+          res = res &&
+                !val.second.intersects(xRange); // only one buffer intersect
+        return res;
+      });
       if (bufferIt != xBuffers.end()) {
         auto buffer = *bufferIt;
         auto xSize = buffer->size;
@@ -745,10 +744,10 @@ private:
     // non-neighboring node or the first neighboring node without any color.
     // Nodes with the same color do not interfere with each other.
     DenseMap<BufferT *, int> colors;
-    for (auto value : buffers) {
-      colors[value] = (value == buffers.front()) ? 0 : -1;
+    for (auto value : xBuffers) {
+      colors[value] = (value == xBuffers.front()) ? 0 : -1;
     }
-    SmallVector<bool> available(buffers.size());
+    SmallVector<bool> available(xBuffers.size());
     for (auto x : xBuffers) {
       std::fill(available.begin(), available.end(), true);
       for (auto y : interference.lookup(x)) {
