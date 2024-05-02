@@ -2,7 +2,7 @@ import triton
 import triton.language as tl
 
 @triton.jit()
-def get_tiles_config(M, N, K, total_programs_streamk,
+def get_tiles_config(M, N, K, num_sms,
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
 ):
     total_blocks_M = tl.cdiv(M, BLOCK_M)
@@ -10,13 +10,13 @@ def get_tiles_config(M, N, K, total_programs_streamk,
     iters_per_tile = tl.cdiv(K, BLOCK_K)
 
     total_tiles = total_blocks_M * total_blocks_N
-    if total_programs_streamk > 0:  # Stream-K
+    if num_sms > 0:  # Stream-K
         total_tiles_streamk = total_tiles 
         total_iters_streamk = total_tiles_streamk * iters_per_tile
         # iterations related to full waves
-        total_full_tiles_streamk = total_iters_streamk // total_programs_streamk
+        total_full_tiles_streamk = total_iters_streamk // num_sms
         # iterations related to last (partial) wave
-        total_partial_tiles_streamk = total_iters_streamk % total_programs_streamk
+        total_partial_tiles_streamk = total_iters_streamk % num_sms
 
     else:  # all tiles are computed using classical blocking
         total_tiles_streamk = 0
@@ -29,19 +29,20 @@ def get_tiles_config(M, N, K, total_programs_streamk,
 @triton.jit()
 def streamk_gemm(
         A, B, C,
-        M, N, K, total_programs_streamk,
+        M, N, K, num_sms,
         stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
-        ACC_TYPE: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+        GROUP_SIZE_M: tl.constexpr,
 ):
     pid = tl.program_id(0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
 
-    iters_per_tile, total_tiles_streamk, total_full_tiles_streamk, total_partial_tiles_streamk, total_iters_streamk = get_tiles_config(M, N, K, total_programs_streamk, BLOCK_M, BLOCK_N, BLOCK_K)
+    iters_per_tile, total_tiles_streamk, total_full_tiles_streamk, total_partial_tiles_streamk, total_iters_streamk = get_tiles_config(M, N, K, num_sms, BLOCK_M, BLOCK_N, BLOCK_K)
 
     start_iter = pid * total_full_tiles_streamk + tl.minimum(pid, total_partial_tiles_streamk)
     last_iter = (pid + 1) * total_full_tiles_streamk + tl.minimum(pid + 1, total_partial_tiles_streamk)
+    acc_dtype = tl.float32 if C.type.element_ty != tl.int8 else tl.int32
     while start_iter < last_iter:
         remainder = start_iter % iters_per_tile
         end_iter = tl.minimum(start_iter + (iters_per_tile - remainder), last_iter)
@@ -63,7 +64,7 @@ def streamk_gemm(
         rk = tl.arange(0, BLOCK_K)
         A_BASE = A + rm[:, None] * stride_am + rk[None, :] * stride_ak + BLOCK_K * stride_ak * remainder
         B_BASE = B + rk[:, None] * stride_bk + rn[None, :] * stride_bn + BLOCK_K * stride_bk * remainder
-        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_TYPE)
+        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
         for current_iter in range(start_iter, end_iter):
             a = tl.load(A_BASE)
             b = tl.load(B_BASE)
