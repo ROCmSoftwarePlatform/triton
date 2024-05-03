@@ -215,7 +215,7 @@ tt.func @multi_color(%A : !tt.ptr<f16>) {
   %5 = triton_gpu.local_load %cst_5 : !tt.memdesc<4x8xf16, #A_SHARED> -> tensor<4x8xf16, #AL>
   // CHECK-NEXT: offset = 1024, size = 512
   %cst_6 = triton_gpu.local_alloc : () -> !tt.memdesc<8x32xf16, #A_SHARED>
-  // CHECK-NEXT: offset = 1824, size = 128
+  // CHECK-NEXT: offset = 1792, size = 128
   %cst_7 = triton_gpu.local_alloc : () -> !tt.memdesc<2x32xf16, #A_SHARED>
   %6 = triton_gpu.local_load %cst_0 : !tt.memdesc<4x4xf16, #A_SHARED> -> tensor<4x4xf16, #AL>
   // CHECK-NEXT: offset = 1024, size = 512
@@ -232,7 +232,7 @@ tt.func @multi_color(%A : !tt.ptr<f16>) {
   %10 = ttg.local_load %cst_7 : !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<2x32xf16, #AL>
   %cst_12 = arith.constant dense<0.000000e+00> : tensor<4x16xf16, #AL>
   %cst_13 = arith.constant dense<0.000000e+00> : tensor<8x32xf16, #AL>
-  // CHECK-NEXT: size = 1952
+  // CHECK-NEXT: size = 1920
   tt.return
 }
 
