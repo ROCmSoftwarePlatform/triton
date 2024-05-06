@@ -1,7 +1,8 @@
 # AMD Perf Kernels
 
 This directory contains customized/tuned/experimental kernels for AMD Instinct series GPUs.
-Please make sure your Triton compiler is v2.1 or later. To install Triton, please see
+Please make sure your Triton compiler is v2.1 or later, and is from the OpenAI Triton repository 
+[here](https://github.com/openai/triton). To install Triton, please see
 [these](https://github.com/openai/triton/tree/main?tab=readme-ov-file#install-from-source) instructions.
 
 ## `06-fused-attention-transV.py`
