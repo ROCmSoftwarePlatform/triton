@@ -74,13 +74,9 @@ def streamk_gemm(
 
         if remainder ==0 and end_iter % iters_per_tile ==0:
             C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
-        #    mask = (rm < M)[:, None] & (rn < N)[None, :]
-        #    tl.store(C_, acc, mask=mask)
             tl.store(C_, acc)
         else:
             C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
-        #    mask = (rm < M)[:, None] & (rn < N)[None, :]
-        #    tl.atomic_add(C_, acc, mask=mask)
             tl.atomic_add(C_, acc)
 
         start_iter = end_iter
