@@ -72,7 +72,7 @@ def persistent_streamk_gemm(
 
         rm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
         rn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-        C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
+        C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn
         mask = (rm < M)[:, None] & (rn < N)[None, :]
         tl.store(C_, acc, mask=mask)
 
@@ -107,7 +107,7 @@ def persistent_streamk_gemm(
             A_BASE += BLOCK_SIZE_K * stride_ak
             B_BASE += BLOCK_SIZE_K * stride_bk
 
-        C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
+        C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn
         mask = (rm < M)[:, None] & (rn < N)[None, :]
         tl.atomic_add(C_, acc, mask=mask)
 
