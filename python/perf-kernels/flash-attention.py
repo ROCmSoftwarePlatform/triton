@@ -1222,7 +1222,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, dtype=to
 
 @pytest.mark.parametrize('Z, H, N_CTX_Q, N_CTX_K, D_HEAD',
                          [(4, 48, 1024, 1024, 64),
-                          (4, 24, 8192, 8192, 64),
+                          (4, 12, 8192, 8192, 64),
                           (2, 4, 16384, 16384, 128),
                           (2, 16, 1020, 987, 128),
                           (2, 16, 15498, 2, 128),
@@ -1242,7 +1242,6 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, dtype=to
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('use_bias', [True])
 def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype=torch.float16):
-    pytest.skip()
     torch.manual_seed(20)
     sm_scale = D_HEAD ** -0.5
     input_metadata = MetaData(sm_scale=sm_scale)
