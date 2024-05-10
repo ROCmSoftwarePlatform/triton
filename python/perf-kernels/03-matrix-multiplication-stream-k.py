@@ -139,27 +139,15 @@ class matmul(torch.autograd.Function):
 
         total_tiles = total_blocks_M * total_blocks_N
 
-        if total_programs_streamk > 0:  # Stream-K
-            # last wave may occupy less than total_programs_streamk SMs
-    #        total_tiles_streamk = total_tiles % total_programs_streamk
-            total_tiles_streamk = total_tiles 
-            # for two-tile Stream-K + data-parallel from original paper
-        #    if two_tiles and total_tiles - total_tiles_streamk > total_programs_streamk:
-        #        total_tiles_streamk += total_programs_streamk
-            # remaining tiles are computed using classical blocking
-            total_blocking_tiles = total_tiles - total_tiles_streamk
-            total_iters_streamk = total_tiles * iters_per_tile
-            # iterations related to full waves
-            total_full_tiles_streamk = total_iters_streamk // total_programs_streamk
-            # iterations related to last (partial) wave
-            total_partial_tiles_streamk = total_iters_streamk % total_programs_streamk
+        total_tiles_streamk = total_tiles 
+        total_blocking_tiles = total_tiles - total_tiles_streamk
+        total_iters_streamk = total_tiles * iters_per_tile
+        # iterations related to full waves
+        total_full_tiles_streamk = total_iters_streamk // total_programs_streamk
+        # iterations related to last (partial) wave
+        total_partial_tiles_streamk = total_iters_streamk % total_programs_streamk
+        grids = total_programs_streamk
 
-        else:  # all tiles are computed using classical blocking
-            total_blocking_tiles = total_tiles
-            total_tiles_streamk = 0
-            total_full_tiles_streamk = 0
-            total_partial_tiles_streamk = 0
-            total_iters_streamk = 0
 
         if matmul._debug:
             print(f"M,N,K={M},{N},{K} ; BLK_M,N,K={BLK_M},{BLK_N},{BLK_K}")
@@ -174,7 +162,6 @@ class matmul(torch.autograd.Function):
 
         # allocates locks to sync work accross SMs
   #      grids = total_programs_streamk + total_blocking_tiles
-        grids = total_programs_streamk
   #      print(f"{grids=}")
         kk = streamk_gemm[(grids,)](
             a,
@@ -210,8 +197,6 @@ class matmul(torch.autograd.Function):
        #     print(kk.asm['ttgir'])
        #     print(kk.asm['amdgcn'])
 
-#        return c
-
     @staticmethod
     def forward(ctx, a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, grid: int, BLK_M = 128, BLK_N = 128, BLK_K = 32, gsize_m = 1, two_tiles = True, num_stages = 3, num_warps = 4,  waves_per_eu = 2, mfmaInstrSize = 16, kpack = 1):
         matmul._call(a = a, b = b, c = c, total_programs_streamk = grid, BLK_M = BLK_M, BLK_N = BLK_N, BLK_K = BLK_K, gsize_m = gsize_m, two_tiles = two_tiles, num_warps = num_warps, num_stages = num_stages,  waves_per_eu = waves_per_eu, mfmaInstrSize = mfmaInstrSize, kpack = kpack)
@@ -244,15 +229,11 @@ kpack = 2
 
 matmul.set_debug(True)
 C = matmul.apply(A, B, C, total_sm, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack)
-#exit(0)
 matmul.set_debug(False)
 expected = A @ B
 
 assert torch.allclose(C, expected, atol=1), f"max: {(C - expected).abs().max().item()}\n{C}\n{expected}"
 print("pass validation test")
-
-# for debugging, uncomment the following line
-# exit(0)
 
 triton_ms = triton.testing.do_bench(lambda: torch.matmul(A, B))
 print(f"PyTorch: {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
@@ -262,9 +243,6 @@ print(f"hybrid stream-k (grid={total_sm}): {triton_ms:.3f} ms  {perf(triton_ms):
 
 triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, C, total_sm * 2, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack))
 print(f"hybrid stream-k (grid={total_sm * 2}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
-
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, C, 0, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack))
-print(f"tile matmul (grid=0): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
 exit(0)
 # ---------------------------------------------------------------------------
