@@ -231,7 +231,7 @@ def generated_kernel_name(M, N, K, gpu_id):
 # 4. test_gemm to invoke
 # 4.1 run try_config in parallel
 # 4.2 matmul in a loop of 10 iterations
-def generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench):
+def generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench, rotating_buffer_size):
     filenames = []
     for i in range(jobs):
         filenames.append(generated_kernel_name(M, N, K, i))
@@ -244,7 +244,7 @@ import triton.language as tl
 import argparse
 import sys
 import multiprocessing
-from tune_gemm import gen_input, gen_rotating_tensors
+from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
 """
     for fi in range(jobs):
         f_kernel[fi].write(import_str + "\n")
@@ -267,17 +267,17 @@ from tune_gemm import gen_input, gen_rotating_tensors
 
     # write test_gemm
     # pre string
-    test_gemm_pre_str = f"""def test_gemm(M, N, K, num_threads):
+    test_gemm_pre_str = f"""def test_gemm(M, N, K, rotating_buffer_size, num_threads):
     thread_pool = multiprocessing.Pool(processes=num_threads)
     tensors = gen_rotating_tensors(M, N, K, '{dtype_a}', {col_a}, '{dtype_b}', {col_b}, '{dtype_c}',
-                                   1, {init_type}, rotating_tensor_size, use_bias, device='cuda')
+                                   1, '{init_type}', rotating_buffer_size, True, device='cuda')
 
     # a, a_fp16 = gen_input(M, K, '{dtype_a}', {col_a}, 1, '{init_type}', device='cuda')
     # b, b_fp16 = gen_input(K, N, '{dtype_b}', {col_b}, 2, '{init_type}', device='cuda')
     # c = torch.zeros((M, N), device=a.device, dtype={tl_to_torch_types[name_to_tl_types[dtype_c]]})
-    a = tensors["input_a]
-    b = tensors["input_b]
-    c = tesnors["output_c]
+    a = tensors['input_a'][0]
+    b = tensors['input_b'][0]
+    c = tensors['output_c'][0]
     task_args = (M, N, K,
                  a.stride(0), a.stride(1),
                  b.stride(0), b.stride(1),
@@ -327,7 +327,11 @@ from tune_gemm import gen_input, gen_rotating_tensors
         configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None)
         matmul_call_str = f"""
         if '{configStr}' not in failed_configs:
+            rotating_num = tensors['rotating_num']
             for i in range({runs}):
+                a = tensors['input_a'][i % rotating_num]
+                b = tensors['input_b'][i % rotating_num]
+                c = tensors['output_c'][i % rotating_num]
                 d = matmul_{configStr}(a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1))"""
         f_kernel[idx % jobs].write(matmul_call_str + "\n")
         idx += 1
@@ -342,10 +346,12 @@ def main():
         prog="tune a specific gemm size",
         allow_abbrev=False,)
     parser.add_argument("-n", type=int, default=1, help='number of threads')
+    parser.add_argument("-rotating_tensor", type=int, default=256, help='size of rotating buffer (MB), default: 256')
     args = parser.parse_args()
     numThreads = args.n
+    rotating_buffer_size = args.rotating_tensor
     """
-    test_gemm_call_str = f'test_gemm({M}, {N}, {K}, numThreads)'
+    test_gemm_call_str = f'test_gemm({M}, {N}, {K}, rotating_buffer_size, numThreads)'
     for fi in range(jobs):
         f_kernel[fi].write(def_main_str)
         f_kernel[fi].write(test_gemm_call_str + "\n\n")
@@ -361,7 +367,7 @@ def extract_kernel_time(M, N, K, config, df):
     return config, meanTime
 
 
-def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose):
+def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose, rotating_buffer_size):
     ngpus = len(gpus)
     gpuIdx = gpus.index(gpuid)
     if gpuIdx + 1 > jobs:
@@ -371,13 +377,13 @@ def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose):
     while jobId < jobs:
         if verbose:
             print(f"profiling {generated_kernel_name(M, N, K, jobId)} on GPU {gpuid}")
-        run_bash_command_wrapper(f"rocprof --stats -o results-{jobId}.csv python {generated_kernel_name(M, N, K, jobId)}", capture=(verbose < 2))
+        run_bash_command_wrapper(f"rocprof --stats -o results-{jobId}.csv python {generated_kernel_name(M, N, K, jobId)} -rotating_tensor {rotating_buffer_size}", capture=(verbose < 2))
         jobId += ngpus
 
 
-def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, run_bench, jobs, iters, skipWarmup, verbose=0, num_threads=16, gpus=[0]):
+def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, run_bench, jobs, iters, skipWarmup, verbose=0, num_threads=16, gpus=[0], rotating_buffer_size=256):
     # Generate kernel out of all configs
-    generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench)
+    generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench, rotating_buffer_size)
 
     # remove any compiled kernel in the cache
     run_bash_command("rm -rf ~/.triton/cache")
@@ -386,14 +392,14 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     start_time = datetime.now()
     if not skipWarmup:
         for i in range(jobs):
-            run_bash_command(f"python {generated_kernel_name(M, N, K, i)} -n {num_threads}", capture=(verbose < 2))
+            run_bash_command(f"python {generated_kernel_name(M, N, K, i)} -n {num_threads} -rotating_tensor {rotating_buffer_size}", capture=(verbose < 2))
     compile_end = datetime.now()
     compile_time = compile_end - start_time
     if verbose:
         print(f"compile time: {compile_time}", flush=True)
 
     # profile generated kernels
-    running = [multiprocessing.Process(target=profile_batch_kernels, args=(M, N, K, gpu_id, gpus, jobs, verbose)) for gpu_id in gpus]
+    running = [multiprocessing.Process(target=profile_batch_kernels, args=(M, N, K, gpu_id, gpus, jobs, verbose, rotating_buffer_size)) for gpu_id in gpus]
     for p in running:
         p.start()
     for p in running:
@@ -487,28 +493,30 @@ def gen_rotating_tensors(M, N, K,
                         dtype_a, need_Trans_a, 
                         dtype_b, need_Trans_b,
                         dtype_c, seed, init_type, 
-                        rotating_tensor_size, 
+                        rotating_buffer_size, 
                         use_bias, device='cuda'):
-    a_size = M * K * type_name_to_bytes[dtype_a]
-    b_size = K * N * type_name_to_bytes[dtype_b]
-    c_size = M * N * type_name_to_bytes[dtype_c]
+    a_size = M * K * type_name_to_bytes(dtype_a)
+    b_size = K * N * type_name_to_bytes(dtype_b)
+    c_size = M * N * type_name_to_bytes(dtype_c)
 
     total_size = a_size + b_size + c_size
-    block_count = rotating_tensor_size // total_size
+    block_count = rotating_buffer_size * 1024 * 1024 // total_size
     block_count = max(1, block_count)
+
+    print(f"block_count = {block_count}")
 
     # generate input and outputs
     a = []
     b = []
     c = []
     for i in range(block_count):
-        in_a, in_a_fp16 = gen_input(M, K, tl_to_torch_types[name_to_tl_types[dtype_a]], need_Trans_a, 1, init_type, device='cuda')
+        in_a, in_a_fp16 = gen_input(M, K, dtype_a, need_Trans_a, 1, init_type, device='cuda')
         a.append(in_a)
-        in_b, in_b_fp16 = gen_input(K, N, tl_to_torch_types[name_to_tl_types[dtype_b]], need_Trans_b, 2, init_type, device='cuda')
+        in_b, in_b_fp16 = gen_input(K, N, dtype_b, need_Trans_b, 2, init_type, device='cuda')
         b.append(in_b)
         out_c = torch.zeros((M, K), dtype=tl_to_torch_types[name_to_tl_types[dtype_c]], device='cuda')
         c.append(out_c)
-    in_outs = {"num_tensor": block_count, 
+    in_outs = {"rotating_num": block_count, 
            "input_a": a,
            "input_b": b,
            "output_c": c}
@@ -711,7 +719,7 @@ def main():
         print(f"Unsupported dtype_a {args.dtype_a} or dtype_b {args.dtype_b} or dtype_c {args.dtype_c}")
         print("Supported types: ", list(name_to_tl_types.keys()))
         sys.exit(1)
-
+    rotating_buffer_size = args.rotating_tensor
 
     mnks = []
     # TODO: make it more robust to get user input
@@ -770,7 +778,7 @@ def main():
                 M, N, K, col_a, col_b, dtype_a,
                 dtype_b, dtype_c, init_type, pruned_configs,
                 run_bench, jobs, iters, skipWarmup, num_threads=args.num_threads, gpus=gpus,
-                verbose=verbose_level)
+                verbose=verbose_level, rotating_buffer_size=rotating_buffer_size)
 
         # post processing the numbers
         perf_tflops = lambda us: 2 * M * N * K * 1e-12 / (us * 1e-6)
