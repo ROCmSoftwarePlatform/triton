@@ -244,7 +244,7 @@ import triton.language as tl
 import argparse
 import sys
 import multiprocessing
-from tune_gemm import gen_input
+from tune_gemm import gen_input, gen_rotating_tensors
 """
     for fi in range(jobs):
         f_kernel[fi].write(import_str + "\n")
@@ -269,9 +269,15 @@ from tune_gemm import gen_input
     # pre string
     test_gemm_pre_str = f"""def test_gemm(M, N, K, num_threads):
     thread_pool = multiprocessing.Pool(processes=num_threads)
-    a, a_fp16 = gen_input(M, K, '{dtype_a}', {col_a}, 1, '{init_type}', device='cuda')
-    b, b_fp16 = gen_input(K, N, '{dtype_b}', {col_b}, 2, '{init_type}', device='cuda')
-    c = torch.zeros((M, N), device=a.device, dtype={tl_to_torch_types[name_to_tl_types[dtype_c]]})
+    tensors = gen_rotating_tensors(M, N, K, '{dtype_a}', {col_a}, '{dtype_b}', {col_b}, '{dtype_c}',
+                                   1, {init_type}, rotating_tensor_size, use_bias, device='cuda')
+
+    # a, a_fp16 = gen_input(M, K, '{dtype_a}', {col_a}, 1, '{init_type}', device='cuda')
+    # b, b_fp16 = gen_input(K, N, '{dtype_b}', {col_b}, 2, '{init_type}', device='cuda')
+    # c = torch.zeros((M, N), device=a.device, dtype={tl_to_torch_types[name_to_tl_types[dtype_c]]})
+    a = tensors["input_a]
+    b = tensors["input_b]
+    c = tesnors["output_c]
     task_args = (M, N, K,
                  a.stride(0), a.stride(1),
                  b.stride(0), b.stride(1),
@@ -475,6 +481,41 @@ def gen_input(M, N, ty_name, needTrans, seed, init_type, device='cuda'):
 
     return input, input_f16
 
+
+# generate inputs/outputs according to rotating tensor size
+def gen_rotating_tensors(M, N, K,
+                        dtype_a, need_Trans_a, 
+                        dtype_b, need_Trans_b,
+                        dtype_c, seed, init_type, 
+                        rotating_tensor_size, 
+                        use_bias, device='cuda'):
+    a_size = M * K * type_name_to_bytes[dtype_a]
+    b_size = K * N * type_name_to_bytes[dtype_b]
+    c_size = M * N * type_name_to_bytes[dtype_c]
+
+    total_size = a_size + b_size + c_size
+    block_count = rotating_tensor_size // total_size
+    block_count = max(1, block_count)
+
+    # generate input and outputs
+    a = []
+    b = []
+    c = []
+    for i in range(block_count):
+        in_a, in_a_fp16 = gen_input(M, K, tl_to_torch_types[name_to_tl_types[dtype_a]], need_Trans_a, 1, init_type, device='cuda')
+        a.append(in_a)
+        in_b, in_b_fp16 = gen_input(K, N, tl_to_torch_types[name_to_tl_types[dtype_b]], need_Trans_b, 2, init_type, device='cuda')
+        b.append(in_b)
+        out_c = torch.zeros((M, K), dtype=tl_to_torch_types[name_to_tl_types[dtype_c]], device='cuda')
+        c.append(out_c)
+    in_outs = {"num_tensor": block_count, 
+           "input_a": a,
+           "input_b": b,
+           "output_c": c}
+    
+    return in_outs
+
+
 def matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
@@ -571,6 +612,7 @@ def parse_args():
     parser.add_argument("--jobs", type=int, default=1, help="number of generated files")
     parser.add_argument("--iters", type=int, default=1000, help="number of generated files")
     parser.add_argument("--init_type", type=str, default='randn', help="Initialization type for input matrices (default uniform rand [0, 1.0)])")
+    parser.add_argument("--rotating_tensor", type=int, default=256, help="total size of all tensors (default 256MB, need to be larger than the L1, L2, MALL size)")
     parser.add_argument("--no_warmup", action='store_true', default=False, help="Do not call the warmup kernel")
     args = parser.parse_args()
 
