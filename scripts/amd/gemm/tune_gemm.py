@@ -584,6 +584,8 @@ def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
 def get_default_tuning_result_filename():
     git_branch_name = run_bash_command("git rev-parse --abbrev-ref HEAD")
     git_branch_name = git_branch_name[0].decode()
+    # handle branch name of "xxx/xxx"
+    git_branch_name = git_branch_name.replace('/', '_')
     git_commit_hash = run_bash_command("git rev-parse --short HEAD")
     git_commit_hash = git_commit_hash[0].decode()
 
