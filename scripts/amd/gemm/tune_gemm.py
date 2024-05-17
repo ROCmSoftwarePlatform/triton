@@ -94,10 +94,10 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
         if SPLIT_K != 1 and not need_split_k(M, N, K):
             continue
         # skip split_k that leads to EVEN_K = false
-        leap = SPLIT_K * BLOCK_SIZE_K
-        modv = K % leap
-        if modv != 0:
-            continue
+        # leap = SPLIT_K * BLOCK_SIZE_K
+        # modv = K % leap
+        # if modv != 0:
+        #     continue
         # skip large GROUP_M
         if GROUP_M * BLOCK_SIZE_M > M and GROUP_M != 1:
             continue
@@ -115,6 +115,9 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
                 continue
             if num_warps < 4:
                 continue
+            # check if tiling is integer multiple of GEMM size because we have no boundary check
+            # if M % BLOCK_SIZE_M != 0 or N % BLOCK_SIZE_N != 0 or K % BLOCK_SIZE_K != 0:
+            #     continue
 
         pruned_configs.append(config)
 
@@ -140,6 +143,7 @@ def run_bash_command(commandstring, capture=True):
     return None
 
 def read_config(config):
+    bias = config.get('bias')
     block_m = config.get('BLOCK_SIZE_M')
     block_n = config.get('BLOCK_SIZE_N')
     block_k = config.get('BLOCK_SIZE_K')
@@ -150,11 +154,12 @@ def read_config(config):
     waves_per_eu = config.get('waves_per_eu')
     mfma_instr_size = config.get('matrix_instr_nonkdim')
     kpack = config.get('kpack')
-    return block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfma_instr_size, kpack
+    return bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfma_instr_size, kpack
 
 
 def gen_kernel_and_configStr_from_config(M, N, K, config, dtype_a, dtype_b, dtype_c):
-    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
+    bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
+    use_bias = bias is not None
     torch_dtype_a = 'fp16'
     torch_dtype_b = 'fp16'
     torch_dtype_c = 'fp16'
@@ -165,16 +170,17 @@ def gen_kernel_and_configStr_from_config(M, N, K, config, dtype_a, dtype_b, dtyp
     if dtype_c:
         torch_dtype_c = tl_to_torch_types[name_to_tl_types[dtype_c]]
     configStr = f"M{M}_N{N}_K{K}_BM{block_m}_BN{block_n}_BK{block_k}_GM{group_m}_SK{split_k}_nW{num_warps}_nS{num_stages}_EU{waves_per_eu}_kP{kpack}_mfma{mfmaInstrSize}"
-
+    if bias is not None:
+        configStr += "_bias"
     matmul_def_str = f"""
-def matmul_{configStr}(a, b, c, M, N, K, am, ak, bk, bn, cm, cn, warmup=False):
+def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn, warmup=False, use_bias=False):
     grid = triton.cdiv(M, {block_m}) * triton.cdiv(N, {block_n}), {split_k}
     #print(f'config: matmul_kernel_{configStr}', flush=True)
     if warmup:
         matmul_kernel_{configStr}.warmup(
-            {torch_dtype_a}, {torch_dtype_b}, {torch_dtype_c},
+            {torch_dtype_a}, {torch_dtype_b}, {torch_dtype_c}, {torch_dtype_c},
             M, N, K,
-            am, ak, bk, bn, cm, cn,
+            am, ak, bk, bn, cm, cn, biasn,
             BLOCK_SIZE_M = {block_m},
             BLOCK_SIZE_N = {block_n},
             BLOCK_SIZE_K = {block_k},
@@ -185,14 +191,16 @@ def matmul_{configStr}(a, b, c, M, N, K, am, ak, bk, bn, cm, cn, warmup=False):
             waves_per_eu = {waves_per_eu},
             matrix_instr_nonkdim = {mfmaInstrSize},
             kpack = {kpack},
-            grid=(1,)
+            grid=(1,),
+            EVEN_K={K % block_k == 0},
+            BIAS={use_bias},
         )
         return None
     else:
         matmul_kernel_{configStr}[grid](
-            a, b, c,
+            a, b, c, bias,
             M, N, K,
-            am, ak, bk, bn, cm, cn,
+            am, ak, bk, bn, cm, cn, biasn,
             BLOCK_SIZE_M = {block_m},
             BLOCK_SIZE_N = {block_n},
             BLOCK_SIZE_K = {block_k},
@@ -202,13 +210,15 @@ def matmul_{configStr}(a, b, c, M, N, K, am, ak, bk, bn, cm, cn, warmup=False):
             num_stages = {num_stages},
             waves_per_eu = {waves_per_eu},
             matrix_instr_nonkdim = {mfmaInstrSize},
-            kpack = {kpack}
+            kpack = {kpack},
+            EVEN_K={K % block_k == 0},
+            BIAS={use_bias},
         )
         return c
 
-def try_config_{configStr}(M, N, K, am, ak, bk, bn, cm, cn):
+def try_config_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
     try:
-        matmul_{configStr}(None, None, None, M, N, K, am, ak, bk, bn, cm, cn, True)
+        matmul_{configStr}(None, None, None, None, M, N, K, am, ak, bk, bn, cm, cn, biasn, True, {use_bias})
         return True
     except Exception as e:
         print(f'invalid config(compilation): {configStr}: ', e, flush=True)
@@ -218,8 +228,7 @@ def try_config_{configStr}(M, N, K, am, ak, bk, bn, cm, cn):
 
 
 def generated_kernel_name(M, N, K, gpu_id):
-    path = os.path.dirname(os.path.abspath(__file__))
-    return f"{path}/generated_kernel{M}-{N}-{K}-{gpu_id}.py"
+    return f"generated_kernel{M}-{N}-{K}-{gpu_id}.py"
 
 
 # Open {len(gpus)} files
@@ -231,7 +240,7 @@ def generated_kernel_name(M, N, K, gpu_id):
 # 4. test_gemm to invoke
 # 4.1 run try_config in parallel
 # 4.2 matmul in a loop of 10 iterations
-def generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench, rotating_buffer_size):
+def generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench, rotating_buffer_size, bias_size):
     filenames = []
     for i in range(jobs):
         filenames.append(generated_kernel_name(M, N, K, i))
@@ -251,7 +260,7 @@ from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
 
     # write definitions of matmul_kernel_xxx
     # and matmul_xxx and try_config
-    with open(os.path.dirname(os.path.abspath(__file__))+"/matmul_kernel.py") as file:
+    with open("matmul_kernel.py") as file:
         matmul_kernel_code = file.read()
     idx = 0
     for config in configs:
@@ -267,21 +276,26 @@ from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
 
     # write test_gemm
     # pre string
-    test_gemm_pre_str = f"""def test_gemm(M, N, K, rotating_buffer_size, num_threads):
+    test_gemm_pre_str = f"""def test_gemm(M, N, K, rotating_buffer_size, bias_size, num_threads):
     thread_pool = multiprocessing.Pool(processes=num_threads)
     tensors = gen_rotating_tensors(M, N, K, '{dtype_a}', {col_a}, '{dtype_b}', {col_b}, '{dtype_c}',
-                                   1, '{init_type}', rotating_buffer_size, True, device='cuda')
+                                   1, '{init_type}', rotating_buffer_size, bias_size, device='cuda')
 
-    # a, a_fp16 = gen_input(M, K, '{dtype_a}', {col_a}, 1, '{init_type}', device='cuda')
-    # b, b_fp16 = gen_input(K, N, '{dtype_b}', {col_b}, 2, '{init_type}', device='cuda')
-    # c = torch.zeros((M, N), device=a.device, dtype={tl_to_torch_types[name_to_tl_types[dtype_c]]})
     a = tensors['input_a'][0]
     b = tensors['input_b'][0]
     c = tensors['output_c'][0]
+    assert bias_size == M or bias_size == N or bias_size == 0
+
+    bias = None
+    stride_bias = 0
+    if bias_size > 0:
+        bias = tensors['bias'][0]
+        stride_bias = bias.stride(0)
+
     task_args = (M, N, K,
                  a.stride(0), a.stride(1),
                  b.stride(0), b.stride(1),
-                 c.stride(0), c.stride(1))
+                 c.stride(0), c.stride(1), stride_bias)
 
     if num_threads > 1:
         results = []
@@ -322,7 +336,7 @@ from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
         f_kernel[fi].write(threadpool_str)
     # call all matmul_xxx functions
     idx = 0
-    runs = iters if run_bench else 200
+    runs = iters if run_bench else 1500
     for config in configs:
         configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None)
         matmul_call_str = f"""
@@ -332,7 +346,8 @@ from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
                 a = tensors['input_a'][i % rotating_num]
                 b = tensors['input_b'][i % rotating_num]
                 c = tensors['output_c'][i % rotating_num]
-                d = matmul_{configStr}(a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1))"""
+                bias = tensors['bias'][i % rotating_num]
+                d = matmul_{configStr}(a, b, c, bias, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), bias.stride(0))"""
         f_kernel[idx % jobs].write(matmul_call_str + "\n")
         idx += 1
     # post string
@@ -351,7 +366,7 @@ def main():
     numThreads = args.n
     rotating_buffer_size = args.rotating_tensor
     """
-    test_gemm_call_str = f'test_gemm({M}, {N}, {K}, rotating_buffer_size, numThreads)'
+    test_gemm_call_str = f'test_gemm({M}, {N}, {K}, rotating_buffer_size, {M}, numThreads)'
     for fi in range(jobs):
         f_kernel[fi].write(def_main_str)
         f_kernel[fi].write(test_gemm_call_str + "\n\n")
@@ -363,7 +378,7 @@ def main():
 def extract_kernel_time(M, N, K, config, df):
     configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None)
     df = df[df['KernelName'].str.contains(configStr)]
-    meanTime = df['DurationNs'].tail(100).mean()
+    meanTime = df['DurationNs'].tail(500).mean()
     return config, meanTime
 
 
@@ -375,15 +390,16 @@ def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose, rotating_buffer_s
     os.environ['ROCR_VISIBLE_DEVICES'] = str(gpuid)
     jobId = gpuIdx
     while jobId < jobs:
+        kernel_name = generated_kernel_name(M, N, K, jobId)
         if verbose:
             print(f"profiling {generated_kernel_name(M, N, K, jobId)} on GPU {gpuid}")
-        run_bash_command_wrapper(f"rocprof --stats -o results-{jobId}.csv python {generated_kernel_name(M, N, K, jobId)} -rotating_tensor {rotating_buffer_size}", capture=(verbose < 2))
+        run_bash_command_wrapper(f"rocprof --stats -o results-{kernel_name}.csv python {kernel_name} -rotating_tensor {rotating_buffer_size}", capture=(verbose < 2))
         jobId += ngpus
 
 
-def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, run_bench, jobs, iters, skipWarmup, verbose=0, num_threads=16, gpus=[0], rotating_buffer_size=256):
+def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, run_bench, jobs, iters, skipWarmup, verbose=0, num_threads=16, gpus=[0], rotating_buffer_size=256, use_bias=False, bias_size = 0):
     # Generate kernel out of all configs
-    generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench, rotating_buffer_size)
+    generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench, rotating_buffer_size, bias_size)
 
     # remove any compiled kernel in the cache
     run_bash_command("rm -rf ~/.triton/cache")
@@ -392,7 +408,8 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     start_time = datetime.now()
     if not skipWarmup:
         for i in range(jobs):
-            run_bash_command(f"python {generated_kernel_name(M, N, K, i)} -n {num_threads} -rotating_tensor {rotating_buffer_size}", capture=(verbose < 2))
+            kernel_name = generated_kernel_name(M, N, K, i)
+            run_bash_command(f"python {kernel_name} -n {num_threads} -rotating_tensor {rotating_buffer_size}", capture=(verbose < 2))
     compile_end = datetime.now()
     compile_time = compile_end - start_time
     if verbose:
@@ -416,7 +433,7 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     thread_pool = multiprocessing.Pool(processes=num_threads)
     tasks = []
     idx = 0
-    df_prof = [pd.read_csv(f"results-{i}.csv") for i in range(jobs)]
+    df_prof = [pd.read_csv(f"results-{generated_kernel_name(M, N, K, i)}.csv") for i in range(jobs)]
     for config in configs:
         file_idx = idx % jobs
         tasks += [thread_pool.apply_async(extract_kernel_time, args=(M, N, K, config, df_prof[file_idx]))]
@@ -494,12 +511,13 @@ def gen_rotating_tensors(M, N, K,
                         dtype_b, need_Trans_b,
                         dtype_c, seed, init_type, 
                         rotating_buffer_size, 
-                        use_bias, device='cuda'):
+                        bias_size, device='cuda'):
     a_size = M * K * type_name_to_bytes(dtype_a)
     b_size = K * N * type_name_to_bytes(dtype_b)
     c_size = M * N * type_name_to_bytes(dtype_c)
+    bias_size = bias_size * type_name_to_bytes(dtype_c)
 
-    total_size = a_size + b_size + c_size
+    total_size = a_size + b_size + c_size + bias_size
     block_count = rotating_buffer_size * 1024 * 1024 // total_size
     block_count = max(1, block_count)
 
@@ -509,6 +527,7 @@ def gen_rotating_tensors(M, N, K,
     a = []
     b = []
     c = []
+    bias = []
     for i in range(block_count):
         in_a, in_a_fp16 = gen_input(M, K, dtype_a, need_Trans_a, 1, init_type, device='cuda')
         a.append(in_a)
@@ -516,15 +535,20 @@ def gen_rotating_tensors(M, N, K,
         b.append(in_b)
         out_c = torch.zeros((M, K), dtype=tl_to_torch_types[name_to_tl_types[dtype_c]], device='cuda')
         c.append(out_c)
+        if bias_size > 0:
+            bs, bs_fp16 = gen_input(M, 1, dtype_b, need_Trans_b, 2, init_type, device='cuda')
+            bias.append(bs.squeeze())
+
     in_outs = {"rotating_num": block_count, 
            "input_a": a,
            "input_b": b,
-           "output_c": c}
+           "output_c": c,
+           "bias": bias}
     
     return in_outs
 
 
-def matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack):
+def matmul(a, b, c, bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack, use_bias):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     #assert a.is_contiguous(), "Matrix A must be contiguous"
@@ -536,7 +560,7 @@ def matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_
     grid = triton.cdiv(M, block_m) * triton.cdiv(N, block_n), split_k
 
     matmul_kernel[grid](
-        a, b, c,
+        a, b, c, bias,
         M, N, K,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
@@ -549,23 +573,31 @@ def matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_
         num_warps=num_warps,
         num_stages=num_stages,
         waves_per_eu=waves_per_eu,
-        matrix_instr_nonkdim = mfmaInstrSize,
-        kpack = kpack
+        matrix_instr_nonkdim=mfmaInstrSize,
+        kpack=kpack,
+        BIAS=use_bias,
     )
     return c
 
 
 def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, config, verbose):
-    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
+    bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
+    use_bias = bias is not None
     torch.manual_seed(0)
     #a = torch.randn((M, K), device='cuda', dtype=datatype)
     #b = torch.randn((K, N), device='cuda', dtype=datatype)
     a, a_fp16 = gen_input(M, K, dtype_a, col_a, 1, init_type, device='cuda')
     b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, init_type, device='cuda')
+    if use_bias:
+        bias, bias_fp16 = gen_input(1, N, dtype_b, col_b, 2, init_type, device='cuda')
+        bias = bias.squeeze()
+        bias_fp16 = bias.squeeze()
     # Allocates output.
     c = torch.zeros((M, N), device=a.device, dtype=tl_to_torch_types[name_to_tl_types[dtype_c]])
-    triton_output = matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack)
+    triton_output = matmul(a, b, c, bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack, use_bias)
     torch_output = torch.matmul(a_fp16, b_fp16)
+    if use_bias:
+        torch_output += bias_fp16[None, :]
     # print(f"triton_output={triton_output}")
     # print(f"torch_output={torch_output}")
     rtol = 0 if torch.version.hip is None else 1e-2
@@ -613,6 +645,7 @@ def parse_args():
     parser.add_argument("--gemm_size_file", type=str, default="", help='yaml file to indicate matrix size')
     parser.add_argument("--o", type=str, default=get_default_tuning_result_filename(), help='yaml file to store tuning results')
     parser.add_argument("--keep", action='store_true', default=False, help='keep generated files')
+    parser.add_argument("--keep-prof", action='store_true', default=False, help='keep rocprof profiling csv files')
     parser.add_argument("--compare", action='store_true', default=False, help="Whether check result correctness")
     parser.add_argument("--compare_wo_tuning", action='store_true', default=False, help="Whether check result correctness")
     parser.add_argument("--benchmark", action='store_true', default=False, help="Benchmark the given config")
@@ -623,6 +656,8 @@ def parse_args():
     parser.add_argument("--iters", type=int, default=1000, help="number of generated files")
     parser.add_argument("--init_type", type=str, default='randn', help="Initialization type for input matrices (default uniform rand [0, 1.0)])")
     parser.add_argument("--rotating_tensor", type=int, default=256, help="total size of all tensors (default 256MB, need to be larger than the L1, L2, MALL size)")
+    parser.add_argument("--use_bias", action='store_true', default=False, help="indicate whether adding bias")
+    # parser.add_argument("--bias_size", type=int, default=0, help="default 0, indicating M is used as bias size")
     parser.add_argument("--no_warmup", action='store_true', default=False, help="Do not call the warmup kernel")
     args = parser.parse_args()
 
@@ -691,6 +726,7 @@ def main():
     matrix_size_file = args.gemm_size_file
     tuning_output_file = args.o
     keepTmp = args.keep
+    keepRocprof = args.keep_prof
     run_bench = args.benchmark
     jobs = args.jobs
     iters = args.iters
@@ -722,6 +758,8 @@ def main():
         print("Supported types: ", list(name_to_tl_types.keys()))
         sys.exit(1)
     rotating_buffer_size = args.rotating_tensor
+    use_bias = args.use_bias
+    # bias_size = args.bias_size
 
     mnks = []
     # TODO: make it more robust to get user input
@@ -776,11 +814,13 @@ def main():
             verbose_level = 1
         if args.verbose:
             verbose_level = 2
+        # we consider bias size as M for now.
+        bias_size = M if use_bias else 0
         minTime, bestConfig, compile_time, profile_time, post_time = tune_gemm_config(
                 M, N, K, col_a, col_b, dtype_a,
                 dtype_b, dtype_c, init_type, pruned_configs,
                 run_bench, jobs, iters, skipWarmup, num_threads=args.num_threads, gpus=gpus,
-                verbose=verbose_level, rotating_buffer_size=rotating_buffer_size)
+                verbose=verbose_level, rotating_buffer_size=rotating_buffer_size, use_bias=use_bias, bias_size=bias_size)
 
         # post processing the numbers
         perf_tflops = lambda us: 2 * M * N * K * 1e-12 / (us * 1e-6)
@@ -811,8 +851,9 @@ def main():
                 os.remove(generated_script)
                 if not skipWarmup:
                     os.remove(generated_script + ".failed_configs")
-                for f in glob.glob(f"results-{i}.*"):
-                    os.remove(f)
+                for f in glob.glob(f"results-{generated_script}.*"):
+                    if not f.endswith(".csv") and keepRocprof:
+                        os.remove(f)
 
         # Check correctness if asked to
         if args.compare:
