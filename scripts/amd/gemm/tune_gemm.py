@@ -94,10 +94,10 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
         if SPLIT_K != 1 and not need_split_k(M, N, K):
             continue
         # skip split_k that leads to EVEN_K = false
-        leap = SPLIT_K * BLOCK_SIZE_K
-        modv = K % leap
-        if modv != 0:
-            continue
+        # leap = SPLIT_K * BLOCK_SIZE_K
+        # modv = K % leap
+        # if modv != 0:
+        #     continue
         # skip large GROUP_M
         if GROUP_M * BLOCK_SIZE_M > M and GROUP_M != 1:
             continue
@@ -115,6 +115,9 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
                 continue
             if num_warps < 4:
                 continue
+            # check if tiling is integer multiple of GEMM size because we have no boundary check
+            # if M % BLOCK_SIZE_M != 0 or N % BLOCK_SIZE_N != 0 or K % BLOCK_SIZE_K != 0:
+            #     continue
 
         pruned_configs.append(config)
 
@@ -140,6 +143,7 @@ def run_bash_command(commandstring, capture=True):
     return None
 
 def read_config(config):
+    bias = config.get('bias')
     block_m = config.get('BLOCK_SIZE_M')
     block_n = config.get('BLOCK_SIZE_N')
     block_k = config.get('BLOCK_SIZE_K')
@@ -150,11 +154,12 @@ def read_config(config):
     waves_per_eu = config.get('waves_per_eu')
     mfma_instr_size = config.get('matrix_instr_nonkdim')
     kpack = config.get('kpack')
-    return block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfma_instr_size, kpack
+    return bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfma_instr_size, kpack
 
 
 def gen_kernel_and_configStr_from_config(M, N, K, config, dtype_a, dtype_b, dtype_c):
-    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
+    bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
+    use_bias = bias is not None
     torch_dtype_a = 'fp16'
     torch_dtype_b = 'fp16'
     torch_dtype_c = 'fp16'
@@ -165,16 +170,17 @@ def gen_kernel_and_configStr_from_config(M, N, K, config, dtype_a, dtype_b, dtyp
     if dtype_c:
         torch_dtype_c = tl_to_torch_types[name_to_tl_types[dtype_c]]
     configStr = f"M{M}_N{N}_K{K}_BM{block_m}_BN{block_n}_BK{block_k}_GM{group_m}_SK{split_k}_nW{num_warps}_nS{num_stages}_EU{waves_per_eu}_kP{kpack}_mfma{mfmaInstrSize}"
-
+    if bias is not None:
+        configStr += "_bias"
     matmul_def_str = f"""
-def matmul_{configStr}(a, b, c, M, N, K, am, ak, bk, bn, cm, cn, warmup=False):
+def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn, warmup=False, use_bias=False):
     grid = triton.cdiv(M, {block_m}) * triton.cdiv(N, {block_n}), {split_k}
     #print(f'config: matmul_kernel_{configStr}', flush=True)
     if warmup:
         matmul_kernel_{configStr}.warmup(
-            {torch_dtype_a}, {torch_dtype_b}, {torch_dtype_c},
+            {torch_dtype_a}, {torch_dtype_b}, {torch_dtype_c}, {torch_dtype_c},
             M, N, K,
-            am, ak, bk, bn, cm, cn,
+            am, ak, bk, bn, cm, cn, biasn,
             BLOCK_SIZE_M = {block_m},
             BLOCK_SIZE_N = {block_n},
             BLOCK_SIZE_K = {block_k},
@@ -185,14 +191,16 @@ def matmul_{configStr}(a, b, c, M, N, K, am, ak, bk, bn, cm, cn, warmup=False):
             waves_per_eu = {waves_per_eu},
             matrix_instr_nonkdim = {mfmaInstrSize},
             kpack = {kpack},
-            grid=(1,)
+            grid=(1,),
+            EVEN_K={K % block_k == 0},
+            BIAS={use_bias},
         )
         return None
     else:
         matmul_kernel_{configStr}[grid](
-            a, b, c,
+            a, b, c, bias,
             M, N, K,
-            am, ak, bk, bn, cm, cn,
+            am, ak, bk, bn, cm, cn, biasn,
             BLOCK_SIZE_M = {block_m},
             BLOCK_SIZE_N = {block_n},
             BLOCK_SIZE_K = {block_k},
@@ -202,13 +210,15 @@ def matmul_{configStr}(a, b, c, M, N, K, am, ak, bk, bn, cm, cn, warmup=False):
             num_stages = {num_stages},
             waves_per_eu = {waves_per_eu},
             matrix_instr_nonkdim = {mfmaInstrSize},
-            kpack = {kpack}
+            kpack = {kpack},
+            EVEN_K={K % block_k == 0},
+            BIAS={use_bias},
         )
         return c
 
-def try_config_{configStr}(M, N, K, am, ak, bk, bn, cm, cn):
+def try_config_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
     try:
-        matmul_{configStr}(None, None, None, M, N, K, am, ak, bk, bn, cm, cn, True)
+        matmul_{configStr}(None, None, None, None, M, N, K, am, ak, bk, bn, cm, cn, biasn, True, {use_bias})
         return True
     except Exception as e:
         print(f'invalid config(compilation): {configStr}: ', e, flush=True)
@@ -218,8 +228,7 @@ def try_config_{configStr}(M, N, K, am, ak, bk, bn, cm, cn):
 
 
 def generated_kernel_name(M, N, K, gpu_id):
-    path = os.path.dirname(os.path.abspath(__file__))
-    return f"{path}/generated_kernel{M}-{N}-{K}-{gpu_id}.py"
+    return f"generated_kernel{M}-{N}-{K}-{gpu_id}.py"
 
 
 # Open {len(gpus)} files
@@ -251,7 +260,7 @@ from tune_gemm import gen_input
 
     # write definitions of matmul_kernel_xxx
     # and matmul_xxx and try_config
-    with open(os.path.dirname(os.path.abspath(__file__))+"/matmul_kernel.py") as file:
+    with open("matmul_kernel.py") as file:
         matmul_kernel_code = file.read()
     idx = 0
     for config in configs:
@@ -271,11 +280,14 @@ from tune_gemm import gen_input
     thread_pool = multiprocessing.Pool(processes=num_threads)
     a, a_fp16 = gen_input(M, K, '{dtype_a}', {col_a}, 1, '{init_type}', device='cuda')
     b, b_fp16 = gen_input(K, N, '{dtype_b}', {col_b}, 2, '{init_type}', device='cuda')
+    bias, bias_fp16 = gen_input(1, N, '{dtype_c}', False, 2, '{init_type}', device='cuda')
+    bias = bias.squeeze()
+    bias_fp16 = bias.squeeze()
     c = torch.zeros((M, N), device=a.device, dtype={tl_to_torch_types[name_to_tl_types[dtype_c]]})
     task_args = (M, N, K,
                  a.stride(0), a.stride(1),
                  b.stride(0), b.stride(1),
-                 c.stride(0), c.stride(1))
+                 c.stride(0), c.stride(1), bias.stride(0))
 
     if num_threads > 1:
         results = []
@@ -316,13 +328,13 @@ from tune_gemm import gen_input
         f_kernel[fi].write(threadpool_str)
     # call all matmul_xxx functions
     idx = 0
-    runs = iters if run_bench else 200
+    runs = iters if run_bench else 1500
     for config in configs:
         configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None)
         matmul_call_str = f"""
         if '{configStr}' not in failed_configs:
             for i in range({runs}):
-                d = matmul_{configStr}(a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1))"""
+                d = matmul_{configStr}(a, b, c, bias, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), bias.stride(0))"""
         f_kernel[idx % jobs].write(matmul_call_str + "\n")
         idx += 1
     # post string
@@ -351,7 +363,7 @@ def main():
 def extract_kernel_time(M, N, K, config, df):
     configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None)
     df = df[df['KernelName'].str.contains(configStr)]
-    meanTime = df['DurationNs'].tail(100).mean()
+    meanTime = df['DurationNs'].tail(500).mean()
     return config, meanTime
 
 
@@ -363,9 +375,10 @@ def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose):
     os.environ['ROCR_VISIBLE_DEVICES'] = str(gpuid)
     jobId = gpuIdx
     while jobId < jobs:
+        kernel_name = generated_kernel_name(M, N, K, jobId)
         if verbose:
-            print(f"profiling {generated_kernel_name(M, N, K, jobId)} on GPU {gpuid}")
-        run_bash_command_wrapper(f"rocprof --stats -o results-{jobId}.csv python {generated_kernel_name(M, N, K, jobId)}", capture=(verbose < 2))
+            print(f"profiling {kernel_name} on GPU {gpuid}")
+        run_bash_command_wrapper(f"rocprof --stats -o results-{kernel_name}.csv python {kernel_name}", capture=(verbose < 2))
         jobId += ngpus
 
 
@@ -380,7 +393,8 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     start_time = datetime.now()
     if not skipWarmup:
         for i in range(jobs):
-            run_bash_command(f"python {generated_kernel_name(M, N, K, i)} -n {num_threads}", capture=(verbose < 2))
+            kernel_name = generated_kernel_name(M, N, K, i)
+            run_bash_command(f"python {kernel_name} -n {num_threads}", capture=(verbose < 2))
     compile_end = datetime.now()
     compile_time = compile_end - start_time
     if verbose:
@@ -404,7 +418,7 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     thread_pool = multiprocessing.Pool(processes=num_threads)
     tasks = []
     idx = 0
-    df_prof = [pd.read_csv(f"results-{i}.csv") for i in range(jobs)]
+    df_prof = [pd.read_csv(f"results-{generated_kernel_name(M, N, K, i)}.csv") for i in range(jobs)]
     for config in configs:
         file_idx = idx % jobs
         tasks += [thread_pool.apply_async(extract_kernel_time, args=(M, N, K, config, df_prof[file_idx]))]
@@ -475,7 +489,7 @@ def gen_input(M, N, ty_name, needTrans, seed, init_type, device='cuda'):
 
     return input, input_f16
 
-def matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack):
+def matmul(a, b, c, bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack, use_bias):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     #assert a.is_contiguous(), "Matrix A must be contiguous"
@@ -487,7 +501,7 @@ def matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_
     grid = triton.cdiv(M, block_m) * triton.cdiv(N, block_n), split_k
 
     matmul_kernel[grid](
-        a, b, c,
+        a, b, c, bias,
         M, N, K,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
@@ -500,23 +514,31 @@ def matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_
         num_warps=num_warps,
         num_stages=num_stages,
         waves_per_eu=waves_per_eu,
-        matrix_instr_nonkdim = mfmaInstrSize,
-        kpack = kpack
+        matrix_instr_nonkdim=mfmaInstrSize,
+        kpack=kpack,
+        BIAS=use_bias,
     )
     return c
 
 
 def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, config, verbose):
-    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
+    bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
+    use_bias = bias is not None
     torch.manual_seed(0)
     #a = torch.randn((M, K), device='cuda', dtype=datatype)
     #b = torch.randn((K, N), device='cuda', dtype=datatype)
     a, a_fp16 = gen_input(M, K, dtype_a, col_a, 1, init_type, device='cuda')
     b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, init_type, device='cuda')
+    if use_bias:
+        bias, bias_fp16 = gen_input(1, N, dtype_b, col_b, 2, init_type, device='cuda')
+        bias = bias.squeeze()
+        bias_fp16 = bias.squeeze()
     # Allocates output.
     c = torch.zeros((M, N), device=a.device, dtype=tl_to_torch_types[name_to_tl_types[dtype_c]])
-    triton_output = matmul(a, b, c, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack)
+    triton_output = matmul(a, b, c, bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack, use_bias)
     torch_output = torch.matmul(a_fp16, b_fp16)
+    if use_bias:
+        torch_output += bias_fp16[None, :]
     # print(f"triton_output={triton_output}")
     # print(f"torch_output={torch_output}")
     rtol = 0 if torch.version.hip is None else 1e-2
@@ -562,6 +584,7 @@ def parse_args():
     parser.add_argument("--gemm_size_file", type=str, default="", help='yaml file to indicate matrix size')
     parser.add_argument("--o", type=str, default=get_default_tuning_result_filename(), help='yaml file to store tuning results')
     parser.add_argument("--keep", action='store_true', default=False, help='keep generated files')
+    parser.add_argument("--keep-prof", action='store_true', default=False, help='keep rocprof profiling csv files')
     parser.add_argument("--compare", action='store_true', default=False, help="Whether check result correctness")
     parser.add_argument("--compare_wo_tuning", action='store_true', default=False, help="Whether check result correctness")
     parser.add_argument("--benchmark", action='store_true', default=False, help="Benchmark the given config")
@@ -639,6 +662,7 @@ def main():
     matrix_size_file = args.gemm_size_file
     tuning_output_file = args.o
     keepTmp = args.keep
+    keepRocprof = args.keep_prof
     run_bench = args.benchmark
     jobs = args.jobs
     iters = args.iters
@@ -759,8 +783,9 @@ def main():
                 os.remove(generated_script)
                 if not skipWarmup:
                     os.remove(generated_script + ".failed_configs")
-                for f in glob.glob(f"results-{i}.*"):
-                    os.remove(f)
+                for f in glob.glob(f"results-{generated_script}.*"):
+                    if not f.endswith(".csv") and keepRocprof:
+                        os.remove(f)
 
         # Check correctness if asked to
         if args.compare:
