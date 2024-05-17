@@ -143,7 +143,7 @@ def run_bash_command(commandstring, capture=True):
     return None
 
 def read_config(config):
-    bias = config.get('bias')
+    # bias = config.get('bias')
     block_m = config.get('BLOCK_SIZE_M')
     block_n = config.get('BLOCK_SIZE_N')
     block_k = config.get('BLOCK_SIZE_K')
@@ -154,12 +154,13 @@ def read_config(config):
     waves_per_eu = config.get('waves_per_eu')
     mfma_instr_size = config.get('matrix_instr_nonkdim')
     kpack = config.get('kpack')
-    return bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfma_instr_size, kpack
+    return block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfma_instr_size, kpack
+    # return bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfma_instr_size, kpack
 
 
-def gen_kernel_and_configStr_from_config(M, N, K, config, dtype_a, dtype_b, dtype_c):
-    bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
-    use_bias = bias is not None
+def gen_kernel_and_configStr_from_config(M, N, K, config, dtype_a, dtype_b, dtype_c, bias_size):
+    # bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
+    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
     torch_dtype_a = 'fp16'
     torch_dtype_b = 'fp16'
     torch_dtype_c = 'fp16'
@@ -170,7 +171,7 @@ def gen_kernel_and_configStr_from_config(M, N, K, config, dtype_a, dtype_b, dtyp
     if dtype_c:
         torch_dtype_c = tl_to_torch_types[name_to_tl_types[dtype_c]]
     configStr = f"M{M}_N{N}_K{K}_BM{block_m}_BN{block_n}_BK{block_k}_GM{group_m}_SK{split_k}_nW{num_warps}_nS{num_stages}_EU{waves_per_eu}_kP{kpack}_mfma{mfmaInstrSize}"
-    if bias is not None:
+    if bias_size > 0:
         configStr += "_bias"
     matmul_def_str = f"""
 def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn, warmup=False, use_bias=False):
@@ -193,7 +194,7 @@ def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn, wa
             kpack = {kpack},
             grid=(1,),
             EVEN_K={K % block_k == 0},
-            BIAS={use_bias},
+            BIAS=use_bias,
         )
         return None
     else:
@@ -212,13 +213,13 @@ def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn, wa
             matrix_instr_nonkdim = {mfmaInstrSize},
             kpack = {kpack},
             EVEN_K={K % block_k == 0},
-            BIAS={use_bias},
+            BIAS=use_bias,
         )
         return c
 
-def try_config_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
+def try_config_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn, use_bias):
     try:
-        matmul_{configStr}(None, None, None, None, M, N, K, am, ak, bk, bn, cm, cn, biasn, True, {use_bias})
+        matmul_{configStr}(None, None, None, None, M, N, K, am, ak, bk, bn, cm, cn, biasn, True, use_bias)
         return True
     except Exception as e:
         print(f'invalid config(compilation): {configStr}: ', e, flush=True)
@@ -265,7 +266,7 @@ from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
     idx = 0
     for config in configs:
         file_idx = idx % jobs
-        configStr, matmul_def_str = gen_kernel_and_configStr_from_config(M, N, K, config, dtype_a, dtype_b, dtype_c)
+        configStr, matmul_def_str = gen_kernel_and_configStr_from_config(M, N, K, config, dtype_a, dtype_b, dtype_c, bias_size)
         # Copy the matmul_kernel with name replaced
         matmul_kernel_config = matmul_kernel_code.replace("matmul_kernel", f"matmul_kernel_{configStr}")
         matmul_kernel_config = matmul_kernel_config.replace("import triton.language as tl", "")
@@ -284,18 +285,14 @@ from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
     a = tensors['input_a'][0]
     b = tensors['input_b'][0]
     c = tensors['output_c'][0]
-    assert bias_size == M or bias_size == N or bias_size == 0
+    assert bias_size == M or bias_size == 0
 
-    bias = None
-    stride_bias = 0
-    if bias_size > 0:
-        bias = tensors['bias'][0]
-        stride_bias = bias.stride(0)
-
+    use_bias = bias_size > 0
+    stride_bias = tensors['bias'][0].stride(0) if bias_size > 0 else 0
     task_args = (M, N, K,
                  a.stride(0), a.stride(1),
                  b.stride(0), b.stride(1),
-                 c.stride(0), c.stride(1), stride_bias)
+                 c.stride(0), c.stride(1), stride_bias, use_bias)
 
     if num_threads > 1:
         results = []
@@ -307,7 +304,7 @@ from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
     # warm up call of all matmul functions in parallel
     idx = 0
     for config in configs:
-        configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None)
+        configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None, bias_size)
         task_str = f"        results += [thread_pool.apply_async(try_config_{configStr}, args=task_args)]\n" + \
                    f"        config_names += ['{configStr}']\n"
         f_kernel[idx % jobs].write(task_str)
@@ -338,7 +335,7 @@ from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
     idx = 0
     runs = iters if run_bench else 1500
     for config in configs:
-        configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None)
+        configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None, bias_size)
         matmul_call_str = f"""
         if '{configStr}' not in failed_configs:
             rotating_num = tensors['rotating_num']
@@ -346,7 +343,7 @@ from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
                 a = tensors['input_a'][i % rotating_num]
                 b = tensors['input_b'][i % rotating_num]
                 c = tensors['output_c'][i % rotating_num]
-                bias = tensors['bias'][i % rotating_num]
+                bias = tensors['bias'][i % rotating_num] if bias_size > 0 else None
                 d = matmul_{configStr}(a, b, c, bias, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), bias.stride(0))"""
         f_kernel[idx % jobs].write(matmul_call_str + "\n")
         idx += 1
@@ -375,8 +372,8 @@ def main():
         f_kernel[fi].close()
 
 
-def extract_kernel_time(M, N, K, config, df):
-    configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None)
+def extract_kernel_time(M, N, K, config, df, bias_size):
+    configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None, bias_size)
     df = df[df['KernelName'].str.contains(configStr)]
     meanTime = df['DurationNs'].tail(500).mean()
     return config, meanTime
@@ -397,7 +394,7 @@ def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose, rotating_buffer_s
         jobId += ngpus
 
 
-def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, run_bench, jobs, iters, skipWarmup, verbose=0, num_threads=16, gpus=[0], rotating_buffer_size=256, use_bias=False, bias_size = 0):
+def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, run_bench, jobs, iters, skipWarmup, verbose=0, num_threads=16, gpus=[0], rotating_buffer_size=256, bias_size = 0):
     # Generate kernel out of all configs
     generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench, rotating_buffer_size, bias_size)
 
@@ -656,7 +653,7 @@ def parse_args():
     parser.add_argument("--iters", type=int, default=1000, help="number of generated files")
     parser.add_argument("--init_type", type=str, default='randn', help="Initialization type for input matrices (default uniform rand [0, 1.0)])")
     parser.add_argument("--rotating_tensor", type=int, default=256, help="total size of all tensors (default 256MB, need to be larger than the L1, L2, MALL size)")
-    parser.add_argument("--use_bias", action='store_true', default=False, help="indicate whether adding bias")
+    parser.add_argument("--bias_vector", action='store_true', default=False, help="apply bias vector")
     # parser.add_argument("--bias_size", type=int, default=0, help="default 0, indicating M is used as bias size")
     parser.add_argument("--no_warmup", action='store_true', default=False, help="Do not call the warmup kernel")
     args = parser.parse_args()
@@ -758,8 +755,7 @@ def main():
         print("Supported types: ", list(name_to_tl_types.keys()))
         sys.exit(1)
     rotating_buffer_size = args.rotating_tensor
-    use_bias = args.use_bias
-    # bias_size = args.bias_size
+    bias_vector = args.bias_vector
 
     mnks = []
     # TODO: make it more robust to get user input
@@ -815,12 +811,12 @@ def main():
         if args.verbose:
             verbose_level = 2
         # we consider bias size as M for now.
-        bias_size = M if use_bias else 0
+        bias_size = M if bias_vector else 0
         minTime, bestConfig, compile_time, profile_time, post_time = tune_gemm_config(
                 M, N, K, col_a, col_b, dtype_a,
                 dtype_b, dtype_c, init_type, pruned_configs,
                 run_bench, jobs, iters, skipWarmup, num_threads=args.num_threads, gpus=gpus,
-                verbose=verbose_level, rotating_buffer_size=rotating_buffer_size, use_bias=use_bias, bias_size=bias_size)
+                verbose=verbose_level, rotating_buffer_size=rotating_buffer_size, bias_size=bias_size)
 
         # post processing the numbers
         perf_tflops = lambda us: 2 * M * N * K * 1e-12 / (us * 1e-6)
@@ -830,7 +826,7 @@ def main():
         if not run_bench:
             print(f'TFLOPS: {formatted_tflops} time(us): {minTime}', end=" ", flush=True)
 
-        bestConfig_compact_str, _ = gen_kernel_and_configStr_from_config(M, N, K, bestConfig, None, None, None)
+        bestConfig_compact_str, _ = gen_kernel_and_configStr_from_config(M, N, K, bestConfig, None, None, None, bias_size)
         if not run_bench:
             print(f'best_config: {bestConfig_compact_str}', end=" ", flush=True)
 
