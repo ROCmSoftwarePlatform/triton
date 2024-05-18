@@ -173,8 +173,9 @@ def gen_kernel_and_configStr_from_config(M, N, K, config, dtype_a, dtype_b, dtyp
     configStr = f"M{M}_N{N}_K{K}_BM{block_m}_BN{block_n}_BK{block_k}_GM{group_m}_SK{split_k}_nW{num_warps}_nS{num_stages}_EU{waves_per_eu}_kP{kpack}_mfma{mfmaInstrSize}"
     if bias_size > 0:
         configStr += "_bias"
+    use_bias = bias_size > 0
     matmul_def_str = f"""
-def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn, warmup=False, use_bias=False):
+def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn, warmup=False):
     grid = triton.cdiv(M, {block_m}) * triton.cdiv(N, {block_n}), {split_k}
     #print(f'config: matmul_kernel_{configStr}', flush=True)
     if warmup:
@@ -194,7 +195,7 @@ def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn, wa
             kpack = {kpack},
             grid=(1,),
             EVEN_K={K % block_k == 0},
-            BIAS=use_bias,
+            BIAS={use_bias},
         )
         return None
     else:
@@ -213,13 +214,13 @@ def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn, wa
             matrix_instr_nonkdim = {mfmaInstrSize},
             kpack = {kpack},
             EVEN_K={K % block_k == 0},
-            BIAS=use_bias,
+            BIAS={use_bias},
         )
         return c
 
-def try_config_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn, use_bias):
+def try_config_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
     try:
-        matmul_{configStr}(None, None, None, None, M, N, K, am, ak, bk, bn, cm, cn, biasn, True, use_bias)
+        matmul_{configStr}(None, None, None, None, M, N, K, am, ak, bk, bn, cm, cn, biasn, True)
         return True
     except Exception as e:
         print(f'invalid config(compilation): {configStr}: ', e, flush=True)
@@ -287,12 +288,11 @@ from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
     c = tensors['output_c'][0]
     assert bias_size == M or bias_size == 0
 
-    use_bias = bias_size > 0
     stride_bias = tensors['bias'][0].stride(0) if bias_size > 0 else 0
     task_args = (M, N, K,
                  a.stride(0), a.stride(1),
                  b.stride(0), b.stride(1),
-                 c.stride(0), c.stride(1), stride_bias, use_bias)
+                 c.stride(0), c.stride(1), stride_bias)
 
     if num_threads > 1:
         results = []
@@ -333,7 +333,7 @@ from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
         f_kernel[fi].write(threadpool_str)
     # call all matmul_xxx functions
     idx = 0
-    runs = iters if run_bench else 1500
+    runs = iters if run_bench else 200
     for config in configs:
         configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None, bias_size)
         matmul_call_str = f"""
@@ -433,7 +433,7 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     df_prof = [pd.read_csv(f"results-{generated_kernel_name(M, N, K, i)}.csv") for i in range(jobs)]
     for config in configs:
         file_idx = idx % jobs
-        tasks += [thread_pool.apply_async(extract_kernel_time, args=(M, N, K, config, df_prof[file_idx]))]
+        tasks += [thread_pool.apply_async(extract_kernel_time, args=(M, N, K, config, df_prof[file_idx], bias_size))]
         idx += 1
     thread_pool.close()
     thread_pool.join()
