@@ -38,7 +38,7 @@ def matmul_kernel(
     b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
     if BIAS:
         bias_ptrs = bias_ptr + offs_bn * stride_bias
-        bias = tl.load(bias_ptrs, mask=offs_bn < N, other=0.0)
+        bias = tl.load(bias_ptrs, mask=offs_am < M, other=0.0)
     acc_dtype = tl.float32 if c_ptr.type.element_ty != tl.int8 else tl.int32
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=acc_dtype)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
@@ -53,7 +53,7 @@ def matmul_kernel(
         b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
     c = accumulator.to(c_ptr.type.element_ty)
     if BIAS:
-        c += bias
+        c += bias[:, None]
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
