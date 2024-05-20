@@ -577,16 +577,16 @@ def matmul(a, b, c, bias, block_m, block_n, block_k, group_m, split_k, num_warps
     return c
 
 
-def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, config, verbose):
+def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, config, bias_vector, verbose):
     bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
-    use_bias = bias is not None
+    use_bias = bias_vector
     torch.manual_seed(0)
     #a = torch.randn((M, K), device='cuda', dtype=datatype)
     #b = torch.randn((K, N), device='cuda', dtype=datatype)
     a, a_fp16 = gen_input(M, K, dtype_a, col_a, 1, init_type, device='cuda')
     b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, init_type, device='cuda')
     if use_bias:
-        bias, bias_fp16 = gen_input(1, N, dtype_b, col_b, 2, init_type, device='cuda')
+        bias, bias_fp16 = gen_input(M, 1, dtype_b, col_b, 2, init_type, device='cuda')
         bias = bias.squeeze()
         bias_fp16 = bias.squeeze()
     # Allocates output.
@@ -594,7 +594,7 @@ def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     triton_output = matmul(a, b, c, bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack, use_bias)
     torch_output = torch.matmul(a_fp16, b_fp16)
     if use_bias:
-        torch_output += bias_fp16[None, :]
+        torch_output += bias_fp16[:, None]
     # print(f"triton_output={triton_output}")
     # print(f"torch_output={torch_output}")
     rtol = 0 if torch.version.hip is None else 1e-2
@@ -654,6 +654,7 @@ def parse_args():
     parser.add_argument("--init_type", type=str, default='randn', help="Initialization type for input matrices (default uniform rand [0, 1.0)])")
     parser.add_argument("--rotating_tensor", type=int, default=256, help="total size of all tensors (default 256MB, need to be larger than the L1, L2, MALL size)")
     parser.add_argument("--bias_vector", action='store_true', default=False, help="apply bias vector")
+    parser.add_argument("--icache_flush", action='store_true', default=False, help="apply icache_flush in tuning performance")
     # parser.add_argument("--bias_size", type=int, default=0, help="default 0, indicating M is used as bias size")
     parser.add_argument("--no_warmup", action='store_true', default=False, help="Do not call the warmup kernel")
     args = parser.parse_args()
@@ -756,6 +757,7 @@ def main():
         sys.exit(1)
     rotating_buffer_size = args.rotating_tensor
     bias_vector = args.bias_vector
+    icache_flush = args.icache_flush
 
     mnks = []
     # TODO: make it more robust to get user input
@@ -777,7 +779,7 @@ def main():
     # Check correctness from given configs
     if args.compare_wo_tuning:
         for (M, N, K, col_a, col_b, myConfig) in mnks:
-            test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, myConfig, True)
+            test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, myConfig, bias_vector, True)
         return
 
     configs_full = get_full_tuning_space()
