@@ -21,8 +21,7 @@ def hip_check(call_result):
 
     return result
 
-
-def icache_flush():
+def gen_kernel():
     source = b"""\
         extern "C" __global__ void icache_flush_kernel() {
               asm __volatile__("s_icache_inv");
@@ -47,15 +46,9 @@ def icache_flush():
 
     # print(f"source = {source}")
     prog = hip_check(hiprtc.hiprtcCreateProgram(source, b"icache_flush_kernel", 0, [], []))
-
     progs = hip.hipDeviceProp_t()
     hip_check(hip.hipGetDeviceProperties(progs, 0))
     arch = progs.gcnArchName
-
-    cu_num = progs.multiProcessorCount
-    # print(f"Compiling kernel for {arch}")
-    # print(f"cu_num = {progs.multiProcessorCount}")
-
     cflags = [b"--offload-arch="+arch]
     err, = hiprtc.hiprtcCompileProgram(prog, len(cflags), cflags)
     if err != hiprtc.hiprtcResult.HIPRTC_SUCCESS:
@@ -71,6 +64,14 @@ def icache_flush():
     module = hip_check(hip.hipModuleLoadData(code))
     kernel = hip_check(hip.hipModuleGetFunction(module, b"icache_flush_kernel"))
 
+    return kernel
+
+kernel = gen_kernel()
+progs = hip.hipDeviceProp_t()
+hip_check(hip.hipGetDeviceProperties(progs, 0))
+cu_num = progs.multiProcessorCount
+
+def icache_flush():
     block = hip.dim3(x=64)
     grid = hip.dim3(cu_num * 60)
 

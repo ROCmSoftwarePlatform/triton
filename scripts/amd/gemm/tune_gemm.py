@@ -242,7 +242,7 @@ def generated_kernel_name(M, N, K, gpu_id):
 # 4. test_gemm to invoke
 # 4.1 run try_config in parallel
 # 4.2 matmul in a loop of 10 iterations
-def generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench, rotating_buffer_size, bias_size):
+def generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench, rotating_buffer_size, bias_size, icache_flush):
     filenames = []
     for i in range(jobs):
         filenames.append(generated_kernel_name(M, N, K, i))
@@ -255,7 +255,8 @@ import triton.language as tl
 import argparse
 import sys
 import multiprocessing
-from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
+from tune_gemm import gen_rotating_tensors
+from icache_flush import icache_flush
 """
     for fi in range(jobs):
         f_kernel[fi].write(import_str + "\n")
@@ -334,6 +335,7 @@ from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
     # call all matmul_xxx functions
     idx = 0
     runs = iters if run_bench else 200
+    call_icache_flush = 'icache_flush()' if icache_flush else ''
     for config in configs:
         configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None, bias_size)
         matmul_call_str = f"""
@@ -343,7 +345,11 @@ from tune_gemm import gen_input, gen_rotating_tensors, type_name_to_bytes
                 a = tensors['input_a'][i % rotating_num]
                 b = tensors['input_b'][i % rotating_num]
                 c = tensors['output_c'][i % rotating_num]
-                bias = tensors['bias'][i % rotating_num] if bias_size > 0 else None
+                bias = tensors['bias'][i % rotating_num] if bias_size > 0 else None"""
+        if icache_flush:
+            matmul_call_str += f"""
+                icache_flush()"""
+        matmul_call_str += f"""
                 d = matmul_{configStr}(a, b, c, bias, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), bias.stride(0))"""
         f_kernel[idx % jobs].write(matmul_call_str + "\n")
         idx += 1
@@ -394,9 +400,11 @@ def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose, rotating_buffer_s
         jobId += ngpus
 
 
-def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, run_bench, jobs, iters, skipWarmup, verbose=0, num_threads=16, gpus=[0], rotating_buffer_size=256, bias_size = 0):
+def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, 
+                     run_bench, jobs, iters, skipWarmup, verbose=0, num_threads=16, 
+                     gpus=[0], rotating_buffer_size=256, bias_size = 0, icache_flush = False):
     # Generate kernel out of all configs
-    generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench, rotating_buffer_size, bias_size)
+    generate_kernel(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs, jobs, iters, run_bench, rotating_buffer_size, bias_size, icache_flush)
 
     # remove any compiled kernel in the cache
     run_bash_command("rm -rf ~/.triton/cache")
@@ -818,7 +826,7 @@ def main():
                 M, N, K, col_a, col_b, dtype_a,
                 dtype_b, dtype_c, init_type, pruned_configs,
                 run_bench, jobs, iters, skipWarmup, num_threads=args.num_threads, gpus=gpus,
-                verbose=verbose_level, rotating_buffer_size=rotating_buffer_size, bias_size=bias_size)
+                verbose=verbose_level, rotating_buffer_size=rotating_buffer_size, bias_size=bias_size, icache_flush=icache_flush)
 
         # post processing the numbers
         perf_tflops = lambda us: 2 * M * N * K * 1e-12 / (us * 1e-6)
