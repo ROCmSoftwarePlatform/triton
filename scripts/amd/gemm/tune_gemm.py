@@ -521,8 +521,6 @@ def gen_rotating_tensors(M, N, K,
     block_count = rotating_buffer_size * 1024 * 1024 // total_size
     block_count = max(1, block_count)
 
-    print(f"block_count = {block_count}")
-
     # generate input and outputs
     a = []
     b = []
@@ -616,7 +614,7 @@ def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
 def get_default_tuning_result_filename():
     git_branch_name = run_bash_command("git rev-parse --abbrev-ref HEAD")
     git_branch_name = git_branch_name[0].decode()
-    # handle branch name of "xxx/xxx"
+    # handle branch name of "xxx/xxx" format
     git_branch_name = git_branch_name.replace('/', '_')
     git_commit_hash = run_bash_command("git rev-parse --short HEAD")
     git_commit_hash = git_commit_hash[0].decode()
