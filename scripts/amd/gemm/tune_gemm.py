@@ -143,7 +143,6 @@ def run_bash_command(commandstring, capture=True):
     return None
 
 def read_config(config):
-    # bias = config.get('bias')
     block_m = config.get('BLOCK_SIZE_M')
     block_n = config.get('BLOCK_SIZE_N')
     block_k = config.get('BLOCK_SIZE_K')
@@ -155,11 +154,9 @@ def read_config(config):
     mfma_instr_size = config.get('matrix_instr_nonkdim')
     kpack = config.get('kpack')
     return block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfma_instr_size, kpack
-    # return bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfma_instr_size, kpack
 
 
 def gen_kernel_and_configStr_from_config(M, N, K, config, dtype_a, dtype_b, dtype_c, bias_size):
-    # bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
     block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
     torch_dtype_a = 'fp16'
     torch_dtype_b = 'fp16'
@@ -584,7 +581,7 @@ def matmul(a, b, c, bias, block_m, block_n, block_k, group_m, split_k, num_warps
 
 
 def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, config, bias_vector, verbose):
-    bias, block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
+    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(config)
     use_bias = bias_vector
     torch.manual_seed(0)
     #a = torch.randn((M, K), device='cuda', dtype=datatype)
@@ -661,7 +658,6 @@ def parse_args():
     parser.add_argument("--rotating_tensor", type=int, default=256, help="total size of all tensors (default 256MB, need to be larger than the L1, L2, MALL size)")
     parser.add_argument("--bias_vector", action='store_true', default=False, help="apply bias vector")
     parser.add_argument("--icache_flush", action='store_true', default=False, help="apply icache_flush in tuning performance")
-    # parser.add_argument("--bias_size", type=int, default=0, help="default 0, indicating M is used as bias size")
     parser.add_argument("--no_warmup", action='store_true', default=False, help="Do not call the warmup kernel")
     args = parser.parse_args()
 
