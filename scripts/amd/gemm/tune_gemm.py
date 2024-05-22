@@ -258,7 +258,7 @@ from icache_flush import icache_flush
 
     # write definitions of matmul_kernel_xxx
     # and matmul_xxx and try_config
-    with open("matmul_kernel.py") as file:
+    with open(os.path.dirname(os.path.abspath(__file__))+"/matmul_kernel.py") as file:
         matmul_kernel_code = file.read()
     idx = 0
     for config in configs:

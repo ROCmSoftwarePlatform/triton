@@ -3,6 +3,9 @@ import array
 import random
 import math
 
+# the hip module can be installed as
+# `python3 -m pip install -i https://test.pypi.org/simple hip-python~=$rocm_version`
+# more information about hip-python is at: https://github.com/ROCm/hip-python
 from hip import hip, hiprtc
 
 def hip_check(call_result):
