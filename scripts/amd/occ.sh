@@ -64,6 +64,6 @@ perf=$(tail -n 2 output.mlir)
 echo "$perf"
 
 ## remove distracting info from the assembly
-sed -i '/\.loc/d' output.mlir
+sed -i '/local_/! {/\.loc/d}' output.mlir
 sed -i '/\.Ltmp.*:/d' output.mlir
 sed -i '/AMD clang version/d' output.mlir
