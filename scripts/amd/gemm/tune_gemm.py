@@ -376,7 +376,7 @@ def main():
 def extract_kernel_time(M, N, K, config, df, bias_size):
     configStr, _ = gen_kernel_and_configStr_from_config(M, N, K, config, None, None, None, bias_size)
     df = df[df['KernelName'].str.contains(configStr)]
-    meanTime = df['DurationNs'].tail(500).mean()
+    meanTime = df['DurationNs'].tail(100).mean()
     return config, meanTime
 
 
