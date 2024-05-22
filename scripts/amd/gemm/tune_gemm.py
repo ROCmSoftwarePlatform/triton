@@ -94,10 +94,10 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
         if SPLIT_K != 1 and not need_split_k(M, N, K):
             continue
         # skip split_k that leads to EVEN_K = false
-        # leap = SPLIT_K * BLOCK_SIZE_K
-        # modv = K % leap
-        # if modv != 0:
-        #     continue
+        leap = SPLIT_K * BLOCK_SIZE_K
+        modv = K % leap
+        if modv != 0:
+            continue
         # skip large GROUP_M
         if GROUP_M * BLOCK_SIZE_M > M and GROUP_M != 1:
             continue
@@ -194,7 +194,6 @@ def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn, wa
             matrix_instr_nonkdim = {mfmaInstrSize},
             kpack = {kpack},
             grid=(1,),
-            EVEN_K={K % block_k == 0},
             BIAS={use_bias},
         )
         return None
@@ -213,7 +212,6 @@ def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn, wa
             waves_per_eu = {waves_per_eu},
             matrix_instr_nonkdim = {mfmaInstrSize},
             kpack = {kpack},
-            EVEN_K={K % block_k == 0},
             BIAS={use_bias},
         )
         return c
