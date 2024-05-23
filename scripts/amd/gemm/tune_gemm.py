@@ -48,6 +48,10 @@ def get_full_tuning_space():
     return configs
 
 
+def get_default_config():
+    full_configs = get_full_tuning_space()
+    return full_configs[0]
+
 def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
     pruned_configs = []
 
@@ -556,13 +560,14 @@ def matmul(a, b, c, bias, block_m, block_n, block_k, group_m, split_k, num_warps
     # 1D launch kernel where each block gets its own program.
 
     grid = triton.cdiv(M, block_m) * triton.cdiv(N, block_n), split_k
-
+    stride_bias = bias.stride(0) if use_bias else 0
     matmul_kernel[grid](
         a, b, c, bias,
         M, N, K,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
+        stride_bias = stride_bias,
         BLOCK_SIZE_M=block_m,
         BLOCK_SIZE_N=block_n,
         BLOCK_SIZE_K=block_k,
@@ -586,6 +591,7 @@ def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     #b = torch.randn((K, N), device='cuda', dtype=datatype)
     a, a_fp16 = gen_input(M, K, dtype_a, col_a, 1, init_type, device='cuda')
     b, b_fp16 = gen_input(K, N, dtype_b, col_b, 2, init_type, device='cuda')
+    bias = None
     if use_bias:
         bias, bias_fp16 = gen_input(M, 1, dtype_b, col_b, 2, init_type, device='cuda')
         bias = bias.squeeze()
@@ -596,8 +602,6 @@ def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     torch_output = torch.matmul(a_fp16, b_fp16)
     if use_bias:
         torch_output += bias_fp16[:, None]
-    # print(f"triton_output={triton_output}")
-    # print(f"torch_output={torch_output}")
     rtol = 0 if torch.version.hip is None else 1e-2
     atol = 1e-3 if split_k == 1 else 4e-2
     row_a_str = 'N' if col_a else 'T'
@@ -608,6 +612,8 @@ def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     if torch.allclose(triton_output.to(torch.float16), torch_output, atol=atol, rtol=rtol):
         print(f'{size_str} Correct✅')
     else:
+        print(f"triton_output={triton_output}")
+        print(f"torch_output={torch_output}")
         print(f'{size_str} Incorrect❌')
 
 
@@ -779,6 +785,8 @@ def main():
     # Check correctness from given configs
     if args.compare_wo_tuning:
         for (M, N, K, col_a, col_b, myConfig) in mnks:
+            if myConfig is None:
+                myConfig = get_default_config()
             test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, myConfig, bias_vector, True)
         return
 
