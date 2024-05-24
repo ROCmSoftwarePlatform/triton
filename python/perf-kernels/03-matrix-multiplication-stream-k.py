@@ -39,15 +39,15 @@ print(f"total SMs: {total_sm}")
 def swizzle_tile(tile_id,
                  M, N, K,
                  BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-                 GROUP_M: tl.constexpr
+                 GROUP_SIZE_M: tl.constexpr
                  ):
     grid_m = tl.cdiv(M, BLOCK_M)
     grid_n = tl.cdiv(N, BLOCK_N)
     # re-order program ID for better L2 performance
-    width = GROUP_M * grid_n
+    width = GROUP_SIZE_M * grid_n
     group_id = tile_id // width
-    group_size = tl.minimum(grid_m - group_id * GROUP_M, GROUP_M)
-    pid_m = group_id * GROUP_M + (tile_id % group_size)
+    group_size = tl.minimum(grid_m - group_id * GROUP_SIZE_M, GROUP_SIZE_M)
+    pid_m = group_id * GROUP_SIZE_M + (tile_id % group_size)
     pid_n = (tile_id % width) // group_size
     return pid_m, pid_n
 
@@ -56,7 +56,7 @@ def swizzle_tile(tile_id,
 def linear_tile(tile_id,
                 M, N, K,
                 BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-                GROUP_M: tl.constexpr
+                GROUP_SIZE_M: tl.constexpr
                 ):
     pid_m = tile_id // tl.cdiv(N, BLOCK_N)
     pid_n = tile_id % tl.cdiv(N, BLOCK_N)
@@ -69,77 +69,46 @@ def streamk_gemm(
         stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
         total_full_tiles_streamk, total_partial_tiles_streamk, iters_per_tile,
         total_tiles_streamk, total_programs_streamk, ACC_TYPE: tl.constexpr,
-        GROUP_M: tl.constexpr,
+        GROUP_SIZE_M: tl.constexpr,
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
 ):
     pid = tl.program_id(0)
 
-    # Determine whether we are in the first wave or full_tiles phase based on pid
-    is_first_wave = pid < total_programs_streamk and total_programs_streamk > 0
-
-    # Calculate starting and ending iterations for first wave
-    if not is_first_wave:
-        tile_id = tl.program_id(0) + total_tiles_streamk - total_programs_streamk
-        if GROUP_M > 0:
-            pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
+    start_iter = pid * total_full_tiles_streamk + tl.minimum(pid, total_partial_tiles_streamk)
+    last_iter = (pid + 1) * total_full_tiles_streamk + tl.minimum(pid + 1, total_partial_tiles_streamk)
+    while start_iter < last_iter:
+        remainder = start_iter % iters_per_tile
+        end_iter = tl.minimum(start_iter + (iters_per_tile - remainder), last_iter)
+        # where are we in the grid
+        tile_id = start_iter // iters_per_tile
+        if GROUP_SIZE_M  == 1:
+            pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
         else:
-            pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
+            pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M)
 
-        # do matrix multiplication
         rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
         rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
         rk = tl.arange(0, BLOCK_K)
-        # pointers
-        A_BASE = A + rm[:, None] * stride_am + rk[None, :] * stride_ak
-        B_BASE = B + rk[:, None] * stride_bk + rn[None, :] * stride_bn
+        A_BASE = A + rm[:, None] * stride_am + rk[None, :] * stride_ak + BLOCK_K * stride_ak * remainder
+        B_BASE = B + rk[:, None] * stride_bk + rn[None, :] * stride_bn + BLOCK_K * stride_bk * remainder
         acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_TYPE)
-        for k in range(0, tl.cdiv(K, BLOCK_K)):
+        for current_iter in range(start_iter, end_iter):
             a = tl.load(A_BASE)
             b = tl.load(B_BASE)
             acc += tl.dot(a, b)
             A_BASE += BLOCK_K * stride_ak
             B_BASE += BLOCK_K * stride_bk
-     #   acc = acc.to(tl.float16)  # restore C.dtype.element_ty
-        # rematerialize rm and rn to save registers
- #       rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
- #       rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-        C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn
-        tl.store(C_, acc)
-    else:
-       # start_iter = pid * total_full_tiles_streamk + tl.minimum(pid, total_partial_tiles_streamk)
-        start_iter = pid * total_full_tiles_streamk + tl.minimum(pid, total_partial_tiles_streamk)
-        last_iter = (pid + 1) * total_full_tiles_streamk + tl.minimum(pid + 1, total_partial_tiles_streamk)
-        while start_iter < last_iter:
-            remainder = start_iter % iters_per_tile
-            end_iter = tl.minimum(start_iter + (iters_per_tile - remainder), last_iter)
-            # where are we in the grid
-            tile_id = start_iter // iters_per_tile
-            if GROUP_M  > 0:
-                pid_m, pid_n = swizzle_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
-            else:
-                pid_m, pid_n = linear_tile(tile_id, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M)
 
-            rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-            rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-            rk = tl.arange(0, BLOCK_K)
-            A_BASE = A + rm[:, None] * stride_am + rk[None, :] * stride_ak + BLOCK_K * stride_ak * remainder
-            B_BASE = B + rk[:, None] * stride_bk + rn[None, :] * stride_bn + BLOCK_K * stride_bk * remainder
-            acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_TYPE)
-            for current_iter in range(start_iter, end_iter):
-                a = tl.load(A_BASE)
-                b = tl.load(B_BASE)
-                acc += tl.dot(a, b)
-                A_BASE += BLOCK_K * stride_ak
-                B_BASE += BLOCK_K * stride_bk
+        if remainder ==0 and end_iter % iters_per_tile ==0:
+            C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
+            mask = (rm < M)[:, None] & (rn < N)[None, :]
+            tl.store(C_, acc, mask=mask)
+        else:
+            C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
+            mask = (rm < M)[:, None] & (rn < N)[None, :]
+            tl.atomic_add(C_, acc, mask=mask)
 
-            if remainder ==0 and end_iter % iters_per_tile ==0:
-                C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
-                tl.store(C_, acc)
-            else:
-                C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn  # compute inside the if/else to avoid spilling!
-                tl.atomic_add(C_, acc)
-
-            start_iter = end_iter
+        start_iter = end_iter
 # ---------------------------------------------------------------------------
 # Wrapper
 # ---------------------------------------------------------------------------
@@ -153,10 +122,10 @@ class matmul(torch.autograd.Function):
         matmul._debug = debug
 
     @staticmethod
-    def _call(a: torch.Tensor, b: torch.Tensor, total_programs_streamk: int, BLK_M: int, BLK_N: int, BLK_K: int, two_tiles: bool, num_stages: int, num_warps: int, waves_per_eu: int, mfmaInstrSize: int, kpack: int):
+    def _call(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, total_programs_streamk: int, BLK_M: int, BLK_N: int, BLK_K: int, gsize_m: int, two_tiles: bool, num_stages: int, num_warps: int, waves_per_eu: int,  mfmaInstrSize: int, kpack: int):
         device = a.device
 
-        assert a.is_contiguous() and b.is_contiguous(), "non-contiguous inputs are not supported"
+#        assert a.is_contiguous() and b.is_contiguous(), "non-contiguous inputs are not supported"
         # checks constraints
         assert a.shape[1] == b.shape[0], "incompatible dimensions"
         M, K = a.shape
@@ -167,29 +136,18 @@ class matmul(torch.autograd.Function):
         total_blocks_M = triton.cdiv(M, BLK_M)
         total_blocks_N = triton.cdiv(N, BLK_N)
         iters_per_tile = triton.cdiv(K, BLK_K)
-        GROUP_M = 4  # 0 to disable swizzling
+
         total_tiles = total_blocks_M * total_blocks_N
 
-        if total_programs_streamk > 0:  # Stream-K
-            # last wave may occupy less than total_programs_streamk SMs
-            total_tiles_streamk = total_tiles % total_programs_streamk
-            # for two-tile Stream-K + data-parallel from original paper
-            if two_tiles and total_tiles - total_tiles_streamk > total_programs_streamk:
-                total_tiles_streamk += total_programs_streamk
-            # remaining tiles are computed using classical blocking
-            total_blocking_tiles = total_tiles - total_tiles_streamk
-            total_iters_streamk = total_tiles_streamk * iters_per_tile
-            # iterations related to full waves
-            total_full_tiles_streamk = total_iters_streamk // total_programs_streamk
-            # iterations related to last (partial) wave
-            total_partial_tiles_streamk = total_iters_streamk % total_programs_streamk
+        total_tiles_streamk = total_tiles 
+        total_blocking_tiles = total_tiles - total_tiles_streamk
+        total_iters_streamk = total_tiles * iters_per_tile
+        # iterations related to full waves
+        total_full_tiles_streamk = total_iters_streamk // total_programs_streamk
+        # iterations related to last (partial) wave
+        total_partial_tiles_streamk = total_iters_streamk % total_programs_streamk
+        grids = total_programs_streamk
 
-        else:  # all tiles are computed using classical blocking
-            total_blocking_tiles = total_tiles
-            total_tiles_streamk = 0
-            total_full_tiles_streamk = 0
-            total_partial_tiles_streamk = 0
-            total_iters_streamk = 0
 
         if matmul._debug:
             print(f"M,N,K={M},{N},{K} ; BLK_M,N,K={BLK_M},{BLK_N},{BLK_K}")
@@ -202,10 +160,9 @@ class matmul(torch.autograd.Function):
             print(f"{iters_per_tile=}")
             print(f"{total_iters_streamk=}")
 
-        # allocates output
-        c = torch.zeros((M, N), device=device, dtype=a.dtype)
         # allocates locks to sync work accross SMs
-        grids = total_programs_streamk + total_blocking_tiles
+  #      grids = total_programs_streamk + total_blocking_tiles
+  #      print(f"{grids=}")
         kk = streamk_gemm[(grids,)](
             a,
             b,
@@ -225,7 +182,7 @@ class matmul(torch.autograd.Function):
             total_tiles_streamk=total_tiles_streamk,
             total_programs_streamk= total_programs_streamk,
             ACC_TYPE=ACC_TYPE,
-            GROUP_M=GROUP_M,
+            GROUP_SIZE_M=gsize_m,
             BLOCK_M=BLK_M,
             BLOCK_N=BLK_N,
             BLOCK_K=BLK_K,
@@ -240,11 +197,10 @@ class matmul(torch.autograd.Function):
        #     print(kk.asm['ttgir'])
        #     print(kk.asm['amdgcn'])
 
-        return c
-
     @staticmethod
-    def forward(ctx, a: torch.Tensor, b: torch.Tensor, grid: int, BLK_M=128, BLK_N=128, BLK_K=32, two_tiles=True, num_stages=3, num_warps=4,  waves_per_eu = 2, mfmaInstrSize = 16, kpack = 1):
-        return matmul._call(a=a, b=b, total_programs_streamk=grid, BLK_M=BLK_M, BLK_N=BLK_N, BLK_K=BLK_K, two_tiles=two_tiles, num_warps=num_warps, num_stages=num_stages,  waves_per_eu = waves_per_eu, mfmaInstrSize = mfmaInstrSize, kpack = kpack)
+    def forward(ctx, a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, grid: int, BLK_M = 128, BLK_N = 128, BLK_K = 32, gsize_m = 1, two_tiles = True, num_stages = 3, num_warps = 4,  waves_per_eu = 2, mfmaInstrSize = 16, kpack = 1):
+        matmul._call(a = a, b = b, c = c, total_programs_streamk = grid, BLK_M = BLK_M, BLK_N = BLK_N, BLK_K = BLK_K, gsize_m = gsize_m, two_tiles = two_tiles, num_warps = num_warps, num_stages = num_stages,  waves_per_eu = waves_per_eu, mfmaInstrSize = mfmaInstrSize, kpack = kpack)
+        return c
 
 # ---------------------------------------------------------------------------
 # Example and Benchmark
@@ -252,15 +208,18 @@ class matmul(torch.autograd.Function):
 
 perf = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
 
-#m, n, k = 4864, 4096, 8256  # some problem size to test
+m, n, k = 4864, 4096, 8256  # some problem size to test
 #m, n, k = 4096, 4096, 8192  # some problem size to test
 #m, n, k = 8192, 8192, 8192  # some problem size to test
-m, n, k = 6912, 768, 256  # some problem size to test
+#m, n, k = 6912, 768, 256  # some problem size to test
 A = torch.randn(m, k, device="cuda", dtype=torch.float16)
-B = torch.randn(k, n, device="cuda", dtype=torch.float16)
-BLK_M = 64
-BLK_N = 64
+B = torch.randn(n, k, device="cuda", dtype=torch.float16).T
+# allocates output
+C = torch.zeros((m, n), device="cuda", dtype=A.dtype)
+BLK_M = 128
+BLK_N = 256
 BLK_K = 64
+gsize_m = 4
 two_tiles = 'True'
 num_stages = 0
 num_warps = 4
@@ -269,28 +228,21 @@ mfmaInstrSize = 16
 kpack = 2
 
 matmul.set_debug(True)
-C = matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack)
-#exit(0)
+C = matmul.apply(A, B, C, total_sm, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack)
 matmul.set_debug(False)
 expected = A @ B
 
-#assert torch.allclose(C, expected, atol=1), f"max: {(C - expected).abs().max().item()}\n{C}\n{expected}"
+assert torch.allclose(C, expected, atol=1), f"max: {(C - expected).abs().max().item()}\n{C}\n{expected}"
 print("pass validation test")
-
-# for debugging, uncomment the following line
-# exit(0)
 
 triton_ms = triton.testing.do_bench(lambda: torch.matmul(A, B))
 print(f"PyTorch: {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, C, total_sm, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack))
 print(f"hybrid stream-k (grid={total_sm}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, total_sm * 2, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
+triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, C, total_sm * 2, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack))
 print(f"hybrid stream-k (grid={total_sm * 2}): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
-
-triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, 0, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu, mfmaInstrSize, kpack))
-print(f"tile matmul (grid=0): {triton_ms:.3f} ms  {perf(triton_ms):.3f} tflops")
 
 exit(0)
 # ---------------------------------------------------------------------------
@@ -313,8 +265,8 @@ for idx, (m, n, k) in enumerate(shapes):
         print(f"{idx}/{num_samples} - average speedup: {sum(speedups) / len(speedups):.3f}")
 
     A = torch.randn(m, k, device="cuda", dtype=torch.float16)
-    B = torch.randn(k, n, device="cuda", dtype=torch.float16)
-    output: Optional[torch.Tensor] = None
+    B = torch.randn(n, k, device="cuda", dtype=torch.float16).T
+    output: Optional[torch.Tensor] = torch.zeros((m, n), device="cuda", dtype=A.dtype)
 
 
     def wrapper_matmul(*args, **kwargs):
@@ -333,8 +285,10 @@ for idx, (m, n, k) in enumerate(shapes):
             nb_sm.append(total_tile)
         nb_sm += random.sample(range(2, total_sm * 2, 2), 10)
         for sm in nb_sm:
-            triton_ms = triton.testing.do_bench(lambda: wrapper_matmul(A, B, sm, BLK_M, BLK_N, BLK_K, two_tiles, num_stages, num_warps, waves_per_eu))
-            max_disc = (output - expected).abs().max().item()
+            triton_ms = triton.testing.do_bench(lambda: matmul.apply(A, B, output, sm, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack))
+            C = torch.zeros((m, n), device="cuda", dtype=A.dtype)
+            C = matmul.apply(A, B, C, total_sm, BLK_M, BLK_N, BLK_K, gsize_m, two_tiles, num_stages, num_warps, waves_per_eu,  mfmaInstrSize, kpack)
+            max_disc = (C - expected).abs().max().item()
             # large tolerance to accomodate for large K (rounding due to half precision), we just want to catch bugs.
             assert max_disc <= 5., f"pb size: {m}x{n}x{k} - max discrepancy: {max_disc} - sm: {sm}, 2 tiles: {two_tiles}\n{output}\n{expected}"
             info = {
@@ -351,7 +305,8 @@ for idx, (m, n, k) in enumerate(shapes):
         "k": k,
         "triton": measures,
         "pytorch_ms": pytorch_ms,
-        "speedup": pytorch_ms / best_triton_ms,
+      #  "speedup": pytorch_ms / best_triton_ms,
+        "speedup": best_triton_ms / pytorch_ms,
     }
     results.append(d)
     measures = list()
