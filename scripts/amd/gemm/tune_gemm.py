@@ -637,7 +637,7 @@ def format_output(unformatted):
 def main():
     args = parse_args()
     matrix_size_file = args.gemm_size_file
-    tuning_output_file = args.o
+    output_file = args.o
     keepTmp = args.keep
     run_bench = args.benchmark
     jobs = args.jobs
@@ -697,12 +697,14 @@ def main():
     configs_full = get_full_tuning_space()
 
     start_time = datetime.now()
+    # Append to the output file so that we can save all results into one file
+    f_results = open(output_file, 'a')
     if run_bench:
         print(f"Benchmarking gemm with {dtype_a} inputs")
         print("trans     M      N      K    TFLOPS   us")
+        f_results.write("trans     M      N      K    TFLOPS   us\n")
     else:
         print(f"Tuning {len(mnks)} gemm sizes starts at: {start_time}", flush=True)
-        f_results = open(tuning_output_file, 'w')
 
     for (M, N, K, col_a, col_b, myConfig) in mnks:
         start_local_time = datetime.now()
@@ -717,6 +719,7 @@ def main():
             print(f"{size_str} nConfigs: {len(pruned_configs)}", end=" ", flush=True)
         else:
             print(f"{row_a_str}{row_b_str}    {M:5d}  {N:5d}  {K:5d}    ", end="")
+            f_results.write(f"{row_a_str}{row_b_str}    {M:5d}  {N:5d}  {K:5d}    ")
 
         # The main tuning funtion for one gemm size
         verbose_level = 0
@@ -745,6 +748,7 @@ def main():
         # write best config to tuning_results.yaml
         if run_bench:
             print(f"{formatted_tflops}     {minTime}")
+            f_results.write(f"{formatted_tflops}     {minTime}\n")
 
         sizeDict = {'M': M, 'N': N, 'K': K, 'rowMajorA': row_a_str, 'rowMajorB': row_b_str}
         sizeDict.update(bestConfig)
