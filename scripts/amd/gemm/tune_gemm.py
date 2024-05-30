@@ -560,7 +560,7 @@ def parse_args():
     parser.add_argument("--ngpus", type=int, default=0, help='number of GPUs used in the profiling step')
     parser.add_argument("--gpu_ids", type=lambda s: [int(id) for id in s.split(',')], default=[], help='list of gpu ids to use for tuning')
     parser.add_argument("--gemm_size_file", type=str, default="", help='yaml file to indicate matrix size')
-    parser.add_argument("--o", type=str, default=get_default_tuning_result_filename(), help='yaml file to store tuning results')
+    parser.add_argument("--o", type=str, default='', help='yaml file to store tuning results')
     parser.add_argument("--keep", action='store_true', default=False, help='keep generated files')
     parser.add_argument("--compare", action='store_true', default=False, help="Whether check result correctness")
     parser.add_argument("--compare_wo_tuning", action='store_true', default=False, help="Whether check result correctness")
@@ -573,6 +573,11 @@ def parse_args():
     parser.add_argument("--init_type", type=str, default='randn', help="Initialization type for input matrices (default uniform rand [0, 1.0)])")
     parser.add_argument("--no_warmup", action='store_true', default=False, help="Do not call the warmup kernel")
     args = parser.parse_args()
+    if not args.o:
+        if args.benchmark:
+            args.o = "benchmarking_results.csv"
+        else:
+            args.o = get_default_tuning_result_filename()
 
     return args
 
@@ -702,7 +707,7 @@ def main():
     if run_bench:
         print(f"Benchmarking gemm with {dtype_a} inputs")
         print("trans     M      N      K    TFLOPS   us")
-        f_results.write("trans     M      N      K    TFLOPS   us\n")
+        f_results.write("trans,M,N,K,TFLOPS,us\n")
     else:
         print(f"Tuning {len(mnks)} gemm sizes starts at: {start_time}", flush=True)
 
@@ -719,7 +724,7 @@ def main():
             print(f"{size_str} nConfigs: {len(pruned_configs)}", end=" ", flush=True)
         else:
             print(f"{row_a_str}{row_b_str}    {M:5d}  {N:5d}  {K:5d}    ", end="")
-            f_results.write(f"{row_a_str}{row_b_str}    {M:5d}  {N:5d}  {K:5d}    ")
+            f_results.write(f"{row_a_str}{row_b_str},{M},{N},{K},")
 
         # The main tuning funtion for one gemm size
         verbose_level = 0
@@ -748,7 +753,7 @@ def main():
         # write best config to tuning_results.yaml
         if run_bench:
             print(f"{formatted_tflops}     {minTime}")
-            f_results.write(f"{formatted_tflops}     {minTime}\n")
+            f_results.write(f"{formatted_tflops},{minTime}\n")
 
         sizeDict = {'M': M, 'N': N, 'K': K, 'rowMajorA': row_a_str, 'rowMajorB': row_b_str}
         sizeDict.update(bestConfig)
@@ -777,8 +782,7 @@ def main():
         if not run_bench:
             print(f">>> Elapsed time: {end_local_time - start_local_time} = {compile_time} (compile) + {profile_time} (profile) + {post_time} (post processing)", flush=True)
 
-    if not run_bench:
-        f_results.close()
+    f_results.close()
 
     end_time = datetime.now()
     tuning_time = end_time - start_time
