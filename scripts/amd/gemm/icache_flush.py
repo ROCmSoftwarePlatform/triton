@@ -24,6 +24,10 @@ def hip_check(call_result):
 
     return result
 
+# S_ICACHE_INV Invalidate entire first level instruction cache.
+# There must be 16 separate S_NOP instructions or a jump/branch instruction
+# after this instruction to ensure the internal instruction buffers are also
+# invalidated.
 def gen_kernel():
     source = b"""\
         extern "C" __global__ void icache_flush_kernel() {
