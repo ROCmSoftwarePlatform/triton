@@ -15,6 +15,15 @@ from matmul_kernel import matmul_kernel
 from datetime import datetime
 import multiprocessing
 import pandas as pd
+import importlib.util
+
+def is_hip_available():
+    try:
+        __import__("hip")
+    except ImportError:
+        return False
+    else:
+        return True
 
 
 def get_full_tuning_space():
@@ -255,6 +264,9 @@ import argparse
 import sys
 import multiprocessing
 from tune_gemm import gen_rotating_tensors
+"""
+    if icache_flush:
+        import_str += """
 from icache_flush import icache_flush
 """
     for fi in range(jobs):
@@ -659,9 +671,9 @@ def parse_args():
     parser.add_argument("--jobs", type=int, default=1, help="number of generated files")
     parser.add_argument("--iters", type=int, default=1000, help="number of generated files")
     parser.add_argument("--init_type", type=str, default='randn', help="Initialization type for input matrices (default uniform rand [0, 1.0)])")
-    parser.add_argument("--rotating_tensor", type=int, default=256, help="total size of all tensors (default 256MB, need to be larger than the L1, L2, MALL size)")
+    parser.add_argument("--rotating_tensor", type=int, default=0, help="total size of all tensors (default 0MB (no rotating tensor), need to be larger than the L1, L2, MALL size)")
     parser.add_argument("--bias_vector", action='store_true', default=False, help="apply bias vector")
-    parser.add_argument("--icache_flush", action='store_true', default=False, help="apply icache_flush in tuning performance")
+    parser.add_argument("--icache-flush", action='store_true', default=False, help="apply icache flush in tuning performance")
     parser.add_argument("--no_warmup", action='store_true', default=False, help="Do not call the warmup kernel")
     args = parser.parse_args()
     if not args.o:
@@ -769,6 +781,15 @@ def main():
     rotating_buffer_size = args.rotating_tensor
     bias_vector = args.bias_vector
     icache_flush = args.icache_flush
+    if icache_flush:
+        if not is_hip_available():
+            print("************************************************************************************************")
+            print("  `icache-flush` is disabled for this run.")
+            print("  `icache-flush` needs python-hip module, which is unavailable.")
+            print("  python-hip module can be installed as:")
+            print("      `python3 -m pip install -i https://test.pypi.org/simple hip-python~=$rocm_version`")
+            print("************************************************************************************************")
+            icache_flush = False
 
     mnks = []
     # TODO: make it more robust to get user input
