@@ -38,7 +38,7 @@ def matmul_kernel(
     if BIAS:
         bias_ptrs = bias_ptr + offs_am * stride_bias
         bias = tl.load(bias_ptrs, mask=offs_am < M, other=0.0)
-    acc_dtype = tl.float32 if c_ptr.type.element_ty != tl.int8 else tl.int32
+    acc_dtype = tl.float32 if a_ptr.type.element_ty != tl.int8 else tl.int32
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=acc_dtype)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
         a = tl.load(a_ptrs)
