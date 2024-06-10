@@ -148,3 +148,13 @@ This is how configs are printed by `tune_gemm.py` script
 python one_config.py --config_str M16_N8_K128_BM64_BN64_BK64_GM1_SK2_nW2_nS0_EU0
 ```
 
+# GEMM Tuning Script v3.2
+
+### API changes
+
+- Added `--rotating_tensor <value>` to use rotating memory blocks in each iteration, size in MB. Default is 0MB.  
+- Added `--icache_flush` to flush icache in each iteration. 
+Note, icache flush needs the module `python-hip`, which can be installed as:
+`python3 -m pip install -i https://test.pypi.org/simple hip-python~=$rocm_version`
+
+Both features are to make perf numbers are closer to that in real applications.
