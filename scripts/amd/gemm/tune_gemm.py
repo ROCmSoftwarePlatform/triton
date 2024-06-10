@@ -747,7 +747,9 @@ def format_output(unformatted):
 def get_rocm_version():
     torch_hip_version = torch.version.hip
     vers = torch_hip_version.split('.')
-    ret_ver = vers[0] + '.' + vers[1]
+    ret_ver = '$rocm_version'
+    if len(vers) >= 2:
+        ret_ver = vers[0] + '.' + vers[1]
     return ret_ver
 
 
