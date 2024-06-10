@@ -721,6 +721,7 @@ def process_item(item):
     del item['rowMajorB']
     return M, N, K, col_a, col_b, item
 
+
 def type_name_to_bytes(ty_name):
     if '32' in ty_name:
         return 4
@@ -732,6 +733,7 @@ def type_name_to_bytes(ty_name):
         print(f"Unrecognized input type name {ty_name}")
         sys.exit(1)
 
+
 def format_output(unformatted):
     if unformatted < 0.0001:
         formatted = "{:.3e}".format(unformatted)
@@ -740,6 +742,14 @@ def format_output(unformatted):
     else:
         formatted = "{:.2f}".format(unformatted)
     return formatted
+
+
+def get_rocm_version():
+    torch_hip_version = torch.version.hip
+    vers = torch_hip_version.split('.')
+    ret_ver = vers[0] + '.' + vers[1]
+    return ret_ver
+
 
 def main():
     args = parse_args()
@@ -785,7 +795,7 @@ def main():
             print("  `icache-flush` is disabled for this run.")
             print("  `icache-flush` needs python-hip module, which is unavailable.")
             print("  python-hip module can be installed as:")
-            print("      `python3 -m pip install -i https://test.pypi.org/simple hip-python~=$rocm_version`")
+            print(f"      `python3 -m pip install -i https://test.pypi.org/simple hip-python~={get_rocm_version()}`")
             print("************************************************************************************************")
             icache_flush = False
 
