@@ -369,13 +369,13 @@ from icache_flush import icache_flush
         f_kernel[fi].write("        return d\n")
 
     # def main and call test_gemm
-    def_main_str = """
+    def_main_str = f"""
 def main():
     parser = argparse.ArgumentParser(
         prog="tune a specific gemm size",
         allow_abbrev=False,)
     parser.add_argument("-n", type=int, default=1, help='number of threads')
-    parser.add_argument("-rotating_tensor", type=int, default=256, help='size of rotating buffer (MB), default: 256')
+    parser.add_argument("-rotating_tensor", type=int, default={rotating_buffer_size}, help='size of rotating buffer (MB), default: 256')
     args = parser.parse_args()
     numThreads = args.n
     rotating_buffer_size = args.rotating_tensor
@@ -396,7 +396,7 @@ def extract_kernel_time(M, N, K, config, df, bias_size):
     return config, meanTime
 
 
-def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose, rotating_buffer_size):
+def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose):
     ngpus = len(gpus)
     gpuIdx = gpus.index(gpuid)
     if gpuIdx + 1 > jobs:
@@ -406,8 +406,8 @@ def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose, rotating_buffer_s
     while jobId < jobs:
         kernel_name = generated_kernel_name(M, N, K, jobId)
         if verbose:
-            print(f"profiling {generated_kernel_name(M, N, K, jobId)} on GPU {gpuid}")
-        run_bash_command_wrapper(f"rocprof --stats -o results-{kernel_name}.csv python {kernel_name} -rotating_tensor {rotating_buffer_size}", capture=(verbose < 2))
+            print(f"profiling {kernel_name} on GPU {gpuid}")
+        run_bash_command_wrapper(f"rocprof --stats -o results-{jobId}.csv python {kernel_name}", capture=(verbose < 2))
         jobId += ngpus
 
 
@@ -425,14 +425,14 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     if not skipWarmup:
         for i in range(jobs):
             kernel_name = generated_kernel_name(M, N, K, i)
-            run_bash_command(f"python {kernel_name} -n {num_threads} -rotating_tensor {rotating_buffer_size}", capture=(verbose < 2))
+            run_bash_command(f"python {kernel_name} -n {num_threads}", capture=(verbose < 2))
     compile_end = datetime.now()
     compile_time = compile_end - start_time
     if verbose:
         print(f"compile time: {compile_time}", flush=True)
 
     # profile generated kernels
-    running = [multiprocessing.Process(target=profile_batch_kernels, args=(M, N, K, gpu_id, gpus, jobs, verbose, rotating_buffer_size)) for gpu_id in gpus]
+    running = [multiprocessing.Process(target=profile_batch_kernels, args=(M, N, K, gpu_id, gpus, jobs, verbose)) for gpu_id in gpus]
     for p in running:
         p.start()
     for p in running:
@@ -579,7 +579,7 @@ def matmul(a, b, c, bias, block_m, block_n, block_k, group_m, split_k, num_warps
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
-        stride_bias = stride_bias,
+        stride_bias=stride_bias,
         BLOCK_SIZE_M=block_m,
         BLOCK_SIZE_N=block_n,
         BLOCK_SIZE_K=block_k,
@@ -661,7 +661,6 @@ def parse_args():
     parser.add_argument("--gemm_size_file", type=str, default="", help='yaml file to indicate matrix size')
     parser.add_argument("--o", type=str, default='', help='yaml file to store tuning results')
     parser.add_argument("--keep", action='store_true', default=False, help='keep generated files')
-    parser.add_argument("--keep-prof", action='store_true', default=False, help='keep rocprof profiling csv files')
     parser.add_argument("--compare", action='store_true', default=False, help="Whether check result correctness")
     parser.add_argument("--compare_wo_tuning", action='store_true', default=False, help="Whether check result correctness")
     parser.add_argument("--benchmark", action='store_true', default=False, help="Benchmark the given config")
@@ -747,7 +746,6 @@ def main():
     matrix_size_file = args.gemm_size_file
     output_file = args.o
     keepTmp = args.keep
-    keepRocprof = args.keep_prof
     run_bench = args.benchmark
     jobs = args.jobs
     iters = args.iters
@@ -812,7 +810,7 @@ def main():
     if args.compare_wo_tuning:
         for (M, N, K, col_a, col_b, myConfig) in mnks:
             if myConfig is None:
-                myConfig = get_default_config()
+                raise Exception("kernel config is None, need to provide a tuning config")
             test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, myConfig, bias_vector, True)
         return
 
@@ -887,9 +885,8 @@ def main():
                 os.remove(generated_script)
                 if not skipWarmup:
                     os.remove(generated_script + ".failed_configs")
-                for f in glob.glob(f"results-{generated_script}.*"):
-                    if not f.endswith(".csv") and keepRocprof:
-                        os.remove(f)
+                for f in glob.glob(f"results-{i}.*"):
+                    os.remove(f)
 
         # Check correctness if asked to
         if args.compare:
