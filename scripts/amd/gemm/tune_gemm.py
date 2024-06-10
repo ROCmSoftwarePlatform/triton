@@ -449,7 +449,7 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     thread_pool = multiprocessing.Pool(processes=num_threads)
     tasks = []
     idx = 0
-    df_prof = [pd.read_csv(f"results-{generated_kernel_name(M, N, K, i)}.csv") for i in range(jobs)]
+    df_prof = [pd.read_csv(f"results-{i}.csv") for i in range(jobs)]
     for config in configs:
         file_idx = idx % jobs
         tasks += [thread_pool.apply_async(extract_kernel_time, args=(M, N, K, config, df_prof[file_idx], bias_size))]
