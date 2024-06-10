@@ -156,5 +156,6 @@ python one_config.py --config_str M16_N8_K128_BM64_BN64_BK64_GM1_SK2_nW2_nS0_EU0
 - Added `--icache_flush` to flush icache in each iteration. 
 Note, icache flush needs the module `python-hip`, which can be installed as:
 `python3 -m pip install -i https://test.pypi.org/simple hip-python~=$rocm_version`
-
-Both features are to make perf numbers are closer to that in real applications.
+Rotating tensor and icache flush are to make perf numbers are closer to that in real applications.
+- Added `--bias_vector` to support kernel execution with bias (bias vector is of the size of the number of rows, so 
+each element of the bias vector is added to all elements of the corresponding row in the output matrix.)
