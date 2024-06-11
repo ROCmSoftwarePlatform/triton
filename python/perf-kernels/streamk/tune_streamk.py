@@ -77,6 +77,8 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
         GROUP_M = config.get("GROUP_SIZE_M")
         if BLOCK_SIZE_M < matrix_instr_nonkdim or BLOCK_SIZE_N < matrix_instr_nonkdim:
             continue
+        if BLOCK_SIZE_K == 16 and matrix_instr_nonkdim == 16 and kpack == 2:
+            continue
         if M <= matrix_instr_nonkdim and BLOCK_SIZE_M != matrix_instr_nonkdim:
             continue
         if N <= matrix_instr_nonkdim and BLOCK_SIZE_N != matrix_instr_nonkdim:
@@ -471,7 +473,7 @@ def matmul(a, b, c, num_sms, block_m, block_n, block_k, group_m, num_warps, num_
 
     streamk_gemm[grid,](
         a, b, c,
-        M, N, K,
+        M, N, K, num_sms,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
