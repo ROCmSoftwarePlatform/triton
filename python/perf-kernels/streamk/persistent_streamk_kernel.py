@@ -77,6 +77,7 @@ def persistent_streamk_gemm(
         mask = (rm < M)[:, None] & (rn < N)[None, :]
         tl.store(C_, acc, mask=mask)
 
+    acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=acc_dtype)
     start_iter = total_full_tiles * iters_per_tile + pid * streamk_iters_pcu + tl.minimum(pid, streamk_remainder_iters)
     last_iter = total_full_tiles * iters_per_tile + (pid + 1) * streamk_iters_pcu + tl.minimum(pid + 1, streamk_remainder_iters)
     while start_iter < last_iter:
