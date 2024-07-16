@@ -63,9 +63,11 @@ public:
 struct ConvertTritonAMDGPUToLLVM
     : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
           ConvertTritonAMDGPUToLLVM> {
-  explicit ConvertTritonAMDGPUToLLVM(StringRef targetArch, bool ftz) {
+  explicit ConvertTritonAMDGPUToLLVM(StringRef targetArch, bool ftz,
+                                     StringRef schedMode) {
     this->arch = targetArch.str();
     this->ftz = ftz;
+    this->sched = schedMode.str();
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -174,7 +176,7 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::triton::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, commonBenefit);
     AMD::populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                     axisInfoAnalysis, AMDBenefit);
+                                     axisInfoAnalysis, AMDBenefit, sched);
     AMD::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ftz,
                                              axisInfoAnalysis, allocation,
                                              targetInfo, AMDBenefit);
@@ -246,8 +248,10 @@ namespace mlir {
 namespace triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz) {
-  return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch, ftz);
+createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz,
+                                    std::string schedMode) {
+  return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch, ftz,
+                                                     schedMode);
 }
 
 } // namespace triton

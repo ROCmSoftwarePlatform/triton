@@ -166,8 +166,16 @@ class HIPBackend(BaseBackend):
         ##    depends on the value of kernel arg `allow_flush_denorm`.
         ## 3. __HIP_FTZ is default to 1 and not exposed as a kernel argument.
         ##    For now it is used as a controller for developers only.
+        sched_mode = ""
+        if "AMD_OPS_SCHED_MODE" in os.environ.keys():
+            sched_mode = os.environ['AMD_OPS_SCHED_MODE']
+            allowed = ["iglp-opt-0", "iglp-opt-1", "sched-barriers", ""]
+            if not sched_mode in allowed:
+                raise RuntimeError(
+                    f'unknown mode for `AMD_OPS_SCHED_MODE`. Given `{sched_mode}`. Allowed: {", ".join(allowed)}')
+
         __HIP_FTZ = True
-        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ)
+        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ, sched_mode)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
 

@@ -38,20 +38,41 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 
 using ValueTable = std::map<std::array<int, 3>, Value>;
 
+enum class SchedulingOptionsEnum : int64_t {
+  IGLP_OPT_0 = 0,
+  IGLP_OPT_1 = 1,
+  SCHED_BARRIERS,
+  NONE_SCHED
+};
+enum class InstructionMaskEnum : int64_t {
+  VALU = 0x00000002,
+  SALU = 0x00000004,
+  MFMA = 0x00000008,
+  ALL_VMEM = 0x00000010,
+  VMEM_READ = 0x00000020,
+  VMEM_WRITE = 0x00000040,
+  ALL_DS = 0x00000080,
+  DS_READ = 0x00000100,
+  DS_WRITE = 0x00000200
+};
+
 struct DotOpMFMAConversionHelper {
   AMDMfmaEncodingAttr mfmaLayout;
 
   ConversionPatternRewriter &rewriter;
   const LLVMTypeConverter *typeConverter;
+  SchedulingOptionsEnum schedMode;
   Location loc;
   MLIRContext *ctx{};
 
   explicit DotOpMFMAConversionHelper(AMDMfmaEncodingAttr mfmaLayout,
                                      ConversionPatternRewriter &rewriter,
                                      const LLVMTypeConverter *typeConverter,
+                                     SchedulingOptionsEnum schedMode,
                                      Location loc)
       : mfmaLayout(mfmaLayout), rewriter(rewriter),
-        typeConverter(typeConverter), loc(loc), ctx(mfmaLayout.getContext()) {}
+        typeConverter(typeConverter), schedMode(schedMode), loc(loc),
+        ctx(mfmaLayout.getContext()) {}
 
   Value getThreadId() const {
     auto llvmIndexTy = typeConverter->getIndexType();
@@ -68,6 +89,45 @@ struct DotOpMFMAConversionHelper {
     loweredOp.addTypes(resType);
     loweredOp.addOperands({valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
     return rewriter.create(loweredOp)->getResult(0);
+  }
+
+  void generatedIglpIntrinsic() const {
+    if (!((schedMode == SchedulingOptionsEnum::IGLP_OPT_0) ||
+          (schedMode == SchedulingOptionsEnum::IGLP_OPT_1))) {
+      return;
+    }
+    auto intrinsicName = StringAttr::get(ctx, "llvm.amdgcn.iglp.opt");
+    LLVM::FastmathFlagsAttr defaultFlags{};
+    Type i32 = rewriter.getI32Type();
+
+    auto option = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getIntegerAttr(i32, static_cast<int>(schedMode)));
+    rewriter.create<LLVM::CallIntrinsicOp>(loc, TypeRange{}, intrinsicName,
+                                           ValueRange{option}, defaultFlags);
+  }
+
+  void buildSchedGroupBarrier(InstructionMaskEnum maskValue, int sizeValue,
+                              int groupIdValue) const {
+    auto intrinsicName =
+        StringAttr::get(ctx, "llvm.amdgcn.sched.group.barrier");
+    LLVM::FastmathFlagsAttr defaultFlags{};
+    Type i32 = rewriter.getI32Type();
+    auto mask = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getIntegerAttr(i32, static_cast<int64_t>(maskValue)));
+    auto size = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getIntegerAttr(i32, sizeValue));
+    auto groupId = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getIntegerAttr(i32, groupIdValue));
+
+    rewriter.create<LLVM::CallIntrinsicOp>(loc, TypeRange{}, intrinsicName,
+                                           ValueRange{mask, size, groupId},
+                                           defaultFlags);
+  }
+
+  void insertSchedBarriers() const {
+    if (!(schedMode == SchedulingOptionsEnum::SCHED_BARRIERS))
+      return;
+    // TODO(ravil)
   }
 
   int getNumSubmatrices(Type elementType, int mDim, int nDim) const {
@@ -171,6 +231,8 @@ struct DotOpMFMAConversionHelper {
     assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
            (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
+    generatedIglpIntrinsic();
+
     Value a = op.getA();
     Value b = op.getB();
     Value d = op.getD();
@@ -263,6 +325,9 @@ struct DotOpMFMAConversionHelper {
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(fc.size(), dstElemTy));
     Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
+
+    insertSchedBarriers();
+
     rewriter.replaceOp(op, res);
 
     return success();
@@ -351,13 +416,13 @@ struct DotOpMFMAConversionHelper {
     return dotOpVals;
   }
 };
-
 } // namespace
 
 namespace mlir::triton::AMD {
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
-                          ConversionPatternRewriter &rewriter) {
+                          ConversionPatternRewriter &rewriter,
+                          StringRef schedMode) {
   auto rankedTType = [](Value tensor) {
     return cast<RankedTensorType>(tensor.getType());
   };
@@ -375,11 +440,20 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
          "DotOp's $c operand should pass the same number of values as $d");
 
+  static const DenseMap<StringRef, SchedulingOptionsEnum> schedModesToEnum = {
+      {"iglp-opt-0", SchedulingOptionsEnum::IGLP_OPT_0},
+      {"iglp-opt-1", SchedulingOptionsEnum::IGLP_OPT_1},
+      {"sched-barriers", SchedulingOptionsEnum::SCHED_BARRIERS},
+      {"", SchedulingOptionsEnum::NONE_SCHED}};
+  assert(schedModesToEnum.contains(schedMode) &&
+         "sched mode must be in the allowed set");
+
   auto loc = op.getLoc();
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
 
-  DotOpMFMAConversionHelper helper(mfmaLayout, rewriter, typeConverter, loc);
+  DotOpMFMAConversionHelper helper(mfmaLayout, rewriter, typeConverter,
+                                   schedModesToEnum.at(schedMode), loc);
 
   return helper.convertDot(op, adaptor);
 }

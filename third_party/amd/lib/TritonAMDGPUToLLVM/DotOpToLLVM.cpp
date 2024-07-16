@@ -9,7 +9,8 @@ using ::mlir::triton::gpu::getShapePerCTA;
 namespace mlir::triton::AMD {
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
-                          ConversionPatternRewriter &rewriter);
+                          ConversionPatternRewriter &rewriter,
+                          StringRef schedMode);
 
 LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
@@ -18,7 +19,11 @@ LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
 namespace {
 struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
-  using ConvertOpToLLVMPattern<triton::DotOp>::ConvertOpToLLVMPattern;
+  // using ConvertOpToLLVMPattern<triton::DotOp>::ConvertOpToLLVMPattern;
+  DotOpConversion(LLVMTypeConverter &typeConverter, PatternBenefit benefit,
+                  StringRef schedMode)
+      : ConvertOpToLLVMPattern<triton::DotOp>(typeConverter, benefit),
+        schedMode(schedMode) {}
 
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
@@ -37,7 +42,8 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     if (!isOuter) {
       auto dEncoding = cast<RankedTensorType>(D.getType()).getEncoding();
       if (isa<AMDMfmaEncodingAttr>(dEncoding) && supportMFMA(op)) {
-        return AMD::convertMFMA(op, adaptor, getTypeConverter(), rewriter);
+        return AMD::convertMFMA(op, adaptor, getTypeConverter(), rewriter,
+                                schedMode);
       }
       if (isa<AMDWmmaEncodingAttr>(dEncoding)) {
         return AMD::convertWMMA(op, adaptor, getTypeConverter(), rewriter);
@@ -51,6 +57,9 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
   }
+
+private:
+  StringRef schedMode;
 };
 } // namespace
 
@@ -58,7 +67,7 @@ namespace mlir::triton::AMD {
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns, int numWarps,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 PatternBenefit benefit) {
-  patterns.add<DotOpConversion>(typeConverter, benefit);
+                                 PatternBenefit benefit, StringRef schedMode) {
+  patterns.add<DotOpConversion>(typeConverter, benefit, schedMode);
 }
 } // namespace mlir::triton::AMD
