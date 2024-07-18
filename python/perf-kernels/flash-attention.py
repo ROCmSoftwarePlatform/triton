@@ -1171,6 +1171,7 @@ def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype):
     if causal:
         input_metadata.need_causal()
     if use_bias:
+        bias = torch.randn((1, H, N_CTX_Q, N_CTX_K), dtype=dtype, device="cuda")
         input_metadata.need_bias(bias, Z, H, N_CTX_Q, N_CTX_K)
     else:
         bias = None
