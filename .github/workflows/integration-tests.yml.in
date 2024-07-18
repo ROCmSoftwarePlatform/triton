@@ -115,7 +115,7 @@ jobs:
         run: |
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["a100-runner-set"], ["h100-runner-set"]]'
-            echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"]]'
+            echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"], ["self-hosted", "gfx942"]]'
             echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           else
             echo '::set-output name=matrix-CUDA::["ubuntu-latest"]'
@@ -292,8 +292,8 @@ jobs:
         run: |
           cd python/test/unit
           python3 -m pytest -s -n 16 -m interpreter language/test_core.py language/test_standard.py \
-           language/test_random.py language/test_block_pointer.py language/test_subprocess.py \
-           operators/test_flash_attention.py::test_op \
+           language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
+           runtime/test_autotuner::test_kwargs[False]\
            ../../tutorials/06-fused-attention.py::test_op --device cpu
 
       - &run-cpp-unittests-step
@@ -345,6 +345,8 @@ jobs:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
 
+    name: Integration-Tests (${{matrix.runner[1] == 'gfx90a' && 'mi210' || 'mi300x'}})
+
     container:
       image: rocm/pytorch:rocm6.1_ubuntu22.04_py3.10_pytorch_2.1.2
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
@@ -388,11 +390,7 @@ jobs:
           cd python/test/unit
           ## test_subprocess.py is flaky on the AMD CI.
           ## TODO (lixun) find a solution and re-enable it.
-          pytest --capture=tee-sys -rfs -n 32 language operators \
-                 hopper/test_mixed_io.py \
-                 hopper/test_gemm.py \
-                 hopper/test_tma_store_gemm.py \
-                 hopper/test_persistent_warp_specialized_fused-attention.py \
+          pytest --capture=tee-sys -rfs -n 16 language \
                  --ignore=language/test_line_info.py \
                  --ignore=language/test_subprocess.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
@@ -412,6 +410,11 @@ jobs:
       - *run-cpp-unittests-step
       - *save-build-artifacts-step
       - *inspect-cache-directories-step
+
+      - name: Clean up caches
+        run: |
+          rm -rf ~/.triton
+          rm -rf ~/.cache
 
   Build-Tests:
     needs: Runner-Preparation

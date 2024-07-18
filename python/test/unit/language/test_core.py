@@ -16,20 +16,32 @@ from numpy.random import RandomState
 import triton
 import triton.language as tl
 from triton.runtime.jit import TensorWrapper, reinterpret
+from triton.language.extra import libdevice
 
 
 def is_interpreter():
     return os.environ.get('TRITON_INTERPRET', '0') == '1'
 
 
+def get_current_target():
+    if is_interpreter():
+        return None
+    return triton.runtime.driver.active.get_current_target()
+
+
 def is_cuda():
-    return not is_interpreter() and \
-        triton.runtime.driver.active.get_current_target().backend == "cuda"
+    target = get_current_target()
+    return False if target is None else target.backend == "cuda"
 
 
 def is_hip():
-    return not is_interpreter() and \
-        triton.runtime.driver.active.get_current_target().backend == "hip"
+    target = get_current_target()
+    return False if target is None else target.backend == "hip"
+
+
+def get_arch():
+    target = get_current_target()
+    return "" if target is None else str(target.arch)
 
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -1702,6 +1714,27 @@ def test_store_constant(dtype_str, num_ctas, device):
     assert torch.all(output == ref)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_store_constant_default_dtype(num_ctas, device):
+    """Tests that boolean True is stored as 1"""
+
+    @triton.jit
+    def kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        value = 1
+        output = tl.full([BLOCK_SIZE], value=value, dtype=value.dtype)
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    block_size = 128
+    ref = torch.ones([block_size], dtype=getattr(torch, 'int32'), device=device)
+    output = torch.zeros([block_size], dtype=getattr(torch, 'int32'), device=device)
+    kernel[(1, )](output, block_size, BLOCK_SIZE=block_size, num_ctas=num_ctas)
+
+    assert torch.all(output == ref)
+
+
 def test_load_store_same_ptr(device):
 
     @triton.jit()
@@ -2034,7 +2067,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
         'argmax-tie-break-left': np.argmax,
     }[op]
     if 'tie-break-left' in op:
-        x[3:10] = numpy_op(x)
+        x[3:10] = x[numpy_op(x)]
     x_tri = to_triton(x, device=device)
     # numpy result
     z_dtype_str = 'int32' if op in ('argmin', 'argmax') else dtype_str
@@ -2096,19 +2129,20 @@ keep_dims_3d_configs = [(op, 'float32', (32, 2, 16), axis, True)
                         for op in ['min', 'max', 'sum', 'argmin', 'argmax']
                         for axis in [0, 1, 2]] + [(op, 'float32', (32, 2, 16), None, True)
                                                   for op in ['min', 'max', 'sum']]
+reduce_bool = [(op, 'bool', shape, axis, False) for op in ['xor_sum'] for shape in reduce2d_shapes for axis in [0, 1]]
 
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "op, dtype_str, shape, axis, keep_dims", reduce_configs1 + reduce_configs2 + reduce_configs3 + invalid_config +
-    negative_config + keep_dims_2d_configs + keep_dims_3d_configs)
+    negative_config + keep_dims_2d_configs + keep_dims_3d_configs + reduce_bool)
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, IS_3D: tl.constexpr,
-               AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr):
+               AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr, USE_I1: tl.constexpr):
         range_m = tl.arange(0, BLOCK_M)
         range_n = tl.arange(0, BLOCK_N)
         range_k = tl.arange(0, BLOCK_K)
@@ -2117,8 +2151,9 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
                         range_k[None, None, :])
         else:
             x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
+        if USE_I1:
+            x = tl.cast(x, tl.int1)
         z = GENERATE_TEST_HERE
-
         z_ptr = Z
         if KEEP_DIMS and AXIS is None:
             if IS_3D:
@@ -2147,9 +2182,14 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     # limit the range of integers so that the sum does not overflow
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
     x_tri = to_triton(x, device=device)
-    numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min, 'argmin': np.argmin, 'argmax': np.argmax}[op]
+    numpy_op = {
+        'sum': np.sum, 'max': np.max, 'min': np.min, 'argmin': np.argmin, 'argmax': np.argmax, 'xor_sum':
+        np.bitwise_xor.reduce
+    }[op]
     z_dtype_str = get_reduced_dtype(dtype_str, op)
     z_tri_dtype_str = z_dtype_str
+    if z_dtype_str == 'bool':
+        z_dtype_str = 'int8'
 
     # numpy result
     # Silence numpy error on axis out of bounds, to give triton a chance to fail
@@ -2168,14 +2208,15 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     z_tri = to_triton(numpy_random(z_shape, dtype_str=z_dtype_str, rs=rs), device=device, dst_type=z_tri_dtype_str)
     BLOCK_K = 1 if len(shape) == 2 else shape[2]
     IS_3D = bool(len(shape) == 3)
+    USE_I1 = dtype_str == 'bool'
     if axis is not None and axis >= len(shape):
         with pytest.raises(triton.TritonError):
             kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
-                          KEEP_DIMS=keep_dims, num_ctas=num_ctas)
+                          KEEP_DIMS=keep_dims, USE_I1=USE_I1, num_ctas=num_ctas)
         return
     else:
         kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
-                      KEEP_DIMS=keep_dims, num_ctas=num_ctas)
+                      KEEP_DIMS=keep_dims, USE_I1=USE_I1, num_ctas=num_ctas)
 
     z_tri = to_numpy(z_tri)
 
@@ -3038,6 +3079,8 @@ def convert_fp8_to_fp32(x, device, dtype_str):
                                                 for col_a in [True, False]
                                                 for col_b in [True, False]] +
     [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32', 1)] +
+    ([(16, 16, 8, 4, False, False, 'None', 'ieee', 'float32', 'float32', 1),
+      (32, 16, 8, 4, False, False, 'None', 'ieee', 'float16', 'float16', 1)] if "gfx9" in get_arch() else []) +
     [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1)
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
@@ -3381,39 +3424,6 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     np.testing.assert_allclose(out_ref, to_numpy(out_tri), rtol=0.01, atol=1e-2)
 
 
-@pytest.mark.interpreter
-def test_max_num_imprecise_acc(device):
-
-    if not hasattr(torch, 'float8_e5m2'):
-        pytest.skip(f"torch {torch.__version__} does not support float8_e5m2")
-
-    if is_cuda():
-        capability = torch.cuda.get_device_capability()
-        if capability != (9, 0):
-            return
-
-    @triton.jit
-    def kernel(X, Y, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-               MAX_NUM_IMPRECISE_ACC: tl.constexpr):
-        off_m = tl.arange(0, BLOCK_M)
-        off_n = tl.arange(0, BLOCK_N)
-        off_k = tl.arange(0, BLOCK_K)
-        x = tl.load(X + off_m[:, None] * BLOCK_K + off_k[None, :])
-        y = tl.load(Y + off_k[:, None] * BLOCK_N + off_n[None, :])
-        z = tl.load(Z + off_m[:, None] * BLOCK_N + off_n[None, :])
-        z = tl.dot(x, y, acc=z, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC)
-        tl.store(Z + off_m[:, None] * BLOCK_N + off_n[None, :], z)
-
-    M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 128, 128, 128, 4, 64
-    x = torch.zeros((M, K), dtype=torch.float8_e5m2, device=device)
-    y = torch.zeros((K, N), dtype=torch.float8_e5m2, device=device)
-    z = torch.zeros((M, N), dtype=torch.float32, device=device)
-    h = kernel[(1, 1)](x, y, z, M, N, K, MAX_NUM_IMPRECISE_ACC, num_warps=num_warps)
-    if not is_cuda():
-        return
-    assert h.asm["ptx"].count("add.f32") == (M * N) // (32 * num_warps) * (K / MAX_NUM_IMPRECISE_ACC)
-
-
 @pytest.mark.parametrize('in_dtype', ['float32'])
 def test_dot_mulbroadcasted(in_dtype, device):
     if is_cuda():
@@ -3698,7 +3708,7 @@ def test_masked_load_scalar(num_ctas, mask_val, other_val, device):
     torch.testing.assert_close(output, reference_out)
 
 
-# Testing masked loads with an intermate copy to shared memory run.
+# Testing masked loads with a copy to shared memory.
 # FIXME: Shape too small for ldmatrix when num_ctas=4
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
@@ -5145,27 +5155,33 @@ def matmul_kernel(  #
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("M, N, K", [(128, 256, 256)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 256, 128), (64, 64, 64)])
 @pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
-def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
-    if is_hip():
-        pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
+def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_str, low_precision_acc, device):
     if is_cuda():
         cc = torch.cuda.get_device_capability()
         if cc[0] >= 9 and in_type_str == "float8e4b15":
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
+    elif is_hip():
+        if in_type_str != 'float8e5':
+            pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
+
+        ## TODO: Figure out why block size (128, 256, 128) fails on MI300
+        if ("gfx94" in get_arch()) and BLOCK_M == 128:
+            pytest.skip('BLOCK size (128, 256, 128) fails on MI300')
+
     check_type_supported(in_type_str, device)
-    M, N, K = 128, 256, 256
-    BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 128
     A = numpy_random((M, K), dtype_str=in_type_str)
     B = numpy_random((K, N), dtype_str=in_type_str)
     C = torch.empty((M, N), dtype=torch.float32, device=device)
     num_warps = 8
     a = to_triton(A, device=device, dst_type=in_type_str)
     b = to_triton(B, device=device, dst_type=in_type_str)
-    grid = (triton.cdiv(M, BLOCK_M), 1)
-    matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0), C.stride(1),
-                        BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    h = matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0),
+                            C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps)
     torch_a = torch.from_numpy(A).to(device=device)
     th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)
@@ -5173,10 +5189,10 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     ref_out = torch.matmul(th_a, th_b).to(torch.float32)
     if in_type_str == 'float8e4nv':
         torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)
-    elif low_precision_acc > 32:
-        torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     else:
-        torch.testing.assert_close(ref_out, C)
+        torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
+    if is_cuda() and low_precision_acc > 0 and torch.cuda.get_device_capability()[0] >= 9:
+        assert h.asm["ptx"].count("add.f32") == (BLOCK_M * BLOCK_N) // (32 * num_warps) * (BLOCK_K // low_precision_acc)
 
 
 # -----------------------
@@ -5365,12 +5381,12 @@ def test_tl_range(device):
         torch.testing.assert_close(ref_out, c, rtol=1e-2, atol=1e-1)
     else:
         torch.testing.assert_close(ref_out, c, rtol=1e-3, atol=1e-3)
-    if device in ['cuda']:
-        capability = torch.cuda.get_device_capability()
-        if capability[0] >= 8:
-            ptx = pgm.asm['ptx']
-            # check that the loop got pipelined with the right number of stages.
-            assert 'cp.async.wait_group 0x6' in ptx
+        if device in ['cuda']:
+            capability = torch.cuda.get_device_capability()
+            if capability[0] >= 8:
+                ptx = pgm.asm['ptx']
+                # check that the loop got pipelined with the right number of stages.
+                assert 'cp.async.wait_group 0x6' in ptx
 
 
 @triton.jit(noinline=True)
@@ -5459,3 +5475,40 @@ def test_num_programs(device):
 
     kernel[grid](input)
     assert torch.all(input == torch.tensor(grid, device=device))
+
+
+# -----------------------
+# test extern functions
+# -----------------------
+
+
+@pytest.mark.parametrize("dtype_str", ['float32', 'float64'])
+def test_math_extern(dtype_str):
+    if is_interpreter():
+        pytest.skip('math_extern does not work in the interpreter mode')
+
+    @triton.jit
+    def kernel(
+        x_ptr,
+        y_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = libdevice.tanh(x)
+        tl.store(y_ptr + offsets, y, mask=mask)
+
+    shape = (128, )
+    rs = RandomState(17)
+
+    x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+    y_ref = np.tanh(x)
+    x_tri = to_triton(x, device='cuda')
+    y_tri = to_triton(numpy_random(shape, dtype_str=dtype_str, rs=rs), device='cuda')
+    kernel[(1, )](x_tri, y_tri, shape[0], BLOCK_SIZE=shape[0])
+    # compare
+    np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)

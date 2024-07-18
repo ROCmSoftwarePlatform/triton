@@ -13,6 +13,10 @@ import subprocess
 from pathlib import Path
 
 
+def min_dot_size(target: GPUTarget):
+    return lambda lhsType, rhsType: (16, 32, 16) if lhsType.is_int8() else (16, 16, 16)
+
+
 @functools.lru_cache()
 def _path_to_binary(binary: str):
     paths = [
@@ -129,7 +133,8 @@ class CUDABackend(BaseBackend):
         import triton.language.extra.cuda as cuda
         codegen_fns = {
             "convert_custom_types":
-            cuda.convert_custom_float8_sm80 if self.capability >= 80 else cuda.convert_custom_float8_sm70
+            cuda.convert_custom_float8_sm80 if self.capability >= 80 else cuda.convert_custom_float8_sm70,
+            "min_dot_size": min_dot_size(self.target)
         }
         return codegen_fns
 
@@ -158,6 +163,11 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimX = opt.cluster_dims[0]
             cluster_info.clusterDimY = opt.cluster_dims[1]
             cluster_info.clusterDimZ = opt.cluster_dims[2]
+        # Set up Diagnostic
+        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
+            srcMgr = llvm.source_mgr()
+            diag = ir.source_mgr_diag(srcMgr, mod.context)
+            mod.context.printOpOnDiagnostic(True)
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
