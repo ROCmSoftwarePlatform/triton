@@ -2,7 +2,7 @@
 
 ## matmul kernel
 
-The matmul kernel implementation can be found as [matmul_kernel.py](https://github.com/ROCm/triton/blob/triton-mlir/scripts/amd/gemm/matmul_kernel.py), which includes the following features:
+The matmul kernel implementation can be found as [matmul_kernel.py](https://github.com/ROCm/triton/blob/main_perf/python/perf-kernels/tune_gemm/matmul_kernel.py), which includes the following features:
 - grouping order of workgroup id, which is controlled by `GROUP_SIZE_M`, that
 implements L2 cache optimization introduced in the [tutorial](https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html#l2-cache-optimizations).
 - split-k algorithm, which is controlled by `SPLIT_K`.
