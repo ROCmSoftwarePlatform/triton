@@ -61,3 +61,20 @@ fp32, bf16 and f8 (both e5m2 and e4m3) datatypes.
 ## `03-matrix-multiplication-stream-k.py`
 
 This script contains the GEMM kernel that implements [stream-k](https://arxiv.org/abs/2301.03598)
+
+## `multreduce_matmul_kernel.py`
+
+Kernel that implements GEMM with explicit multiply-reduce instructions for small block sizes. Such
+small block sizes aren't natively supported by `tl.dot` operator.
+
+Despite being numerically correct, this kernel performed worse than a corresponding GEMM kernel that
+used `tl.dot` with minimum block size equal to $16$:
+
+**MI300 Results for FP16:**
+
+| trans   |   M |     N |     K |         Dot GiBps |   Multiply-Reduce GiBps |   Speedup |
+|:--------|----:|------:|------:|------------------:|------------------------:|----------:|
+| TN      |   1 |  8192 | 28672 |           3491.33 |                 2869.87 |      0.82 |
+| TN      |   1 |  6144 |  6144 |           3858.22 |                 2673.33 |      0.69 |
+| TN      |   1 |  4096 |  4096 |           2352.54 |                 1680.93 |      0.71 |
+| TN      |   2 | 16384 | 16384 |           3412.17 |                 3318.44 |      0.97 |
