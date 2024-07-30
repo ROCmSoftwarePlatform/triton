@@ -95,7 +95,7 @@ do
 done
 
 # Copy Include Files
-cp -r $ROCM_HOME/include $TRITON_ROCM_DIR/
+cp -r $ROCM_HOME/include/hip $TRITON_ROCM_DIR/include
 
 # Copy linker
 mkdir -p $TRITON_ROCM_DIR/llvm/bin
