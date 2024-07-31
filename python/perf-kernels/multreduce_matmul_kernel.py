@@ -29,21 +29,10 @@ def multreduce_matmul_kernel(a_ptr, b_ptr, c_ptr, bias_ptr, M, N, K, stride_am, 
         else:
             a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
             b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
-        # TODO: `min_dot_size` isn't always (16, 16, 16), it's in fact architecture
-        #       dependent and data type dependent. Please check this source file:
-        #       `${TRITON_ROOT}/third_party/amd/backend/compiler.py`
-        #       (look for `min_dot_size` function).
-        #       Q: How can we implement this `if` statement more precisely?
-        #       A: Maybe we can use an approach similar to `EVEN_K`, in which the kernel caller
-        #          inspect all relevant information and provides a Boolean flag for the kernel.
-        if (BLOCK_SIZE_M < 16 or BLOCK_SIZE_N < 16) or BLOCK_SIZE_K < 16:
-            # Explicit multiply-reduce for small block sizes.
-            a = tl.reshape(a, (BLOCK_SIZE_M, BLOCK_SIZE_K, 1)).to(acc_dtype)
-            b = tl.reshape(b, (1, BLOCK_SIZE_K, BLOCK_SIZE_N)).to(acc_dtype)
-            accumulator += tl.sum(a * b, axis=1)
-        else:
-            # Triton dot product for other block sizes.
-            accumulator += tl.dot(a, b)
+        # Dot product implemented as explicit multiply-reduce:
+        a = tl.reshape(a, (BLOCK_SIZE_M, BLOCK_SIZE_K, 1)).to(acc_dtype)
+        b = tl.reshape(b, (1, BLOCK_SIZE_K, BLOCK_SIZE_N)).to(acc_dtype)
+        accumulator += tl.sum(a * b, axis=1)
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
     c = accumulator.to(c_ptr.type.element_ty)
