@@ -106,8 +106,8 @@ public:
       RewriterBase &rewriter);
   /// Emits the epilogue, this creates `maxStage - 1` part which will contain
   /// operations from stages [i; maxStage], where i is the part index.
-  void emitEpilogue(RewriterBase &rewriter,
-                    llvm::SmallVector<Value> &returnValues);
+  LogicalResult emitEpilogue(RewriterBase &rewriter,
+                             llvm::SmallVector<Value> &returnValues);
 };
 
 bool LoopPipelinerInternal::initializeLoopInfo(
@@ -638,16 +638,19 @@ LogicalResult LoopPipelinerInternal::createKernel(
   return success();
 }
 
-void LoopPipelinerInternal::emitEpilogue(
+LogicalResult LoopPipelinerInternal::emitEpilogue(
     RewriterBase &rewriter, llvm::SmallVector<Value> &returnValues) {
   OpBuilder::InsertionGuard g(rewriter);
   Location loc = forOp.getLoc();
   scf::IfOp guardIfOp;
   if (dynamicLoop) {
-    // if (ub > lb) {
+    // Disabled for maxStage > 1. This would require conditionals for each stage.
+    if (maxStage > 1)
+      return failure();
+    // if (ub >= lb) {
+    Value pred = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, ub, lb);
     llvm::SmallVector<Type> returnTypes;
     llvm::for_each(returnValues, [&](Value v) { returnTypes.push_back(v.getType()); });
-    Value pred = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, ub, lb);
     guardIfOp = rewriter.create<scf::IfOp>(loc, returnTypes, pred, /*elseBranch*/true);
     // else return inputs
     rewriter.setInsertionPointToStart(guardIfOp.elseBlock());
@@ -724,6 +727,7 @@ void LoopPipelinerInternal::emitEpilogue(
       returnValues[i] = guardIfOp.getResult(i);
     }
   }
+  return success();
 }
 
 void LoopPipelinerInternal::setValueMapping(Value key, Value el, int64_t idx) {
@@ -781,7 +785,8 @@ mlir::triton::pipelineForLoop(RewriterBase &rewriter, ForOp forOp,
   if (options.peelEpilogue) {
     // 4. Emit the epilogue after the new forOp.
     rewriter.setInsertionPointAfter(newForOp);
-    pipeliner.emitEpilogue(rewriter, returnValues);
+    if (failed(pipeliner.emitEpilogue(rewriter, returnValues)))
+      return failure();
   }
   // 5. Erase the original loop and replace the uses with the epilogue output.
   if (forOp->getNumResults() > 0)
