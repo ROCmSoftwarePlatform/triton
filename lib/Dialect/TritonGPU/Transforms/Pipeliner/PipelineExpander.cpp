@@ -145,10 +145,6 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     LDBG("--no epilogue or predicate set -> BAIL");
     return false;
   }
-  if (dynamicLoop && peelEpilogue) {
-    LDBG("--dynamic loop doesn't support epilogue yet -> BAIL");
-    return false;
-  }
   std::vector<std::pair<Operation *, unsigned>> schedule;
   options.getScheduleFn(forOp, schedule);
   if (schedule.empty()) {
@@ -644,10 +640,24 @@ LogicalResult LoopPipelinerInternal::createKernel(
 
 void LoopPipelinerInternal::emitEpilogue(
     RewriterBase &rewriter, llvm::SmallVector<Value> &returnValues) {
+  OpBuilder::InsertionGuard g(rewriter);
+  Location loc = forOp.getLoc();
+  scf::IfOp guardIfOp;
+  if (dynamicLoop) {
+    // if (ub > lb) {
+    llvm::SmallVector<Type> returnTypes;
+    llvm::for_each(returnValues, [&](Value v) { returnTypes.push_back(v.getType()); });
+    Value pred = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, ub, lb);
+    guardIfOp = rewriter.create<scf::IfOp>(loc, returnTypes, pred, /*elseBranch*/true);
+    // else return inputs
+    rewriter.setInsertionPointToStart(guardIfOp.elseBlock());
+    rewriter.create<scf::YieldOp>(loc, returnValues);
+    // then body
+    rewriter.setInsertionPointToStart(guardIfOp.thenBlock());
+  }
   // Emit different versions of the induction variable. They will be
   // removed by dead code if not used.
   for (int64_t i = 0; i < maxStage; i++) {
-    Location loc = forOp.getLoc();
     Type t = lb.getType();
     Value minusOne =
         rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, -1));
@@ -705,6 +715,13 @@ void LoopPipelinerInternal::emitEpilogue(
                           newOp->getResult(destId), version);
         }
       }
+    }
+  }
+  if (dynamicLoop) {
+    // scf.yield rvals;
+    rewriter.create<scf::YieldOp>(loc, returnValues);
+    for (int i = 0; i < returnValues.size(); ++i) {
+      returnValues[i] = guardIfOp.getResult(i);
     }
   }
 }
