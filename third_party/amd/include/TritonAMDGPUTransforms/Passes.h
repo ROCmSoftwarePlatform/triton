@@ -20,6 +20,7 @@ std::unique_ptr<Pass> createTritonAMDGPUReorderInstructionsPass();
 std::unique_ptr<Pass> createTritonAMDGPUVerifier();
 
 std::unique_ptr<Pass> createTritonAMDGPUOptimizeEpiloguePass();
+std::unique_ptr<Pass> createTritonAMDGPUBypassLDSForDotLayout();
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION

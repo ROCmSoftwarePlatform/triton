@@ -51,6 +51,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      const std::string, int, int);
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
                      mlir::createTritonAMDGPUOptimizeEpiloguePass);
+  ADD_PASS_WRAPPER_0("add_tritongpu_bypass_lds_for_dot_layout_pass",
+                     mlir::createTritonAMDGPUBypassLDSForDotLayout);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructionsPass);
   ADD_PASS_WRAPPER_0("add_stream_pipeline",
