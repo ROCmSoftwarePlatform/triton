@@ -1539,21 +1539,9 @@ unpackLLElements(Location loc, Value llvmStruct,
   // auto llvmVec = conversion.getOperand(0);
   auto llvmVec = llvmStruct;
   auto vecTy = dyn_cast<::mlir::VectorType>(llvmVec.getType());
-  llvm::errs() << "vector Value: " << llvmVec << llvmVec.getType() << vecTy
-               << "\n";
   if (vecTy) {
     auto elemTy = vecTy.getElementType();
     auto elemNo = vecTy.getDimSize(0);
-    SmallVector<Value> results;
-    for (int elem = 0; elem < elemNo; ++elem)
-      results.push_back(extract_element(llvmVec, i32_val(elem)));
-    return results;
-  }
-
-  if (mlir::LLVM::isCompatibleVectorType(llvmVec.getType())) {
-    auto elemTy = mlir::LLVM::getVectorElementType(llvmVec.getType());
-    auto elemNo =
-        mlir::LLVM::getVectorNumElements(llvmVec.getType()).getKnownMinValue();
     SmallVector<Value> results;
     for (int elem = 0; elem < elemNo; ++elem)
       results.push_back(extract_element(llvmVec, i32_val(elem)));
