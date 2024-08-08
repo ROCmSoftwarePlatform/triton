@@ -208,6 +208,9 @@ def get_llvm_package_info():
         rev = llvm_hash_file.read(8)
     name = f"llvm-{rev}-{system_suffix}"
     url = f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{name}.tar.gz"
+    if os.getenv("TRITON_LLVM_TARBALL_PATH"):
+        url = os.getenv("TRITON_LLVM_TARBALL_PATH")
+        name = url.split("/")[-1].split(".")[0]
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
