@@ -53,6 +53,18 @@ def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir:
 
 }
 
+def TritonAMDGPUBypassLDSForDotLayout: Pass<"tritonamdgpu-bypass-lds-for-dot-layout", "mlir::ModuleOp"> {
+  let summary = "Bypass moving data trough LDS for dot layout when possible";
+
+  let description = [{
+    Bypass moving data trough LDS for dot layout when possible.
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUBypassLDSForDotLayout()";
+
+  let dependentDialects = [];
+}
+
 def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "mlir::ModuleOp"> {
   let summary = "Reorder instructions";
 

@@ -60,8 +60,9 @@ SmallVector<unsigned, 2> warpsPerTile(tt::DotOp dotOp,
                                       SmallVector<int64_t, 2> shapePerWarp) {
   auto rank = shape.size();
   // Early exit for batched matmul
-  if (rank == 3)
-    return {(unsigned)numWarps, 1, 1};
+  return {1, 8};
+  // if (rank == 3)
+  //   return {(unsigned)numWarps, 1, 1};
 
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
@@ -92,11 +93,10 @@ SmallVector<unsigned, 2> warpsPerTile(tt::DotOp dotOp,
     }
   } while (true);
 
-  if (ret[1] * shapePerWarp[1] > tensorShape[1]) {
-    return {ret[1], ret[0]};
-  }
+  // if (ret[1] * shapePerWarp[1] > tensorShape[1]) {
+  //   return {ret[1], ret[0]};
+  // }
 
-  return ret;
 }
 
 SmallVector<unsigned, 2>

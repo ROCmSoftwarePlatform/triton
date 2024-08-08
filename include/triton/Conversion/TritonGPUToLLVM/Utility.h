@@ -1596,6 +1596,7 @@ inline Value packLLElements(Location loc,
     emitError(loc) << " size mismatch when packing elements for LLVM struct"
                    << " expected " << elementTypes.size() << " but got "
                    << resultVals.size();
+    assert(false);
   }
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
   for (const auto &v : llvm::enumerate(resultVals)) {

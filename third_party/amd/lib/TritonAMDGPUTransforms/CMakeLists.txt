@@ -4,7 +4,7 @@ add_triton_library(TritonAMDGPUTransforms
   ReorderInstructions.cpp
   StreamPipeline.cpp
   MfmaGroup.cpp
-
+  AMDBypassLDSForDotLayout.cpp
   DEPENDS
   TritonAMDGPUTransformsIncGen
   TritonGPUIR
