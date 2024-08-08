@@ -55,4 +55,18 @@ def ConvertBuiltinFuncToLLVM : Pass<"convert-builtin-func-to-llvm", "mlir::Modul
 
 }
 
+def SchedGroupBarriersInsertion : Pass<"insert-sched-group-barriers", "mlir::ModuleOp"> {
+    let summary = "Insert Scheduling Group Barriers";
+    let constructor = "mlir::triton::createSchedGroupBarriersInsertionPass()";
+
+    let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+}
+
+def SchedGroupBarriersLowering : Pass<"lower-sched-group-barriers", "mlir::ModuleOp"> {
+    let summary = "Lower Scheduling Group Barriers to LLVM intrinsics";
+    let constructor = "mlir::triton::createSchedGroupBarriersLoweringPass()";
+
+    let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+}
+
 #endif

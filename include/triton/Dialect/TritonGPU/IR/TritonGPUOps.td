@@ -242,4 +242,11 @@ def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEf
   }];
 }
 
+def TTG_GroupSched : TTG_Op<"group_sched"> {
+  let summary = "A placeholder Op for the instruction group scheduling";
+  let description = [{
+    A placeholder Op for the instruction group scheduling.
+  }];
+}
+
 #endif

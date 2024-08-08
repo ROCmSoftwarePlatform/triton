@@ -36,12 +36,18 @@ const char *const amdTargetTriple = "amdgcn-amd-amdhsa";
 
 void init_triton_amd_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
+  m.def("insert_sched_group_barriers", [](mlir::PassManager &pm) {
+    pm.addPass(createSchedGroupBarriersInsertionPass());
+  });
   m.def("add_to_llvmir",
         [](mlir::PassManager &pm, const std::string &arch, bool ftz) {
           pm.addPass(createConvertTritonAMDGPUToLLVMPass(arch, ftz));
         });
   m.def("add_builtin_func_to_llvmir", [](mlir::PassManager &pm) {
     pm.addPass(createConvertBuiltinFuncToLLVMPass());
+  });
+  m.def("add_sched_group_barriers", [](mlir::PassManager &pm) {
+    pm.addPass(createSchedGroupBarriersLoweringPass());
   });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm,
                                                     const std::string &arch) {
