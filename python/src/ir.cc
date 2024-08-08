@@ -201,7 +201,11 @@ void init_triton_ir(py::module &&m) {
       .value("IEEE", InputPrecision::IEEE)
       .export_values();
 
-  py::class_<MLIRContext>(m, "context", py::module_local()).def(py::init<>());
+  py::class_<MLIRContext>(m, "context", py::module_local())
+      .def(py::init<>())
+      .def("enable_moe_lds_bypass", [](MLIRContext &self, bool value) -> void {
+        enableMoeLDSBypass(value);
+      });
 
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;

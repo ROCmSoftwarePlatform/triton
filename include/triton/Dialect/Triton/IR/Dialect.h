@@ -23,6 +23,10 @@
 namespace mlir {
 namespace triton {
 
+void enableMoeLDSBypass(bool value);
+
+bool isMoeLDSBypass();
+
 struct GlobalMemory : public SideEffects::Resource::Base<GlobalMemory> {
   StringRef getName() final { return "<GlobalMemory>"; }
 };

@@ -58,7 +58,7 @@ public:
             dstDotOp.getParent() == srcMfmaEncoding)
           return;
       }
-      if (isBlockedToDotShortcut(srcType, dstType)) {
+      if (isMoeLDSBypass() && isBlockedToDotShortcut(srcType, dstType)) {
         return;
       }
 

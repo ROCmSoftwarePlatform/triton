@@ -125,7 +125,7 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
-    if (isBlockedToDotShortcut(srcTy, dstTy)) {
+    if (isMoeLDSBypass() && isBlockedToDotShortcut(srcTy, dstTy)) {
       auto loc = op.getLoc();
       auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
       Value view =

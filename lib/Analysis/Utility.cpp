@@ -583,12 +583,14 @@ bool supportMMA(Value value, int version) {
 }
 
 bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
-  if (auto blockSrc = llvm::dyn_cast<triton::gpu::BlockedEncodingAttr>(
-          srcTy.getEncoding())) {
-    auto dotOp = llvm::dyn_cast<triton::gpu::DotOperandEncodingAttr>(
-        dstTy.getEncoding());
-    if (dotOp && dotOp.getOpIdx() == 1) {
-      return true;
+  if (isMoeLDSBypass()) {
+    if (auto blockSrc = llvm::dyn_cast<triton::gpu::BlockedEncodingAttr>(
+            srcTy.getEncoding())) {
+      auto dotOp = llvm::dyn_cast<triton::gpu::DotOperandEncodingAttr>(
+          dstTy.getEncoding());
+      if (dotOp && dotOp.getOpIdx() == 1) {
+        return true;
+      }
     }
   }
   return false;

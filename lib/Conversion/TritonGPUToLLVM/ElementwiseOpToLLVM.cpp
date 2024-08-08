@@ -135,11 +135,15 @@ int getNumElementsPerThreads(Type type,
   if (structType) {
     numElemsPerThread = structType.getBody().size();
   }
-  auto vectorType =
-      dyn_cast<mlir::VectorType>(typeConverter->convertType(type));
-  if (vectorType) {
-    numElemsPerThread = vectorType.getDimSize(0);
+
+  if (isMoeLDSBypass()) {
+    auto vectorType =
+        dyn_cast<mlir::VectorType>(typeConverter->convertType(type));
+    if (vectorType) {
+      numElemsPerThread = vectorType.getDimSize(0);
+    }
   }
+
   auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
   if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
     return numElemsPerThread;

@@ -90,7 +90,7 @@ void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
     OpBuilder builder(cvtOp);
     auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
     auto dstType = cast<RankedTensorType>(cvtOp.getType());
-    if (isBlockedToDotShortcut(srcType, dstType)) {
+    if (isMoeLDSBypass() && isBlockedToDotShortcut(srcType, dstType)) {
       return;
     }
     auto srcBlocked =

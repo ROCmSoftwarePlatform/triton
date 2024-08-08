@@ -27,6 +27,7 @@ class HIPOptions:
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
     matrix_instr_nonkdim: int = 0
+    enable_moe_lds_bypass: bool = False
     kpack: int = 1
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
@@ -105,6 +106,7 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_ttir(mod, metadata, options):
+        mod.context.enable_moe_lds_bypass(options.enable_moe_lds_bypass)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
