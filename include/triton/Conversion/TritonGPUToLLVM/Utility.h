@@ -1532,6 +1532,34 @@ inline SmallVector<Value>
 unpackLLElements(Location loc, Value llvmStruct,
                  ConversionPatternRewriter &rewriter) {
   assert(bool(llvmStruct) && "can not unpack null values");
+
+  // auto defOp = llvmStruct.getDefiningOp();
+  // if (defOp && llvm::isa<UnrealizedConversionCastOp>(defOp)) {
+  // auto conversion = llvm::cast<UnrealizedConversionCastOp>(defOp);
+  // auto llvmVec = conversion.getOperand(0);
+  auto llvmVec = llvmStruct;
+  auto vecTy = dyn_cast<::mlir::VectorType>(llvmVec.getType());
+  llvm::errs() << "vector Value: " << llvmVec << llvmVec.getType() << vecTy
+               << "\n";
+  if (vecTy) {
+    auto elemTy = vecTy.getElementType();
+    auto elemNo = vecTy.getDimSize(0);
+    SmallVector<Value> results;
+    for (int elem = 0; elem < elemNo; ++elem)
+      results.push_back(extract_element(llvmVec, i32_val(elem)));
+    return results;
+  }
+
+  if (mlir::LLVM::isCompatibleVectorType(llvmVec.getType())) {
+    auto elemTy = mlir::LLVM::getVectorElementType(llvmVec.getType());
+    auto elemNo =
+        mlir::LLVM::getVectorNumElements(llvmVec.getType()).getKnownMinValue();
+    SmallVector<Value> results;
+    for (int elem = 0; elem < elemNo; ++elem)
+      results.push_back(extract_element(llvmVec, i32_val(elem)));
+    return results;
+  }
+
   if (llvmStruct.getType().isIntOrIndexOrFloat() ||
       isa<triton::PointerType>(llvmStruct.getType()) ||
       isa<LLVM::LLVMPointerType>(llvmStruct.getType()))
@@ -1550,6 +1578,23 @@ inline Value packLLElements(Location loc,
                             const LLVMTypeConverter *typeConverter,
                             ValueRange resultVals,
                             ConversionPatternRewriter &rewriter, Type type) {
+  auto firstType = resultVals[0].getType();
+  bool sameTypes = true;
+  for (int i = 1; i < resultVals.size(); ++i)
+    if (resultVals[i].getType() != firstType) {
+      sameTypes = false;
+      break;
+    }
+  if (sameTypes && firstType.isIntOrFloat() && resultVals.size() > 1) {
+    // Packing into vector instead of structure, to prevent LLVM splitting
+    // structure into separate values
+    auto vecTy = vec_ty(firstType, resultVals.size());
+    Value llvmVector = rewriter.create<LLVM::UndefOp>(loc, vecTy);
+    for (const auto &v : llvm::enumerate(resultVals))
+      llvmVector =
+          insert_element(vecTy, llvmVector, v.value(), i32_val(v.index()));
+    return llvmVector;
+  }
   auto structType =
       dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
   if (!structType) {
