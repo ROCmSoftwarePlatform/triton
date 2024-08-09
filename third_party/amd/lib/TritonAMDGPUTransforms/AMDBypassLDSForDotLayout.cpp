@@ -163,164 +163,82 @@ triton::LoadOp getLoadInst(Operation *op, ModuleOp &mod) {
   return loadOpsVec[2];
 }
 
-// class BypassLDSForDotLayout : public mlir::RewritePattern {
-
-// public:
-//   explicit BypassLDSForDotLayout(mlir::MLIRContext *context)
-//       : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(), 1, context) {}
-//   mlir::LogicalResult
-//   matchAndRewrite(mlir::Operation *op,
-//                   mlir::PatternRewriter &rewriter) const override {
-
-//     auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
-//     auto mod = op->getParentOfType<ModuleOp>();
-
-//     static int counter = 0;
-//     if(counter > 0){
-//       return mlir::failure();
-//     }
-
-//     if (!cvtOp)
-//       return mlir::failure();
-
-//     auto srcType = cast<RankedTensorType>(cvtOp.getOperand().getType());
-//     auto dstType = cast<RankedTensorType>(cvtOp.getType());
-//     auto srcBlocked =
-//         dyn_cast<triton::gpu::BlockedEncodingAttr>(srcType.getEncoding());
-//     auto dstDotOp =
-//         dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
-
-
-
-//     if (!(srcBlocked && dstDotOp)) {
-//       return mlir::failure();
-//     }
-
-
-//     if(dstDotOp.getOpIdx() != 1){
-//       return mlir::failure();
-//     }
-
-//     if(srcBlocked.getOrder()[1] == 0){
-//       return mlir::failure();
-//     }
-
-    
-    
-
-//     SmallVector<unsigned> newWarpsPerCTA(2, 4);
-//     SmallVector<unsigned> newSizePerThread(2, 4);
-//     SmallVector<unsigned> newThreadsPerWarp(2, 4);
-//     SmallVector<unsigned> newOrder(2, 4);
-//     newOrder[0] = 1;
-//     newOrder[1] = 0;
-//     newThreadsPerWarp[0] = 4;
-//     newThreadsPerWarp[1] = 16;
-//     newSizePerThread[0] = 8;
-//     newSizePerThread[1] = 1;
-//     newWarpsPerCTA[0] = 1;
-//     newWarpsPerCTA[1] = 8;
-//     auto newBlockedEncoding = triton::gpu::BlockedEncodingAttr::get(
-//         mod.getContext(), newSizePerThread, newThreadsPerWarp, newWarpsPerCTA,
-//         newOrder, srcBlocked.getCTALayout());
-
-//     auto loadInst = getLoadInst(cvtOp, mod);
-//     convertLayout(newBlockedEncoding, (Operation *)loadInst);
-//     if (failed(mlir::verify(mod))) {
-//       assert(false);
-//     }
-//     counter+= 1;
-//     return mlir::success();
-//   }
-// };
-
-
-
-
-
 class BypassLDSForDotLayout : public mlir::RewritePattern {
 
 public:
   explicit BypassLDSForDotLayout(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::LoadOp::getOperationName(), 1, context) {}
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(), 1, context) {}
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
 
-    auto cvtOp = dyn_cast<triton::LoadOp>(op);
-
-
-  if (op->getResult(0).hasOneUse()) {
-    OpBuilder builder(op);
-
-    Operation *userOp = *op->getResult(0).user_begin();
-
-    // Check if the user is of type LocalAllocOp
-    if (isa<triton::gpu::LocalAllocOp>(userOp)) {
-      Value allocResult = userOp->getResult(0);
-
-      llvm::outs() << "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n";
-      // Check if the result of LocalAllocOp has exactly one user
-        Operation *loadUserOp = *allocResult.user_begin();
-
-        auto userIter = allocResult.getUsers().begin();
-        std::advance(userIter, 1); // Move to the second user
-        Operation *secondUserOp = *userIter;
-
-
-
-        // Check if this user is of type LocalLoadOp
-        if (isa<triton::gpu::LocalLoadOp>(loadUserOp)) {
-          // Get the result type of the LocalLoadOp
-          auto loadResultType = dyn_cast<RankedTensorType>(loadUserOp->getResult(0).getType());
-
-          // Dump the type
-          loadResultType.dump();
-
-          auto dotOperandLayout =
-              dyn_cast<triton::gpu::DotOperandEncodingAttr>(loadResultType.getEncoding());
-
-      llvm::outs() << "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n";
-
-          if(!dotOperandLayout){
-            return mlir::failure();
-          }
-      llvm::outs() << "ccccccccccccccccccccccccccccccccccccccccc\n";
-
-          if(dotOperandLayout.getOpIdx() == 0){
-            return mlir::failure();
-          }
-      llvm::outs() << "ddddddddddddddddddddddddddddddddddddddddd\n";
-
-          auto newCvt = builder.create<triton::gpu::ConvertLayoutOp>(
-              op->getLoc(), loadResultType, op->getResult(0));
-
-          rewriter.replaceAllUsesWith(userOp->getResult(0), newCvt.getResult());
-
-      llvm::outs() << "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n";
-
-        if (secondUserOp->getNumOperands() == 2) {
-          Value firstOperand = secondUserOp->getOperand(0);
-          Operation *firstOperandOp = firstOperand.getDefiningOp();
-
-          auto newCvt2 = builder.create<triton::gpu::ConvertLayoutOp>(op->getLoc(), loadResultType, firstOperandOp->getResult(0));
-      llvm::outs() << "fffffffffffffffffffffffffffffffffffffff\n";
-          rewriter.replaceAllUsesWith(secondUserOp, newCvt2.getResult());
-
-        }
-
-          return mlir::success();
-      }
-    }
-  }
-    // Operation *localAlloc = cvtOp->getUsers(0);
-
-
+    auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
     auto mod = op->getParentOfType<ModuleOp>();
 
+    static int counter = 0;
+    if(counter > 0){
+      return mlir::failure();
+    }
+
+    if (!cvtOp)
+      return mlir::failure();
+
+    auto srcType = cast<RankedTensorType>(cvtOp.getOperand().getType());
+    auto dstType = cast<RankedTensorType>(cvtOp.getType());
+    auto srcBlocked =
+        dyn_cast<triton::gpu::BlockedEncodingAttr>(srcType.getEncoding());
+    auto dstDotOp =
+        dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
 
 
-    return mlir::failure();
+
+    if (!(srcBlocked && dstDotOp)) {
+      return mlir::failure();
+    }
+
+
+    if(dstDotOp.getOpIdx() != 1){
+      return mlir::failure();
+    }
+    SmallVector<unsigned> newWarpsPerCTA(2, 4);
+    SmallVector<unsigned> newSizePerThread(2, 4);
+    SmallVector<unsigned> newThreadsPerWarp(2, 4);
+    SmallVector<unsigned> newOrder(2, 4);
+
+    auto shape = dstType.getShape();
+    llvm::outs() << "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n";
+    if (shape[1] == 64) {
+      newOrder[0] = 0;
+      newOrder[1] = 1;
+      newThreadsPerWarp[0] = 4;
+      newThreadsPerWarp[1] = 16;
+      newSizePerThread[0] = 8;
+      newSizePerThread[1] = 1;
+      newWarpsPerCTA[0] = 1;
+      newWarpsPerCTA[1] = 8;
+    } else {
+      newOrder[0] = 0;
+      newOrder[1] = 1;
+      newThreadsPerWarp[0] = 4;
+      newThreadsPerWarp[1] = 16;
+      newSizePerThread[0] = 8;
+      newSizePerThread[1] = 1;
+      newWarpsPerCTA[0] = 1;
+      newWarpsPerCTA[1] = 8;
+    }
+
+
+    auto newBlockedEncoding = triton::gpu::BlockedEncodingAttr::get(
+        mod.getContext(), newSizePerThread, newThreadsPerWarp, newWarpsPerCTA,
+        newOrder, srcBlocked.getCTALayout());
+
+    auto loadInst = getLoadInst(cvtOp, mod);
+    convertLayout(newBlockedEncoding, (Operation *)loadInst);
+    if (failed(mlir::verify(mod))) {
+      assert(false);
+    }
+    counter+= 1;
+    return mlir::success();
   }
 };
 
