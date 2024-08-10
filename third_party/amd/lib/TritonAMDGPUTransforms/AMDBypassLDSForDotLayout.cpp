@@ -160,7 +160,7 @@ triton::LoadOp getLoadInst(Operation *op, ModuleOp &mod) {
   // from global memory (applicable for dot ops that don't depend on other dot
   // ops). This condition can be lifted if necessary.
   // assert(loadOpsVec.size() == 1);
-  llvm::outs() << loadOpsVec.size() << "\n";
+  llvm::outs() << "number of loads in DF chain: " << loadOpsVec.size() << "\n";
   return loadOpsVec[2];
 }
 
@@ -215,47 +215,23 @@ public:
 
     // Should we use only one configuration?
     auto shape = dstType.getShape();
-    switch (shape[nonKDim]) {
+    newOrder[0] = 1;
+    newOrder[1] = 0;
+    switch (shape[kDim]) {
     case 128:
-      newOrder[0] = 0;
-      newOrder[1] = 1;
-      newThreadsPerWarp[0] = 4;
-      newThreadsPerWarp[1] = 16;
       newSizePerThread[0] = 8;
       newSizePerThread[1] = 1;
+      newThreadsPerWarp[0] = 16;
+      newThreadsPerWarp[1] = 4;
       newWarpsPerCTA[0] = 1;
       newWarpsPerCTA[1] = numWarps;
+      newOrder[0] = 0;
+      newOrder[1] = 1;
       break;
     case 64:
-      newOrder[0] = 0;
-      newOrder[1] = 1;
-      newThreadsPerWarp[0] = 4;
-      newThreadsPerWarp[1] = 16;
-      newSizePerThread[0] = 8;
-      newSizePerThread[1] = 1;
-      newWarpsPerCTA[0] = 1;
-      newWarpsPerCTA[1] = numWarps;
-      break;
     case 32:
-      newOrder[0] = 0;
-      newOrder[1] = 1;
-      newThreadsPerWarp[0] = 4;
-      newThreadsPerWarp[1] = 16;
-      newSizePerThread[0] = 8;
-      newSizePerThread[1] = 1;
-      newWarpsPerCTA[0] = 1;
-      newWarpsPerCTA[1] = numWarps;
-      break;
     case 16:
-      newOrder[0] = 0;
-      newOrder[1] = 1;
-      newThreadsPerWarp[0] = 4;
-      newThreadsPerWarp[1] = 16;
-      newSizePerThread[0] = 8;
-      newSizePerThread[1] = 1;
-      newWarpsPerCTA[0] = 1;
-      newWarpsPerCTA[1] = numWarps;
-      break;
+      assert(false);
     default:
       return failure();
     }
