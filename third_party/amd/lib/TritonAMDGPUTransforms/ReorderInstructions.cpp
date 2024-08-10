@@ -142,8 +142,8 @@ public:
         found = true;
 
       SmallVector<Operation *> dfg = backwardSet.takeVector();
-      // llvm::erase_if(
-      //     dfg, [&](Operation *op) { return !ipoint->isBeforeInBlock(op); });
+      llvm::erase_if(
+          dfg, [&](Operation *op) { return !ipoint->isBeforeInBlock(op); });
       // Move ops to insertion point.
       for (auto *dfgop : llvm::reverse(dfg))
         dfgop->moveAfter(block, ipoint);
