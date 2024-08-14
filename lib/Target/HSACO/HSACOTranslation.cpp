@@ -81,6 +81,15 @@
 #include <memory>
 #include <random>
 #include <iterator>
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Support/SourceMgr.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/StandardInstrumentations.h"
+// #include "llvm/CodeGen/BackendUtil.h"
+#include "llvm/Support/TargetSelect.h"
+
 
 namespace {
 
@@ -134,6 +143,44 @@ std::string generate_amdgcn_assembly(llvm::Module *module,
 
   if (machine == nullptr)
     return "";
+
+  llvm::PassBuilder passBuilder(machine.get());
+  llvm::LoopAnalysisManager loopAM;
+  llvm::FunctionAnalysisManager functionAM;
+  llvm::CGSCCAnalysisManager cgsccAM;
+  llvm::ModuleAnalysisManager moduleAM;
+
+  passBuilder.registerModuleAnalyses(moduleAM);
+  passBuilder.registerCGSCCAnalyses(cgsccAM);
+  passBuilder.registerFunctionAnalyses(functionAM);
+  passBuilder.registerLoopAnalyses(loopAM);
+  passBuilder.crossRegisterProxies(loopAM, functionAM, cgsccAM, moduleAM);
+
+  llvm::ModulePassManager MPM;
+
+  std::string pipelineDesc =
+      "amdgpu-propagate-attributes-late,amdgpu-unify-metadata,amdgpu-printf-"
+      "runtime-binding,amdgpu-always-inline,amdgpu-lower-module-lds,amdgpu-"
+      "lower-ctor-dtor";
+
+  if (auto err = passBuilder.parsePassPipeline(MPM, pipelineDesc)) {
+    llvm::errs() << "Failed to parse pass pipeline: " << toString(std::move(err)) << "\n";
+    return "";
+  }
+
+  pipelineDesc.clear();
+  pipelineDesc =
+      "amdgpu-simplifylib,amdgpu-usenative,amdgpu-promote-"
+      "alloca,amdgpu-promote-alloca-to-vector,amdgpu-lower-kernel-attributes,"
+      "amdgpu-propagate-attributes-early,amdgpu-promote-kernel-arguments,"
+      "amdgpu-unify-divergent-exit-nodes,amdgpu-atomic-optimizer";
+  if (auto err = passBuilder.parsePassPipeline(MPM, pipelineDesc)) {
+    llvm::errs() << "Failed to parse pass pipeline: " << toString(std::move(err)) << "\n";
+    return "";
+  }
+
+  // Run the pass manager
+  MPM.run(*module, moduleAM);
 
   llvm::SmallVector<char, 0> buffer;
   llvm::legacy::PassManager pass;
