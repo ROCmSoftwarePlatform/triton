@@ -113,3 +113,13 @@ def patch_triton_compiler():
     run_bash_command(f"sed -i 's/import torch/return True/g' {hip_driver_filename}")
     run_bash_command(f"sed -i 's/device = self.get_current_device()/return GPUTarget(\"hip\", \"{target.arch}\", 64)/g' {hip_driver_filename}")
     run_bash_command(f"sed -i 's/import torch/return False/g' {cuda_driver_filename}")
+
+
+def format_output(unformatted):
+    if unformatted < 0.0001:
+        formatted = "{:.3e}".format(unformatted)
+    elif unformatted > 1000:
+        formatted = "{:.1f}".format(unformatted)
+    else:
+        formatted = "{:.2f}".format(unformatted)
+    return formatted

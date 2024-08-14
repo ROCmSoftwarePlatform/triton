@@ -86,6 +86,13 @@ def get_default_config():
     return full_configs[0]
 
 
+def infer_k_dim(nonkdim, elemBytes_a):
+    if nonkdim == 16:
+        return 32 if elemBytes_a == 1 else 16
+    elif nonkdim == 32:
+        return 16 if elemBytes_a == 1 else 8
+
+
 def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
     pruned_configs = []
 
@@ -107,6 +114,10 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
         num_stages = config.get("num_stages")
         matrix_instr_nonkdim = config.get("matrix_instr_nonkdim")
         kpack = config.get("kpack")
+        ## Need to skip the config if K dim is not large enough to include
+        ## mfma_k * kpack
+        if kpack * infer_k_dim(matrix_instr_nonkdim, elemBytes_a) > K:
+            continue
         if matrix_instr_nonkdim > mfma:
             continue
         if mfma == 4 and BLOCK_SIZE_K < 64:
@@ -151,12 +162,10 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
         if large_gemm:
             if BLOCK_SIZE_M < 64 or BLOCK_SIZE_N < 64:
                 continue
-            if BLOCK_SIZE_K < 64:
-                continue
             if num_warps < 4:
                 continue
             # check if tiling is integer multiple of GEMM size because we have no boundary check
-            if M % BLOCK_SIZE_M != 0 or N % BLOCK_SIZE_N != 0 or K % BLOCK_SIZE_K != 0:
+            if M % BLOCK_SIZE_M != 0 or N % BLOCK_SIZE_N != 0:
                 continue
 
         pruned_configs.append(config)
@@ -668,16 +677,6 @@ def type_name_to_bytes(ty_name):
         sys.exit(1)
 
 
-def format_output(unformatted):
-    if unformatted < 0.0001:
-        formatted = "{:.3e}".format(unformatted)
-    elif unformatted > 1000:
-        formatted = "{:.1f}".format(unformatted)
-    else:
-        formatted = "{:.2f}".format(unformatted)
-    return formatted
-
-
 def get_rocm_version():
     torch_hip_version = torch.version.hip
     vers = torch_hip_version.split('.')
@@ -873,7 +872,7 @@ def main():
 
         # write best config to tuning_results.yaml
         if run_bench:
-            print(f"{formatted_tflops}     {minTime}")
+            print(f"{formatted_tflops}     {minTime}   {bestConfig_compact_str}")
             f_results.write(f"{formatted_tflops},{minTime}\n")
 
         sizeDict = {
@@ -887,7 +886,7 @@ def main():
         if not run_bench:
             f_results.write("- " + str(sizeDict) + " ")
             f_results.write(
-                f'# TFLOPS: {formatted_tflops} time(us): {minTime}\n')
+                f'# {bestConfig_compact_str}\n')
 
         # remove generated files if asked to
         if not keepTmp:
