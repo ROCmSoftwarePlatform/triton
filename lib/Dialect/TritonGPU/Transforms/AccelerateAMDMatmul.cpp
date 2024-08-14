@@ -92,7 +92,11 @@ warpsPerTile(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
              SmallVector<int64_t, 2> shapePerWarp) {
   // TODO: needs to be updated with appropriate shapePerWarp etc.
   if (isTransposeChainDotPattern(dotOp)) {
-    return {(unsigned)numWarps, 1};
+    if (shape[0] >= shape[1]) {
+      return {(unsigned)numWarps, 1};
+    } else {
+      return {1, (unsigned)numWarps};
+    }
   }
 
   SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};

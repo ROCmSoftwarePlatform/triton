@@ -256,7 +256,13 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
 Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                   Value val, Value pred) {
 #if USE_ROCM
-  store(val, ptr);
+  rewriter.create<scf::IfOp>(
+      loc, pred,
+      [&](OpBuilder &builder, Location loc) {
+        auto storeOp = builder.create<LLVM::StoreOp>(loc, val, ptr);
+        builder.create<scf::YieldOp>(loc);
+      },
+      nullptr);
   return val;
 #else
   MLIRContext *ctx = rewriter.getContext();
@@ -275,7 +281,63 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                  Value pred) {
 #if USE_ROCM
-  return load(ptr);
+  auto ptrTy = ptr.getType().cast<LLVMPointerType>();
+  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
+  auto elemTy = ptrTy.getElementType();
+
+  auto width = elemTy.getIntOrFloatBitWidth();
+  auto loaded = rewriter.create<scf::IfOp>(
+      loc, pred,
+      [&](OpBuilder &builder, Location loc) {
+        auto loadVal = builder.create<LLVM::LoadOp>(loc, elemTy, ptr);
+        builder.create<mlir::scf::YieldOp>(loc, ValueRange({loadVal}));
+      },
+      [&](OpBuilder &builder, Location loc) {
+        Value falseVal = builder.create<arith::ConstantOp>(
+            loc, elemTy, builder.getZeroAttr(elemTy));
+        builder.create<mlir::scf::YieldOp>(loc, ValueRange({falseVal}));
+      });
+  return loaded.getResult(0);
+
+
+
+  // auto ptrTy = ptr.getType().cast<LLVMPointerType>();
+  // assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
+  // auto elemTy = ptrTy.getElementType();
+
+  // SmallVector<Type> vts;
+  // vts.push_back(elemTy);
+  // // auto vec_type = vec_ty(Type, 1);
+  // // Value vec_ts = undef(vec_type);
+  // // vec_ts = insert_element(vec_type, vec_ts, elemTy, i32_val(0));
+
+  // auto vec_ty = vec_ty(i1_ty, 1);
+  // Value vec_pred = undef(vec_ty);
+  // vec_pred = insert_element(vec_ty, vec_pred, pred, i32_val(0));
+
+  // auto v_ty = vec_ty(i1_ty, 1);
+  // Value vec_p = undef(v_ty);
+  // vec_p = insert_element(v_ty, vec_p, int_val(1, 0), i32_val(0));
+
+
+
+  // return rewriter.create<LLVM::MaskedLoadOp>(loc, vts, ptr, vec_pred, vec_p, 0);
+
+  // // return load(ptr);
+  // // auto loaded = rewriter.create<scf::IfOp>(loc, pred,
+  // //   [&](OpBuilder& builder, Location loc) {
+  // //     auto loadVal = load(ptr);
+  // //     // auto loadVal = builder.create<LLVM::LoadOp>(loc, ptr);
+  // //     builder.create<scf::YieldOp>(loc, ValueRange(loadVal));
+  // //   },
+  // //   [&](OpBuilder& builder, Location loc) {
+  // //     // Value zeroConst;
+  // //     auto loadVal = f32_val(0.0);
+  // //     // auto loadVal = load(ptr);
+  // //     builder.create<mlir::scf::YieldOp>(loc, ValueRange({loadVal}));
+  // //   }
+  // //   );
+  // // return loaded->getResult(0);
 #else
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = ptr.getType().cast<LLVMPointerType>();
