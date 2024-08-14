@@ -135,6 +135,14 @@ std::string generate_amdgcn_assembly(llvm::Module *module,
   if (machine == nullptr)
     return "";
 
+  std::string llvm_flag = mlir::triton::tools::getenv("TRITON_LLVM_FLAG");
+  if (!llvm_flag.empty()) {
+    std::vector<char *> args;
+    args.push_back((char *)("triton"));
+    args.push_back((char *)(llvm_flag.c_str()));
+    llvm::cl::ParseCommandLineOptions(args.size(), &args[0]);
+  }
+
   llvm::SmallVector<char, 0> buffer;
   llvm::legacy::PassManager pass;
   llvm::raw_svector_ostream stream(buffer);

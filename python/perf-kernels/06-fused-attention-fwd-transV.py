@@ -163,10 +163,9 @@ class _attention(torch.autograd.Function):
             kpack = 1
         else:
             ## D_HEAD = 128
-            ## For fp16, pick BLOCK_M=256, num_warps=8
-            ## For fp8, pick BLOCK_M=128, num_warps=4
+            ## Tuning for MI300
             ## TODO (zhanglx): add tuning infra for FA
-            BLOCK_M = 128 if TORCH_HAS_FP8E4 and q.dtype == torch.float8_e4m3fnuz else 256
+            BLOCK_M = 128
             BLOCK_N = 128
             waves_per_eu = 2
             num_warps = BLOCK_M // 32
