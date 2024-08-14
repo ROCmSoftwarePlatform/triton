@@ -835,9 +835,23 @@ def _canonicalize_boundary_check(boundary_check, block_shape):
     if boundary_check:
         if not hasattr(boundary_check, "__iter__"):
             boundary_check = [boundary_check]
+        # Support the following code:
+        #
+        #     boundary = tl.constexpr((1,0)) # For single element, use tl.constexpr((0,))
+        #     tl.load(block_ptr, boundary_check=boundary)
+        #
+        # boundary becomes [constexpr[(constexpr[1], constexpr[0])]] in this function
+        #
+        # Note: cannot use boundary = (1,0). It becomes tl.tensor in this case.
+        try:
+            boundary_check = [elem for elem in boundary_check[0].value]
+        except:
+            pass
         boundary_check = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in boundary_check]
-        for dim in boundary_check:
-            assert isinstance(dim, int) and 0 <= dim < len(block_shape)
+        for i, dim in enumerate(boundary_check):
+            assert isinstance(dim, int) and 0 <= dim < len(block_shape), \
+                f'Invalid boundary_check {boundary_check} at index {i}, value {dim=}. ' \
+                f'Requires: isinstance(dim, int) and 0 <= dim < {len(block_shape)=}'
         assert len(boundary_check) > 0
         assert len(boundary_check) == len(set(boundary_check)), "Duplicate dimension in `boundary_check`"
         return sorted(boundary_check)
