@@ -43,17 +43,19 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
   matchAndRewrite(triton::ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     unsigned numArguments = op.getNumOperands();
-
+    if (numArguments == 0) {
+      rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, TypeRange(), ValueRange(),
+                                                  op->getAttrs());
+      return success();
+    }
+    if (numArguments == 1) {
+      rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, *adaptor.getOperands().begin());
+      return success();
+    }
     // Currently, Triton kernel function always return nothing.
     // TODO(Superjomn) add support for non-inline device function
-    if (numArguments > 0) {
-      return rewriter.notifyMatchFailure(
-          op, "Only kernel function with nothing returned is supported.");
-    }
-
-    rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, TypeRange(), ValueRange(),
-                                                op->getAttrs());
-    return success();
+    return rewriter.notifyMatchFailure(
+        op, "Only kernel function with nothing returned is supported.");
   }
 };
 

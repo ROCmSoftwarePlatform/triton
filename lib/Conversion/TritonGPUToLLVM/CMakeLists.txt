@@ -73,3 +73,5 @@ add_mlir_library(ASMBuilder
   MLIRAnalysis
   MLIRLLVMDialect
 )
+
+add_subdirectory(ConversionTests)
