@@ -25,25 +25,34 @@ class BypassEpilogueSMEM : public mlir::RewritePattern {
 
 public:
   explicit BypassEpilogueSMEM(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::StoreOp::getOperationName(), 1, context) {}
+      : mlir::RewritePattern(MatchAnyOpTypeTag(), 1, context) {}
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
+    Value ptr, val, mask; 
+    RankedTensorType ptrType, valType;
+    triton::gpu::ConvertLayoutOp cvtOp;
 
-    auto stOp = dyn_cast<triton::StoreOp>(op);
-    if (!stOp)
+    if (auto stOp = dyn_cast<triton::StoreOp>(op)){
+       ptr = stOp.getPtr();
+       val = stOp.getValue();
+       mask = stOp.getMask();
+    } else if (auto atomicRMWOp =  dyn_cast<triton::AtomicRMWOp>(op)) {
+      ptr = atomicRMWOp.getPtr();
+      val = atomicRMWOp.getVal();
+      mask = atomicRMWOp.getMask();
+    } else {
       return mlir::failure();
-    Value ptr = stOp.getPtr();
-    Value val = stOp.getValue();
-    Value mask = stOp.getMask();
-    auto ptrType = ptr.getType().dyn_cast<RankedTensorType>();
-    auto valType = val.getType().dyn_cast<RankedTensorType>();
+    }
+
+    ptrType = ptr.getType().dyn_cast<RankedTensorType>();
+    valType = val.getType().dyn_cast<RankedTensorType>();
     if (!ptrType || !valType ||
         !ptrType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>() ||
         !valType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>())
       return mlir::failure();
 
-    auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(val.getDefiningOp());
+    cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(val.getDefiningOp());
     if (!cvtOp)
       return mlir::failure();
 
@@ -80,8 +89,18 @@ public:
           mask.getLoc(), newMaskType, mask);
     }
 
-    rewriter.replaceOpWithNewOp<triton::StoreOp>(
-        stOp, newPtr, newVal, newMask, stOp.getCache(), stOp.getEvict());
+    if (auto stOp = dyn_cast<triton::StoreOp>(op)) {
+       rewriter.replaceOpWithNewOp<triton::StoreOp>(
+           stOp, newPtr, newVal, newMask, stOp.getCache(), stOp.getEvict());
+    } else if (auto atomicRMWOp = dyn_cast<triton::AtomicRMWOp>(op)) {
+       auto result = atomicRMWOp.getResult();
+       auto resultType = result.getType().dyn_cast<RankedTensorType>();
+       auto newResultType = RankedTensorType::get(
+         resultType.getShape(), resultType.getElementType(), newEncoding);
+       rewriter.replaceOpWithNewOp<triton::AtomicRMWOp>(
+           atomicRMWOp, newResultType, atomicRMWOp.getAtomicRmwOpAttr(), newPtr, newVal, newMask, atomicRMWOp.getSemAttr(), atomicRMWOp.getScopeAttr());
+    }
+
     return mlir::success();
   }
 };
