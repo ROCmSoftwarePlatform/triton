@@ -13,18 +13,28 @@ import triton.language as tl
 @triton.jit
 def matmul_kernel_splitK(
     # Pointers to matrices
-    a_ptr, b_ptr, c_ptr,
+    a_ptr,
+    b_ptr,
+    c_ptr,
     # Matrix dimensions
-    M, N, K,
+    M,
+    N,
+    K,
     # The stride variables represent how much to increase the ptr by when moving by 1
     # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
     # by to get the element one row down (A has M rows).
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
+    stride_am,
+    stride_ak,
+    stride_bk,
+    stride_bn,
+    stride_cm,
+    stride_cn,
     # Meta-parameters
-    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
-    SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    SPLIT_K: tl.constexpr,
+    EVEN_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     ACTIVATION: tl.constexpr,
 ):
@@ -111,18 +121,28 @@ def matmul_kernel_splitK(
 @triton.jit
 def matmul_kernel(
     # Pointers to matrices
-    a_ptr, b_ptr, c_ptr,
+    a_ptr,
+    b_ptr,
+    c_ptr,
     # Matrix dimensions
-    M, N, K,
+    M,
+    N,
+    K,
     # The stride variables represent how much to increase the ptr by when moving by 1
     # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
     # by to get the element one row down (A has M rows).
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
+    stride_am,
+    stride_ak,
+    stride_bk,
+    stride_bn,
+    stride_cm,
+    stride_cn,
     # Meta-parameters
-    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr, EVEN_K: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
+    EVEN_K: tl.constexpr,
     ACTIVATION: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
@@ -219,44 +239,18 @@ def matmul(a, b, block_m, block_n, block_k, group_m, split_k, num_warps, activat
     # 1D launch kernel where each block gets its own program.
 
     if need_split_k(M, N, K):
-        grid_splitK = lambda META: (
-            triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
-            META['SPLIT_K']
-        )
-        matmul_kernel_splitK[grid_splitK](
-            a, b, c,
-            M, N, K,
-            a.stride(0), a.stride(1),
-            b.stride(0), b.stride(1),
-            c.stride(0), c.stride(1),
-            BLOCK_SIZE_M = block_m, 
-            BLOCK_SIZE_N = block_n, 
-            BLOCK_SIZE_K = block_k,
-            GROUP_SIZE_M = group_m,
-            SPLIT_K = split_k,
-            num_warps = num_warps,
-            num_stages = 1,
-            ACTIVATION=activation
-        )
+        grid_splitK = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), META[
+            'SPLIT_K'])
+        matmul_kernel_splitK[grid_splitK](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
+                                          c.stride(0), c.stride(1), BLOCK_SIZE_M=block_m, BLOCK_SIZE_N=block_n,
+                                          BLOCK_SIZE_K=block_k, GROUP_SIZE_M=group_m, SPLIT_K=split_k,
+                                          num_warps=num_warps, num_stages=1, ACTIVATION=activation)
 
     else:
-        grid = lambda META: (
-            triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
-        )
-        matmul_kernel[grid](
-            a, b, c,
-            M, N, K,
-            a.stride(0), a.stride(1),
-            b.stride(0), b.stride(1),
-            c.stride(0), c.stride(1),
-            BLOCK_SIZE_M = block_m, 
-            BLOCK_SIZE_N = block_n, 
-            BLOCK_SIZE_K = block_k,
-            GROUP_SIZE_M = group_m,
-            num_warps = num_warps,
-            num_stages = 1,
-            ACTIVATION=activation
-        )
+        grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
+        matmul_kernel[grid](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0),
+                            c.stride(1), BLOCK_SIZE_M=block_m, BLOCK_SIZE_N=block_n, BLOCK_SIZE_K=block_k,
+                            GROUP_SIZE_M=group_m, num_warps=num_warps, num_stages=1, ACTIVATION=activation)
 
     return c
 

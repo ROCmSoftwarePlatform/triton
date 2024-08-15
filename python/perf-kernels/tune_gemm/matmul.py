@@ -12,10 +12,9 @@ import yaml
 import os
 import subprocess
 
-
-
 # global flag to indicate whether using the full tuing space
 tuning_full_space = True
+
 
 # pruned some unreasonable config
 def prune_configs(configs, named_args):
@@ -33,9 +32,9 @@ def prune_configs(configs, named_args):
         BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K =\
             kw["BLOCK_SIZE_M"], kw["BLOCK_SIZE_N"], kw["BLOCK_SIZE_K"]
         SPLIT_K = kw["SPLIT_K"]
-        if SIZE_M <=32 and BLOCK_SIZE_M != 32:
+        if SIZE_M <= 32 and BLOCK_SIZE_M != 32:
             continue
-        if SIZE_N <=32 and BLOCK_SIZE_N != 32:
+        if SIZE_N <= 32 and BLOCK_SIZE_N != 32:
             continue
         # skip large split_k when not necessary
         if SPLIT_K != 1 and not need_split_k(SIZE_M, SIZE_N, SIZE_K):
@@ -67,7 +66,12 @@ def get_full_tuning_space(use_split_k):
                     for group_m in group_m_range:
                         for split_k in split_k_range:
                             for num_stages in num_stage_range:
-                                configs.append(triton.Config({'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': block_k, 'GROUP_SIZE_M': group_m, 'SPLIT_K': split_k}, num_stages=num_stages, num_warps=num_warps))
+                                configs.append(
+                                    triton.Config(
+                                        {
+                                            'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': block_k,
+                                            'GROUP_SIZE_M': group_m, 'SPLIT_K': split_k
+                                        }, num_stages=num_stages, num_warps=num_warps))
 
     return configs
 
@@ -78,26 +82,34 @@ def get_full_tuning_space(use_split_k):
 #   - An auto-tuning *key* whose change in values will trigger evaluation of all the
 #       provided configs
 @triton.autotune(
-    configs= get_full_tuning_space(True) if tuning_full_space else [
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 8}, num_stages=1, num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 10}, num_stages=1, num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 8}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 10}, num_stages=1, num_warps=1),
+    configs=get_full_tuning_space(True) if tuning_full_space else [
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 8},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 10},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 8},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 10},
+                      num_stages=1, num_warps=1),
     ],
     key=['M', 'N', 'K'],
-    prune_configs_by={
-        'early_config_prune': prune_configs,
-        'perf_model': None,
-        "top_k": None
-    },
+    prune_configs_by={'early_config_prune': prune_configs, 'perf_model': None, "top_k": None},
 )
 @triton.heuristics({
     'EVEN_K': lambda args: args['K'] % (args['BLOCK_SIZE_K'] * args['SPLIT_K']) == 0,
@@ -105,18 +117,28 @@ def get_full_tuning_space(use_split_k):
 @triton.jit
 def matmul_kernel_splitK(
     # Pointers to matrices
-    a_ptr, b_ptr, c_ptr,
+    a_ptr,
+    b_ptr,
+    c_ptr,
     # Matrix dimensions
-    M, N, K,
+    M,
+    N,
+    K,
     # The stride variables represent how much to increase the ptr by when moving by 1
     # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
     # by to get the element one row down (A has M rows).
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
+    stride_am,
+    stride_ak,
+    stride_bk,
+    stride_bn,
+    stride_cm,
+    stride_cn,
     # Meta-parameters
-    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
-    SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    SPLIT_K: tl.constexpr,
+    EVEN_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     ACTIVATION: tl.constexpr,
 ):
@@ -221,23 +243,15 @@ def matmul(a, b, activation=""):
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
 
-    grid_splitK = lambda META: (
-        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
-        META['SPLIT_K']
-    )
-    matmul_kernel_splitK[grid_splitK](
-        a, b, c,
-        M, N, K,
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-        ACTIVATION=activation
-    )
+    grid_splitK = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), META[
+        'SPLIT_K'])
+    matmul_kernel_splitK[grid_splitK](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0),
+                                      c.stride(1), ACTIVATION=activation)
 
     return c
 
 
-def test_correctness(M, N, K, datatype = torch.float16):
+def test_correctness(M, N, K, datatype=torch.float16):
     torch.manual_seed(0)
     a = torch.randn((M, K), device='cuda', dtype=datatype)
     b = torch.randn((K, N), device='cuda', dtype=datatype)
@@ -263,9 +277,10 @@ def run_speed(M, N, K, datatype, use_rocprof, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
     return min_ms
 
+
 def run_bash_command(commandstring):
     #print( commandstring )
-    proc = subprocess.run(commandstring, shell=True, check=True, executable='/bin/bash', stdout = subprocess.PIPE)
+    proc = subprocess.run(commandstring, shell=True, check=True, executable='/bin/bash', stdout=subprocess.PIPE)
     return proc.stdout.splitlines()
 
 
@@ -279,15 +294,19 @@ def parse_args():
     parser.add_argument("-n", type=int, default=0)
     parser.add_argument("-k", type=int, default=0)
     parser.add_argument("-dtype", type=str, default='fp16', help="Input data type, default is fp16")
-    parser.add_argument("--specify_type", action='store_true', default=False, help="Whether user specify data type, default false")
-    parser.add_argument("--specify_size", action='store_true', default=False, help="Whether user specify input matrix size, default false")
+    parser.add_argument("--specify_type", action='store_true', default=False,
+                        help="Whether user specify data type, default false")
+    parser.add_argument("--specify_size", action='store_true', default=False,
+                        help="Whether user specify input matrix size, default false")
     parser.add_argument("--compare", action='store_true', default=False, help="Whether check result correctness")
     parser.add_argument("--gemm_size_file", type=str, default="", help='yaml file to indicate matrix size')
-    parser.add_argument("--rocprof", action='store_true', default=False, help='Use rocprof to measure kernel time, default uses do_bench()!')
+    parser.add_argument("--rocprof", action='store_true', default=False,
+                        help='Use rocprof to measure kernel time, default uses do_bench()!')
     parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
     args = parser.parse_args()
 
     return args
+
 
 def main():
     args = parse_args()
@@ -328,7 +347,6 @@ def main():
             K = sizes['K']
             mnks.append((M, N, K))
 
-
     for (m, n, k) in mnks:
         min_ms = run_speed(m, n, k, dtype, use_rocprof, 'triton')
 
@@ -340,7 +358,7 @@ def main():
         best_config = matmul_kernel_splitK.get_best_config()
 
         if use_rocprof:
-            dtype_str = 'fp16' if (not args.specify_type) else args.dtype 
+            dtype_str = 'fp16' if (not args.specify_type) else args.dtype
             block_m = best_config.kwargs['BLOCK_SIZE_M']
             block_n = best_config.kwargs['BLOCK_SIZE_N']
             block_k = best_config.kwargs['BLOCK_SIZE_K']
@@ -356,10 +374,11 @@ def main():
                         -block_m {block_m} -block_n {block_n} -block_k {block_k} \
                         -group_m {group_m} -split_k {split_k} -num_warps {num_warps} \
                         -dtype {dtype_str}'
+
             prof_cmd = f'rocprof --stats {run_cmd}'
             run_bash_command(prof_cmd)
 
-            parse_result_cmd = f'sed -n \'/matmul_kernel/p\' results.stats.csv | awk -F \',\' \'{{print $4}}\''
+            parse_result_cmd = 'sed -n \'/matmul_kernel/p\' results.stats.csv | awk -F \',\' \'{print $4}\''
             parse_outputs = run_bash_command(parse_result_cmd)
             min_ms = int(parse_outputs[0]) / 1000000
 
