@@ -108,7 +108,6 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
         num_warps = config.get("num_warps")
         num_stages = config.get("num_stages")
         matrix_instr_nonkdim = config.get("matrix_instr_nonkdim")
-        kpack = config.get("kpack")
         if matrix_instr_nonkdim > mfma:
             continue
         if mfma == 4 and BLOCK_SIZE_K < 64:

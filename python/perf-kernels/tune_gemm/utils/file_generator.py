@@ -311,7 +311,6 @@ from icache_flush import icache_flush
     # call all matmul_xxx functions
     idx = 0
     runs = iters if run_bench else 200
-    call_icache_flush = 'icache_flush()' if icache_flush else ''
     for config in configs:
         configStr = gen_configStr(config)
         matmul_call_str = f"""

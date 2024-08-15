@@ -29,8 +29,7 @@ def prune_configs(configs, named_args):
     pruned_configs = []
     for config in configs:
         kw = config.kwargs
-        BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K =\
-            kw["BLOCK_SIZE_M"], kw["BLOCK_SIZE_N"], kw["BLOCK_SIZE_K"]
+        BLOCK_SIZE_M, BLOCK_SIZE_N = kw["BLOCK_SIZE_M"], kw["BLOCK_SIZE_N"]
         SPLIT_K = kw["SPLIT_K"]
         if SIZE_M <= 32 and BLOCK_SIZE_M != 32:
             continue
