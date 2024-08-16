@@ -45,7 +45,7 @@ The following `options` are supported in the tuning mode
   - `-dtype_a dtype`, `-dtype_b dtype`, and `-dtype_c dtype`: input and output element type.
   - Supported `dtype`: fp16 (default), bf16, fp8, bf8, int8, int32, fp32
 - Parallel compilation of kernels:
-  - `num_threads n` controls that n threads will
+  - `--num_threads n` controls that n threads will
   be used in the compilation stage. The default value is 32.
   - `--no_warmup` can be used to skip the compilation stage. Thus kernels will be
   compiled during the profiling stage. This increases tuning time. But it's
@@ -136,7 +136,7 @@ The supported `options` are as followings
 - `-dtype_a dtype`, `-dtype_b dtype`, and `-dtype_c dtype`: same as tuning mode.
 - `--iters n` controls the number of iterations to run the kernel.
 The default value is 1000.
-- `--icahe`: same as tuning mode
+- `--icache_flush`: same as tuning mode
 - `--rotating_tensor SIZE`: same as tuning mode
 
 
