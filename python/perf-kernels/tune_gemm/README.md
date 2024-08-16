@@ -150,6 +150,22 @@ task. This will save invocation overhead of the profiler.
 
 For detailed implementation, please refer to the changelog of each version.
 
+### Dependency graph
+
+The following graph depicts the dependency between Python modules:
+```mermaid
+graph TD;
+    one_config.py --> tune_gemm.py
+    tune_gemm.py --> matmul_kernel.py
+    tune_gemm.py --> utils/file_generator.py
+    tune_gemm.py --> utils/utils.py
+    utils/file_generator.py --> utils/utils.py
+    utils/file_generator.py -.-> icache_flush.py
+```
+
+`utils/file_generator.py` doesn't import `icache_flush.py` but it generates kernels that can import
+`icache_flush.py`.
+
 
 # Changelog
 
