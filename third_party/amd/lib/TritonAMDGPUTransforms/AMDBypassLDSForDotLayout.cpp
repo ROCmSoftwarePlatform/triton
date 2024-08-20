@@ -160,7 +160,8 @@ triton::LoadOp getLoadInst(Operation *op, ModuleOp &mod) {
   // from global memory (applicable for dot ops that don't depend on other dot
   // ops). This condition can be lifted if necessary.
   // assert(loadOpsVec.size() == 1);
-  //llvm::outs() << "number of loads in DF chain: " << loadOpsVec.size() << "\n";
+  // llvm::outs() << "number of loads in DF chain: " << loadOpsVec.size() <<
+  // "\n";
   return loadOpsVec[2];
 }
 
@@ -217,9 +218,14 @@ public:
     auto shape = dstType.getShape();
     newOrder[0] = 1;
     newOrder[1] = 0;
+
+    const unsigned targetLoadBitWidth = 128;
+    const unsigned elemBitWidth =
+        srcType.getElementType().getIntOrFloatBitWidth();
+
     switch (shape[kDim]) {
     case 128:
-      newSizePerThread[0] = 8;
+      newSizePerThread[0] = targetLoadBitWidth / elemBitWidth;
       newSizePerThread[1] = 1;
       newThreadsPerWarp[0] = 16;
       newThreadsPerWarp[1] = 4;
@@ -245,6 +251,9 @@ public:
     auto loadType = dyn_cast<RankedTensorType>(loadInst.getResult().getType());
     if (!loadType || loadType.getEncoding() == newBlockedEncoding)
       return failure();
+
+    assert(loadType.getElementType().getIntOrFloatBitWidth() == elemBitWidth &&
+           "data type unexpectedly changing bitwidth between load and dot");
 
     convertLayout(newBlockedEncoding, (Operation *)loadInst);
     if (failed(mlir::verify(mod))) {
