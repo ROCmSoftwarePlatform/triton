@@ -162,7 +162,7 @@ triton::LoadOp getLoadInst(Operation *op, ModuleOp &mod) {
   // assert(loadOpsVec.size() == 1);
   // llvm::outs() << "number of loads in DF chain: " << loadOpsVec.size() <<
   // "\n";
-  return loadOpsVec[2];
+  return loadOpsVec.back();
 }
 
 class BypassLDSForDotLayout : public mlir::RewritePattern {
