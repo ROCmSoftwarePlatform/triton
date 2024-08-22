@@ -249,7 +249,7 @@ public:
     case 64:
     case 32:
     case 16:
-      assert(false);
+      assert(false && "BLOCK_K must be 128 for fp16 and 256 for int8/fp8");
     default:
       return failure();
     }
