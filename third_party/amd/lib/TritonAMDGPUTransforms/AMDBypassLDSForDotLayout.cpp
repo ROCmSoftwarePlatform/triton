@@ -224,6 +224,26 @@ public:
         srcType.getElementType().getIntOrFloatBitWidth();
 
     switch (shape[kDim]) {
+    case 1024:
+      newSizePerThread[0] = targetLoadBitWidth / elemBitWidth;
+      newSizePerThread[1] = 1;
+      newThreadsPerWarp[0] = 64;
+      newThreadsPerWarp[1] = 1;
+      newWarpsPerCTA[0] = 1;
+      newWarpsPerCTA[1] = numWarps;
+      newOrder[0] = 0;
+      newOrder[1] = 1;
+      break;
+    case 512:
+      newSizePerThread[0] = targetLoadBitWidth / elemBitWidth;
+      newSizePerThread[1] = 1;
+      newThreadsPerWarp[0] = shape[kDim] / newSizePerThread[0];
+      newThreadsPerWarp[1] = 64 / newThreadsPerWarp[0];
+      newWarpsPerCTA[0] = 1;
+      newWarpsPerCTA[1] = numWarps;
+      newOrder[0] = 0;
+      newOrder[1] = 1;
+      break;
     case 256:
       assert(elemBitWidth == 8 && "8 bit dtype should use BLOCK_K=256");
       newSizePerThread[0] = targetLoadBitWidth / elemBitWidth;
