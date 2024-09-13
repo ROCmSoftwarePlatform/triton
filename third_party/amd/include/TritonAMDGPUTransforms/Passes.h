@@ -26,6 +26,7 @@ std::unique_ptr<Pass> createTritonAMDGPUOptimizeEpiloguePass();
 std::unique_ptr<Pass> createTritonAMDGPUCanonicalizePointersPass();
 
 std::unique_ptr<Pass> createTritonAMDGPUConvertToBufferOpsPass();
+std::unique_ptr<Pass> createTritonAMDGPUTransposeKOuterPass();
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION

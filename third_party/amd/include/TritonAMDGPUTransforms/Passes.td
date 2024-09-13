@@ -123,5 +123,17 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
 
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
+def TritonAMDGPUTransposeKOuter: Pass<"tritonamdgpu-transpose-kouter", "mlir::ModuleOp"> {
+  let summary = "Pre-transpose K-outer dot operand when transferring from global to LDS";
+
+  let description = [{
+    Pre-transpose K-outer dot operand when transferring from global to LDS. By enabling special
+    blocked and shared layout, this pass allows both efficient LDS write and read.
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUTransposeKOuterPass()";
+
+  let dependentDialects = [];
+}
 
 #endif
