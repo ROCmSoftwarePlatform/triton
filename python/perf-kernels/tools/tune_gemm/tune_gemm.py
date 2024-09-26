@@ -7,6 +7,7 @@ import json
 import os
 import glob
 import pytest
+import warnings
 
 import torch
 import triton
@@ -794,7 +795,7 @@ class TestRegression:
             with open('gemm-performance-report-reference.json', 'r') as ref_file:
                 self.reference_data = json.load(ref_file)
         except FileNotFoundError:
-            print("\nNo reference file found. There will be no regression detected!")
+            warnings.warn("No reference file found. There will be no regression detected!")
             self.reference_data = []
 
     @classmethod
@@ -857,4 +858,4 @@ class TestRegression:
             slowdown_threshold = 0.9
             assert performance_ratio > slowdown_threshold, f'Performance regressed by {(100.0 * (1.0 - performance_ratio)):.2f}% (threshold={((1.0 - slowdown_threshold) * 100.0 ):.2f}%)'
         else:
-            print("\nNo reference found for this regression test. No regression will be reported")
+            warnings.warn(f"No reference file found. There will be no regression detected for config = {config}")
