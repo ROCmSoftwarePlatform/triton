@@ -101,7 +101,7 @@ jobs:
       - name: Run Perf Kernel Regression Tests
         run: |
           [ -f gemm-performance-report.json ] && mv gemm-performance-report.json gemm-performance-report-reference.json
-          pytest ./python/perf-kernels/tools/tune_gemm/tune_gemm.py::TestRegression
+          pytest -vvv ./python/perf-kernels/tools/tune_gemm/test_regression.py
       - name: Store Regression Result
         uses: actions/upload-artifact@v4
         with:
