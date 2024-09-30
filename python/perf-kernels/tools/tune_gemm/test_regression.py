@@ -3,6 +3,7 @@ import tune_gemm
 import yaml
 import pytest
 import warnings
+from copy import deepcopy
 
 
 @pytest.mark.parametrize('config', [
@@ -94,7 +95,7 @@ class TestRegression:
         with open('gemm-performance-report.yaml', 'w') as out_file:
             yaml.safe_dump(self.test_results, out_file)
 
-    def test_matmul_performance_regression(self, config):
+    def test_matmul_performance_regression(self, config, record_property):
         # Get GPU ids
         gpus = [0]
         jobs = 1
@@ -114,7 +115,7 @@ class TestRegression:
         skipWarmup = False
         verbose_level = 0
 
-        M, N, K, col_a, col_b, runConfig = tune_gemm.process_item(config)
+        M, N, K, col_a, col_b, runConfig = tune_gemm.process_item(deepcopy(config))
 
         # Before tuning starts, clear cache and previously generated kernel files
         tune_gemm.run_bash_command("rm -rf ~/.triton/cache")
@@ -147,6 +148,8 @@ class TestRegression:
         if reference_run is not None:
             performance_ratio = tri_tflops / reference_run['tflops']
             slowdown_threshold = 0.97
-            assert performance_ratio > slowdown_threshold, f'Performance regressed by {(100.0 * (1.0 - performance_ratio)):.2f}% (threshold={((1.0 - slowdown_threshold) * 100.0 ):.2f}%)'
+            regression_percent = (100.0 * (1.0 - performance_ratio))
+            record_property("Performance difference (lower is better)", f"{regression_percent:.2f}%")
+            assert performance_ratio > slowdown_threshold, f'Performance regressed by {regression_percent:.2f}% (threshold={((1.0 - slowdown_threshold) * 100.0 ):.2f}%)'
         else:
-            warnings.warn(f"No reference file found. There will be no regression detected for config = {config}")
+            pytest.skip("No performance reference found!")
