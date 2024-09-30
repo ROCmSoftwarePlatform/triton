@@ -84,29 +84,6 @@ jobs:
           pip uninstall -y triton
           cd python
           pip install -v -e .
-      - name: Download performance reference
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          workflow: amd_perf_kernel_postmerge_tests.yml
-          workflow_search: false
-          workflow_conclusion: success
-          branch: main_perf
-          name: gemm-performance-report
-          name_is_regexp: false
-          check_artifacts: true
-          # Optional, search for the last workflow run whose stored an artifact named as in `name` input
-          # default false
-          search_artifacts: true
-          if_no_artifact_found: warn
-      - name: Run Perf Kernel Regression Tests
-        run: |
-          [ -f gemm-performance-report.json ] && mv gemm-performance-report.json gemm-performance-report-reference.json
-          pytest -vvv ./python/perf-kernels/tools/tune_gemm/test_regression.py
-      - name: Store Regression Result
-        uses: actions/upload-artifact@v4
-        with:
-          name: gemm-performance-report
-          path: gemm-performance-report.json
       - name: Run Perf Kernels Unit Tests
         run: |
           pytest -vvv ./python/perf-kernels/flash-attention.py

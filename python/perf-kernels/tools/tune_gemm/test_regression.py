@@ -1,6 +1,6 @@
 import tune_gemm
 
-import json
+import yaml
 import pytest
 import warnings
 
@@ -83,16 +83,16 @@ class TestRegression:
     def setup_class(self):
         self.test_results = []
         try:
-            with open('gemm-performance-report-reference.json', 'r') as ref_file:
-                self.reference_data = json.load(ref_file)
+            with open('gemm-performance-report-reference.yaml', 'r') as ref_file:
+                self.reference_data = yaml.safe_load(ref_file)
         except FileNotFoundError:
             warnings.warn("No reference file found. There will be no regression detected!")
             self.reference_data = []
 
     @classmethod
     def teardown_class(self):
-        with open('gemm-performance-report.json', 'w') as out_file:
-            json.dump(self.test_results, out_file)
+        with open('gemm-performance-report.yaml', 'w') as out_file:
+            yaml.safe_dump(self.test_results, out_file)
 
     def test_matmul_performance_regression(self, config):
         # Get GPU ids
