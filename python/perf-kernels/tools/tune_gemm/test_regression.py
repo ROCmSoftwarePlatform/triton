@@ -1,5 +1,6 @@
 import tune_gemm
 
+import os
 import yaml
 import pytest
 import warnings
@@ -115,9 +116,10 @@ class TestRegression:
         bias_vector = config.get('bias_vector', False)
         bias_size = M if bias_vector else 0
 
-        tune_gemm.run_bash_command("rm -rf ~/.triton/cache")
-        tune_gemm.run_bash_command(f"rm -rf {tune_gemm.get_filename_myKernels()}")
+        # Always compile if the user did not specify
+        os.environ.setdefault('TRITON_ALWAYS_COMPILE', '1')
 
+        tune_gemm.run_bash_command(f"rm -rf {tune_gemm.get_filename_myKernels()}")
         tune_gemm.generate_matmul_kernels([runConfig])
 
         gpus = [0]
