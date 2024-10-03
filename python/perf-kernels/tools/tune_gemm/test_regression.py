@@ -104,14 +104,14 @@ class TestRegression:
 
         M, N, K, col_a, col_b, runConfig = tune_gemm.process_item(deepcopy(config))
 
-        rotating_buffer_size = config.get('rotating_buffer_size', 0)
-        icache_flush = config.get('icache_flush', False)
-        iters = config.get('iters', 200)
-        init_type = config.get('init_type', 'randn')
+        rotating_buffer_size = config.setdefault('rotating_buffer_size', 0)
+        icache_flush = config.setdefault('icache_flush', False)
+        iters = config.setdefault('iters', 200)
+        init_type = config.setdefault('init_type', 'randn')
 
-        dtype_a = config.get('dtype_a', 'fp16')
-        dtype_b = config.get('dtype_b', 'fp16')
-        dtype_c = config.get('dtype_c', 'fp16')
+        dtype_a = config.setdefault('dtype_a', 'fp16')
+        dtype_b = config.setdefault('dtype_b', 'fp16')
+        dtype_c = config.setdefault('dtype_c', 'fp16')
 
         bias_vector = config.get('bias_vector', False)
         bias_size = M if bias_vector else 0
