@@ -161,7 +161,8 @@ class TestRegression:
     def test_overall_performance_difference(self, record_property):
         if len(self.test_perf_ratios) < 2:
             pytest.skip("Overall results will be tested if test count > 2")
-        perf_diff_mean = statistics.mean(self.test_perf_ratios)
+
+        perf_diff_mean = statistics.geometric_mean(self.test_perf_ratios)
         regression_percent = (100.0 * (1.0 - perf_diff_mean))
 
         record_property("Overall performance difference (mean)", f"{regression_percent:.2f}%")
