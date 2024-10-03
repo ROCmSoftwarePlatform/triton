@@ -11,7 +11,7 @@ class TestRegression:
 
     @classmethod
     def setup_class(self):
-        self.slowdown_threshold = 0.97
+        self.slowdown_threshold = 0.98
 
         self.test_results = []
         self.test_perf_ratios = []
@@ -101,28 +101,31 @@ class TestRegression:
     ], ids=lambda val: f"Config: {val}")
     def test_matmul_performance_regression(self, config, record_property):
 
-        gpus = [0]
-        jobs = 1
-        dtype_a = 'fp16'
-        dtype_b = 'fp16'
-        dtype_c = 'fp16'
-        rotating_buffer_size = 0
-        bias_vector = False
-        bias_size = M if bias_vector else 0
-        icache_flush = False
-        iters = 200
-        benchmark = True
-        init_type = 'randn'
-        num_threads = 32
-        skipWarmup = False
-        verbose_level = 0
-
         M, N, K, col_a, col_b, runConfig = tune_gemm.process_item(deepcopy(config))
+
+        rotating_buffer_size = config.get('rotating_buffer_size', 0)
+        icache_flush = config.get('icache_flush', False)
+        iters = config.get('iters', 200)
+        init_type = config.get('init_type', 'randn')
+
+        dtype_a = config.get('dtype_a', 'fp16')
+        dtype_b = config.get('dtype_b', 'fp16')
+        dtype_c = config.get('dtype_c', 'fp16')
+
+        bias_vector = config.get('bias_vector', False)
+        bias_size = M if bias_vector else 0
 
         tune_gemm.run_bash_command("rm -rf ~/.triton/cache")
         tune_gemm.run_bash_command(f"rm -rf {tune_gemm.get_filename_myKernels()}")
 
         tune_gemm.generate_matmul_kernels([runConfig])
+
+        gpus = [0]
+        jobs = 1
+        benchmark = True
+        skipWarmup = False
+        num_threads = 32
+        verbose_level = 0
 
         minTime, bestConfig, compile_time, profile_time, post_time = tune_gemm.tune_gemm_config(
             M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, [runConfig], benchmark, jobs, iters,
