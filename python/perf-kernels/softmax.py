@@ -39,6 +39,15 @@ def get_hip_autotune_config():
         triton.Config({'waves_per_eu': 4}, num_warps=4, num_stages=1),
         triton.Config({'waves_per_eu': 4}, num_warps=8, num_stages=1),
         triton.Config({'waves_per_eu': 4}, num_warps=16, num_stages=1),
+        triton.Config({'waves_per_eu': 1}, num_warps=4, num_stages=2),
+        triton.Config({'waves_per_eu': 1}, num_warps=8, num_stages=2),
+        triton.Config({'waves_per_eu': 1}, num_warps=16, num_stages=2),
+        triton.Config({'waves_per_eu': 2}, num_warps=4, num_stages=2),
+        triton.Config({'waves_per_eu': 2}, num_warps=8, num_stages=2),
+        triton.Config({'waves_per_eu': 2}, num_warps=16, num_stages=2),
+        triton.Config({'waves_per_eu': 4}, num_warps=4, num_stages=2),
+        triton.Config({'waves_per_eu': 4}, num_warps=8, num_stages=2),
+        triton.Config({'waves_per_eu': 4}, num_warps=16, num_stages=2),
     ]
 
 
@@ -51,52 +60,81 @@ def get_autotune_config():
 
 @triton.autotune(configs=get_autotune_config(), key=['n_rows', 'n_cols'], use_cuda_graph=True)
 @triton.jit
-def softmax_kernel_online(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols,
-                          BLOCK_SIZE: tl.constexpr):
+def softmax_kernel(
+    output_ptr,
+    input_ptr,
+    input_row_stride,
+    output_row_stride,
+    n_rows,
+    n_cols,
+    BLOCK_SIZE: tl.constexpr,
+):
 
     row_start = tl.program_id(0)
     row_idx = row_start
 
     #loop 1, find max and sum
+    loop_num = tl.cdiv(n_cols, BLOCK_SIZE) - 1
     m = -float('inf')  #Initial value of max
     row_sum = 0.0
     row_start_ptr = input_ptr + row_idx * input_row_stride
-    for b in tl.range(0, n_cols, BLOCK_SIZE):
-        col_offsets = b + tl.arange(0, BLOCK_SIZE)
+    for b in tl.range(0, loop_num, num_stages=2):
+        col_offsets = b * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         input_ptrs = row_start_ptr + col_offsets
-        mask = col_offsets < n_cols
-        row_block = tl.load(input_ptrs, mask=mask, other=-float('inf'), cache_modifier=".cg")  #load block
+        row_block = tl.load(input_ptrs, cache_modifier=".cg")  #load block
         m_p = tl.max(row_block, axis=0)  #find block max
         m_p = tl.maximum(m, m_p)  #Find new max across all blocks so far
-        row_sum = row_sum * tl.exp(m - m_p)  #Adjust previous sum
-        row_sum += tl.sum(tl.exp(row_block - m_p))  #Add to exponentiated sum of this block
+        row_sum = row_sum * tl.exp2((m - m_p) * 1.44269504)  #Adjust previous sum
+        row_sum += tl.sum(tl.exp2((row_block - m_p) * 1.44269504))  #Add to exponentiated sum of this block
         m = m_p  #save max
+
+    #Last iteration with masked load/store
+    col_offsets = loop_num * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    input_ptrs = row_start_ptr + col_offsets
+    mask = col_offsets < n_cols
+    row_block = tl.load(input_ptrs, mask=mask, other=-float('inf'), cache_modifier=".cg")  #load block
+    m_p = tl.max(row_block, axis=0)  #find block max
+    m_p = tl.maximum(m, m_p)  #Find new max across all blocks so far
+    row_sum = row_sum * tl.exp2((m - m_p) * 1.44269504)  #Adjust previous sum
+    row_sum += tl.sum(tl.exp2((row_block - m_p) * 1.44269504))  #Add to exponentiated sum of this block
+    m = m_p  #save max
 
     output_row_start_ptr = output_ptr + row_idx * output_row_stride
     #Loop 2
-    for b in tl.range(0, n_cols, BLOCK_SIZE):
-        col_offsets = b + tl.arange(0, BLOCK_SIZE)
+    for b in tl.range(0, loop_num, num_stages=2):
+        col_offsets = b * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         input_ptrs = row_start_ptr + col_offsets
-        mask = col_offsets < n_cols
-        row_block = tl.load(input_ptrs, mask=mask, other=-float('inf'), cache_modifier=".cg")  #load block
+        row_block = tl.load(input_ptrs, cache_modifier=".cg")  #load block
         #subtract, exponentiate and divide by sum
-        softmax_output = tl.exp(row_block - m) / row_sum
+        softmax_output = tl.exp2((row_block - m) * 1.44269504) / row_sum
         #store
         output_ptrs = output_row_start_ptr + col_offsets
-        tl.store(output_ptrs, softmax_output, mask=mask)
+        tl.store(output_ptrs, softmax_output)
+
+    #Last iteration with masked load/store
+    col_offsets = loop_num * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    input_ptrs = row_start_ptr + col_offsets
+    mask = col_offsets < n_cols
+    row_block = tl.load(input_ptrs, mask=mask, other=-float('inf'), cache_modifier=".cg")  #load block
+    #subtract, exponentiate and divide by sum
+    softmax_output = tl.exp2((row_block - m) * 1.44269504) / row_sum
+    #store
+    output_ptrs = output_row_start_ptr + col_offsets
+    tl.store(output_ptrs, softmax_output, mask=mask)
 
 
 def softmax(x):
     n_rows, n_cols = x.shape
 
     MAX_FUSED_SIZE = 65536 // x.element_size()
+    #MAX_FUSED_SIZE = 16384 // x.element_size()
     BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
     y = torch.empty_like(x)
 
     num_programs = n_rows
 
     grid = lambda meta: (num_programs, )
-    softmax_kernel_online[grid](
+    softmax_kernel[grid](
         y,
         x,
         x.stride(0),
