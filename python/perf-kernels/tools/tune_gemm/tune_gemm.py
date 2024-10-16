@@ -108,6 +108,7 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
         num_warps = config.get("num_warps")
         num_stages = config.get("num_stages")
         matrix_instr_nonkdim = config.get("matrix_instr_nonkdim")
+        EVEN_K = (K % BLOCK_SIZE_K == 0)
         if matrix_instr_nonkdim > mfma:
             continue
         if mfma == 4 and BLOCK_SIZE_K < 64:
@@ -149,10 +150,11 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
             continue
         # Skip small block sizes and num_warps for large gemm
         # For fp16 and f8, we want to only use BLOCK_SIZE >= 64
+        # We only want to use a small BLOCK_SIZE_K if not EVEN_K
         if large_gemm:
             if BLOCK_SIZE_M < 64 or BLOCK_SIZE_N < 64:
                 continue
-            if BLOCK_SIZE_K < 64:
+            if BLOCK_SIZE_K < 64 and EVEN_K:
                 continue
             if num_warps < 4:
                 continue
@@ -657,14 +659,14 @@ def main():
 
         # write best config to tuning_results.yaml
         if run_bench:
-            print(f"{formatted_tflops}     {minTime}")
+            print(f"{formatted_tflops}     {minTime}   {bestConfig_compact_str}")
             f_results.write(f"{formatted_tflops},{minTime}\n")
 
         sizeDict = {'M': M, 'N': N, 'K': K, 'rowMajorA': row_a_str, 'rowMajorB': row_b_str}
         sizeDict.update(bestConfig)
         if not run_bench:
             f_results.write("- " + str(sizeDict) + " ")
-            f_results.write(f'# TFLOPS: {formatted_tflops} time(us): {minTime}\n')
+            f_results.write(f'# {bestConfig_compact_str}\n')
 
         # remove generated files if asked to
         if not keepTmp:
