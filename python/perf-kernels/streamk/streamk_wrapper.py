@@ -195,7 +195,7 @@ B = torch.randn(n, k, device="cuda", dtype=torch.float16).T
 C = torch.zeros((m, n), device="cuda", dtype=A.dtype)
 bias = torch.zeros((m,), device="cuda", dtype=A.dtype)
 #bias = None
-BLK_M = 128
+BLK_M = 256
 BLK_N = 256
 BLK_K = 64
 total_blocks_M = triton.cdiv(m, BLK_M)
