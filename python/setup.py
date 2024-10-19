@@ -165,7 +165,7 @@ def get_llvm_package_info():
     with open("../cmake/llvm-hash.txt", "r") as llvm_hash_file:
         rev = llvm_hash_file.read(8)
     name = f"llvm-{rev}-{system_suffix}"
-    url = f"https://compute-artifactory.amd.com/artifactory/rocm-generic-local/triton-llvm/aotriton_pytorch_2.3/{name}.tar.gz"
+    url = f"https://compute-artifactory.amd.com/artifactory/rocm-generic-local/triton-llvm/3.0.0/{name}.tar.gz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
