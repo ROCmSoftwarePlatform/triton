@@ -25,6 +25,7 @@ def streamk_gemm(
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     NUM_SMS: tl.constexpr,
+    STREAMK_TILES: tl.constexpr,
     BIAS: tl.constexpr,
     EVEN_K: tl.constexpr,
 ):
@@ -34,19 +35,7 @@ def streamk_gemm(
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     iters_per_tile = tl.cdiv(K, BLOCK_SIZE_K)
     total_tiles = num_pid_m * num_pid_n
-    if NUM_SMS > 0 and total_tiles > NUM_SMS:
-        total_streamk_tiles = total_tiles % NUM_SMS
-        # total_streamk_tiles = total_streamk_tiles + NUM_SMS
-        total_full_tiles = total_tiles - total_streamk_tiles
-        total_streamk_iters = total_streamk_tiles * iters_per_tile
-        streamk_iters_pcu = total_streamk_iters // NUM_SMS
-        streamk_remainder_iters = total_streamk_iters % NUM_SMS
-    else:
-        total_full_tiles = total_tiles
-        total_streamk_tiles = 0
-        streamk_iters_pcu = 0
-        streamk_remainder_iters = 0
-        total_streamk_iters = 0
+    total_full_tiles = total_tiles - STREAMK_TILES
 
     acc_dtype = tl.float32 if C.type.element_ty != tl.int8 else tl.int32
 
@@ -97,12 +86,18 @@ def streamk_gemm(
         if BIAS:
             c += bias[:, None]
 
-        rm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-        rn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+        rm = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+        rn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+        rm = tl.max_contiguous(tl.multiple_of(rm, BLOCK_SIZE_M), BLOCK_SIZE_M)
+        rn = tl.max_contiguous(tl.multiple_of(rn, BLOCK_SIZE_N), BLOCK_SIZE_N)
         C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn
         mask = (rm < M)[:, None] & (rn < N)[None, :]
         tl.store(C_, c, mask=mask)
 
+    STREAMK_TILES = 0
+    total_streamk_iters = STREAMK_TILES * iters_per_tile
+    streamk_iters_pcu = total_streamk_iters // NUM_SMS
+    streamk_remainder_iters = total_streamk_iters % NUM_SMS
     start_iter = total_full_tiles * iters_per_tile + pid * streamk_iters_pcu + tl.minimum(pid, streamk_remainder_iters)
     last_iter = total_full_tiles * iters_per_tile + (pid + 1) * streamk_iters_pcu + tl.minimum(
         pid + 1, streamk_remainder_iters)
@@ -153,21 +148,25 @@ def streamk_gemm(
             rm1 = tl.max_contiguous(tl.multiple_of(rm1, BLOCK_SIZE_M), BLOCK_SIZE_M)
             rn1 = tl.max_contiguous(tl.multiple_of(rn1, BLOCK_SIZE_N), BLOCK_SIZE_N)
             P_ = P + pid * BLOCK_SIZE_M * BLOCK_SIZE_N + rm1[:, None] * BLOCK_SIZE_N + rn1[None, :]
-            tl.store(P_, acc, cache_modifier=".wt")
-            tl.store(locks + pid, 1, cache_modifier=".wt")
+            #   tl.store(P_, acc, cache_modifier=".wt")
+            #   tl.store(locks + pid, 1, cache_modifier=".wt")
+            tl.store(P_, acc)
+            tl.debug_barrier()
+            tl.atomic_xchg(locks + pid, 1)
         else:
             next_pid = pid + 1
             tile_iter_end = tile_iter + iters_per_tile
             end = end_iter
             while (end < tile_iter_end and next_pid < NUM_SMS):
-                while tl.load(locks + next_pid, cache_modifier=".cv", volatile=True) != 1:
+                while tl.atomic_cas(locks + next_pid, 1, 1) != 1:
+                    #  while tl.load(locks + next_pid, cache_modifier = ".cv", volatile=True) != 1:
                     pass
                 rm1 = tl.arange(0, BLOCK_SIZE_M)
                 rn1 = tl.arange(0, BLOCK_SIZE_N)
                 rm1 = tl.max_contiguous(tl.multiple_of(rm1, BLOCK_SIZE_M), BLOCK_SIZE_M)
                 rn1 = tl.max_contiguous(tl.multiple_of(rn1, BLOCK_SIZE_N), BLOCK_SIZE_N)
                 P_ = P + next_pid * BLOCK_SIZE_M * BLOCK_SIZE_N + rm1[:, None] * BLOCK_SIZE_N + rn1[None, :]
-                acc += tl.load(tl.multiple_of(P_, (1, 16)), cache_modifier=".cv")
+                acc += tl.load(tl.multiple_of(P_, (1, 16)))
                 end += streamk_iters_pcu + (next_pid < streamk_remainder_iters)
                 next_pid += 1
 
