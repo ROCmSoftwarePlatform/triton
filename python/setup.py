@@ -233,7 +233,7 @@ def get_triton_cache_path():
     return os.path.join(user_home, ".triton")
 
 
-def get_thirdparty_packages(packages: list):
+def get_thirdparty_packages(packages: list, keep=False):
     triton_cache_path = get_triton_cache_path()
     thirdparty_cmake_args = []
     for p in packages:
@@ -250,8 +250,9 @@ def get_thirdparty_packages(packages: list):
         if is_offline_build() and not input_defined:
             raise RuntimeError(f"Requested an offline build but {p.syspath_var_name} is not set")
         if not is_offline_build() and not input_defined and not input_compatible:
-            with contextlib.suppress(Exception):
-                shutil.rmtree(package_root_dir)
+            if not keep:
+                with contextlib.suppress(Exception):
+                    shutil.rmtree(package_root_dir)
             os.makedirs(package_root_dir, exist_ok=True)
             print(f'downloading and extracting {p.url} ...')
             with open_url(p.url) as response:
@@ -402,7 +403,7 @@ class CMakeBuild(build_ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
         # lit is used by the test suite
-        thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()])
+        thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()], keep=True)
         thirdparty_cmake_args += self.get_pybind11_cmake_args()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
