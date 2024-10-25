@@ -76,7 +76,6 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUStreamPipelineV2Pass, int, int);
   ADD_PASS_WRAPPER_0("add_transpose_kouter",
                      mlir::createTritonAMDGPUTransposeKOuterPass);
-
 }
 
 void addControlConstant(llvm::Module *module, const char *name,
