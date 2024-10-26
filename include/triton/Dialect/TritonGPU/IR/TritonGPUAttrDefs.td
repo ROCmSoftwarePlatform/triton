@@ -246,7 +246,8 @@ compared to 1*64 when the hasLeadingOffset is false.
     "unsigned":$maxPhase,
     ArrayRefParameter<"unsigned">:$order,
     "CTALayoutAttr":$CTALayout,
-    "bool":$hasLeadingOffset
+    "bool":$hasLeadingOffset,
+    "bool":$fromKOuterBlocked
   );
 
   let builders = [
@@ -256,7 +257,8 @@ compared to 1*64 when the hasLeadingOffset is false.
                      "ArrayRef<unsigned>":$order,
                      "CTALayoutAttr":$CTALayout), [{
         bool hasLeadingOffset = false; // default value
-        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, hasLeadingOffset);
+        bool fromKOuterBlocked = false; // default value
+        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, hasLeadingOffset, fromKOuterBlocked);
     }]>,
 
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
@@ -309,7 +311,8 @@ compared to 1*64 when the hasLeadingOffset is false.
           } else {
             SmallVector<unsigned int> newOrder(order);
             std::swap(newOrder[0], newOrder[1]);
-            return get(context, vecSize, perPhase, maxPhase, newOrder, CTALayout);
+            // return get(context, vecSize, perPhase, maxPhase, newOrder, CTALayout);
+            return $_get(context, vecSize, perPhase, maxPhase, newOrder, CTALayout, false, true);
           }
         }
 
@@ -433,7 +436,7 @@ compared to 1*64 when the hasLeadingOffset is false.
           llvm_unreachable("unsupported shared memory layout for MMAv3");
         }
 
-        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, true);
+        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, true, false);
     }]>
   ];
 

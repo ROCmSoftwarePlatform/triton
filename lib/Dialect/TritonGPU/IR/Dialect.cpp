@@ -1498,6 +1498,7 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
   bool hasLeadingOffset = false;
+  bool fromKOuterBlocked = false;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "vec") {
@@ -1528,6 +1529,10 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseBool(parser, attr, hasLeadingOffset, "hasLeadingOffset")
               .failed())
         return {};
+    } else if (attr.getName() == "fromKOuterBlocked") {
+      if (parseBool(parser, attr, fromKOuterBlocked, "fromKOuterBlocked")
+              .failed())
+        return {};
     } else {
       parser.emitError(parser.getNameLoc(), "unexpected key: ")
           << attr.getName().strref();
@@ -1542,7 +1547,8 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<SharedEncodingAttr>(parser.getContext(), vec,
                                                perPhase, maxPhase, order,
-                                               *CTALayout, hasLeadingOffset);
+                                               *CTALayout, hasLeadingOffset,
+                                               fromKOuterBlocked);
 }
 
 void SharedEncodingAttr::print(AsmPrinter &printer) const {
@@ -1553,7 +1559,8 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
           << ", order = [" << getOrder() << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getOrder().size());
-  printer << ", hasLeadingOffset = " << getHasLeadingOffset() << "}>";
+  printer << ", hasLeadingOffset = " << getHasLeadingOffset();
+  printer << ", fromKOuterBlocked = " << getFromKOuterBlocked() << "}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -2158,7 +2165,7 @@ struct TritonGPUInferLayoutInterface
       resultEncoding = SharedEncodingAttr::get(
           getDialect()->getContext(), enc.getVec(), enc.getPerPhase(),
           enc.getMaxPhase(), applyPermutation(invOrderUnsigned, enc.getOrder()),
-          *ctaLayout, enc.getHasLeadingOffset());
+          *ctaLayout, enc.getHasLeadingOffset(), enc.getFromKOuterBlocked());
       return success();
     }
 
