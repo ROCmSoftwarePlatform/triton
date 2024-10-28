@@ -1,0 +1,4919 @@
+	.text
+	.amdgcn_target "amdgcn-amd-amdhsa--gfx942"
+	.amdhsa_code_object_version 4
+	.globl	fused_moe_kernel
+	.p2align	8
+	.type	fused_moe_kernel,@function
+fused_moe_kernel:
+.Lfunc_begin0:
+	.cfi_sections .debug_frame
+	.cfi_startproc
+	.file	1 "/sglang/python/sglang/srt/layers/fused_moe" "fused_moe.py"
+	.loc	1 86 24 prologue_end
+	s_load_dwordx8 s[72:79], s[0:1], 0x48
+	.loc	1 90 22
+	s_abs_i32 s5, s2
+.Ltmp0:
+	.file	2 "/triton/python/triton/language" "standard.py"
+	.loc	2 40 22
+	s_waitcnt lgkmcnt(0)
+	s_add_i32 s3, s72, 0xff
+	.loc	2 40 28 is_stmt 0
+	s_ashr_i32 s4, s3, 31
+	s_lshr_b32 s4, s4, 24
+	s_add_i32 s3, s3, s4
+	s_ashr_i32 s3, s3, 8
+.Ltmp1:
+	.loc	1 89 38 is_stmt 1
+	s_lshl_b32 s3, s3, 2
+	.loc	1 90 22
+	s_abs_i32 s4, s3
+	v_cvt_f32_u32_e32 v1, s4
+	s_sub_i32 s8, 0, s4
+.Ltmp2:
+	.loc	2 40 22
+	s_add_i32 s6, s74, 0xff
+	.loc	2 40 28 is_stmt 0
+	s_ashr_i32 s7, s6, 31
+.Ltmp3:
+	.loc	1 90 22 is_stmt 1
+	v_rcp_iflag_f32_e32 v1, v1
+.Ltmp4:
+	.loc	2 40 28
+	s_lshr_b32 s7, s7, 24
+	s_add_i32 s6, s6, s7
+.Ltmp5:
+	.loc	1 90 22
+	s_xor_b32 s7, s2, s3
+	v_mul_f32_e32 v1, 0x4f7ffffe, v1
+	v_cvt_u32_f32_e32 v1, v1
+.Ltmp6:
+	.loc	2 40 28
+	s_ashr_i32 s6, s6, 8
+.Ltmp7:
+	.loc	1 90 22
+	s_ashr_i32 s7, s7, 31
+	v_readfirstlane_b32 s9, v1
+	s_mul_i32 s8, s8, s9
+	s_mul_hi_u32 s8, s9, s8
+	s_add_i32 s9, s9, s8
+	s_mul_hi_u32 s8, s5, s9
+	s_mul_i32 s9, s8, s4
+	s_sub_i32 s5, s5, s9
+	s_add_i32 s10, s8, 1
+	s_sub_i32 s9, s5, s4
+	s_cmp_ge_u32 s5, s4
+	s_cselect_b32 s8, s10, s8
+	s_cselect_b32 s5, s9, s5
+	s_add_i32 s9, s8, 1
+	s_cmp_ge_u32 s5, s4
+	s_cselect_b32 s4, s9, s8
+	s_xor_b32 s4, s4, s7
+	s_sub_i32 s7, s4, s7
+	.loc	1 91 29
+	s_lshl_b32 s8, s7, 2
+	.loc	1 92 35
+	s_sub_i32 s4, s6, s8
+	.loc	1 92 48 is_stmt 0
+	s_min_i32 s6, s4, 4
+	.loc	1 94 40 is_stmt 1
+	s_abs_i32 s9, s6
+	v_cvt_f32_u32_e32 v1, s9
+	s_sub_i32 s10, 0, s9
+	s_mul_i32 s7, s7, s3
+	s_sub_i32 s2, s2, s7
+	v_rcp_iflag_f32_e32 v1, v1
+	s_abs_i32 s3, s2
+	s_xor_b32 s7, s2, s6
+	s_ashr_i32 s7, s7, 31
+	v_mul_f32_e32 v1, 0x4f7ffffe, v1
+	v_cvt_u32_f32_e32 v1, v1
+	.loc	1 86 24
+	s_load_dwordx2 s[4:5], s[0:1], 0x40
+	.loc	1 94 40
+	v_readfirstlane_b32 s11, v1
+	s_mul_i32 s10, s10, s11
+	s_mul_hi_u32 s10, s11, s10
+	s_add_i32 s11, s11, s10
+	s_mul_hi_u32 s10, s3, s11
+	s_mul_i32 s11, s10, s9
+	s_sub_i32 s3, s3, s11
+	s_add_i32 s12, s10, 1
+	s_sub_i32 s11, s3, s9
+	s_cmp_ge_u32 s3, s9
+	s_cselect_b32 s10, s12, s10
+	s_cselect_b32 s3, s11, s3
+	s_add_i32 s11, s10, 1
+	s_cmp_ge_u32 s3, s9
+	s_cselect_b32 s3, s11, s10
+	s_xor_b32 s3, s3, s7
+	s_sub_i32 s12, s3, s7
+	.loc	1 102 37
+	s_waitcnt lgkmcnt(0)
+	s_load_dword s3, s[4:5], 0x0
+	s_mul_i32 s4, s12, s6
+	s_sub_i32 s2, s2, s4
+	.loc	1 93 27
+	s_add_i32 s8, s2, s8
+	.loc	1 103 15
+	s_lshl_b32 s10, s8, 8
+	.loc	1 103 31 is_stmt 0
+	s_waitcnt lgkmcnt(0)
+	s_cmp_lt_i32 s10, s3
+	s_cbranch_scc0 .LBB0_187
+	.loc	1 86 24 is_stmt 1
+	s_load_dwordx4 s[4:7], s[0:1], 0x30
+	s_load_dwordx2 s[2:3], s[0:1], 0x20
+	.loc	1 105 56
+	v_bfe_u32 v1, v0, 3, 3
+	v_lshrrev_b32_e32 v2, 3, v0
+	v_and_or_b32 v6, v2, 56, v1
+	.loc	1 105 43 is_stmt 0
+	v_or_b32_e32 v2, s10, v6
+	.loc	1 106 48 is_stmt 1
+	v_ashrrev_i32_e32 v3, 31, v2
+	s_waitcnt lgkmcnt(0)
+	v_lshl_add_u64 v[8:9], v[2:3], 2, s[4:5]
+	.loc	1 105 56
+	v_lshrrev_b32_e32 v2, 4, v0
+	v_bfe_u32 v3, v0, 4, 2
+	v_and_b32_e32 v4, 16, v2
+	v_lshlrev_b32_e32 v1, 2, v3
+	.loc	1 106 48
+	s_ashr_i32 s11, s10, 31
+	v_mov_b32_e32 v7, 0
+	.loc	1 105 43
+	v_or3_b32 v10, v1, v4, s10
+	v_lshl_add_u64 v[12:13], s[10:11], 0, v[6:7]
+	.loc	1 106 48
+	v_ashrrev_i32_e32 v11, 31, v10
+	v_lshl_add_u64 v[12:13], v[12:13], 2, s[4:5]
+	v_lshl_add_u64 v[10:11], v[10:11], 2, s[4:5]
+	.loc	1 106 25 is_stmt 0
+	global_load_dword v20, v[8:9], off
+	global_load_dword v18, v[12:13], off offset:256
+	global_load_dword v42, v[12:13], off offset:512
+	global_load_dword v33, v[12:13], off offset:768
+	global_load_dwordx4 v[14:17], v[10:11], off
+	.loc	1 109 68 is_stmt 1
+	s_abs_i32 s14, s72
+	.loc	1 115 43
+	s_ashr_i32 s9, s8, 31
+	.loc	1 86 24
+	s_load_dwordx8 s[80:87], s[0:1], 0x0
+	.loc	1 109 23
+	s_lshl_b32 s88, s12, 8
+	.loc	1 109 68 is_stmt 0
+	s_sub_i32 s4, 0, s14
+	.loc	1 115 43 is_stmt 1
+	s_lshl_b64 s[0:1], s[8:9], 2
+	.loc	1 109 38
+	v_or_b32_e32 v19, s88, v6
+	.loc	1 115 43
+	s_add_u32 s0, s6, s0
+	.loc	1 109 38
+	v_or_b32_e32 v21, 64, v19
+	.loc	1 109 68 is_stmt 0
+	v_sub_u32_e32 v24, 0, v19
+	.loc	1 115 43 is_stmt 1
+	s_addc_u32 s1, s7, s1
+	.loc	1 109 38
+	v_or_b32_e32 v22, 0x80, v19
+	v_or_b32_e32 v23, 0xc0, v19
+	.loc	1 109 68 is_stmt 0
+	v_max_i32_e32 v31, v19, v24
+	v_sub_u32_e32 v19, 0, v21
+	v_max_i32_e32 v27, v21, v19
+	v_sub_u32_e32 v24, 0, v22
+	v_max_i32_e32 v21, v22, v24
+	.loc	1 112 58 is_stmt 1
+	v_lshlrev_b32_e32 v1, 4, v0
+	v_and_b32_e32 v50, 0x70, v1
+	.loc	1 137 12
+	;;#ASMSTART
+	v_cvt_pk_fp8_f32 v233, v7, v7
+	;;#ASMEND
+	v_lshrrev_b32_e32 v254, 8, v233
+	.loc	1 109 68
+	v_sub_u32_e32 v25, 0, v23
+	v_mov_b32_e32 v34, v233
+	v_mov_b32_e32 v5, v233
+	v_mov_b32_e32 v35, v233
+	v_mov_b32_e32 v6, v233
+	v_mov_b32_e32 v36, v233
+	v_mov_b32_e32 v7, v233
+	v_mov_b32_e32 v37, v233
+	v_mov_b32_e32 v9, v233
+	v_mov_b32_e32 v8, v254
+	v_mov_b32_e32 v13, v254
+	v_mov_b32_e32 v12, v254
+	.loc	1 106 25
+	s_waitcnt vmcnt(0)
+	scratch_store_dwordx4 off, v[14:17], off offset:164
+	global_load_dwordx4 v[14:17], v[10:11], off offset:128
+	s_waitcnt vmcnt(0)
+	scratch_store_dwordx4 off, v[14:17], off offset:148
+	global_load_dwordx4 v[14:17], v[10:11], off offset:256
+	s_waitcnt vmcnt(0)
+	scratch_store_dwordx4 off, v[14:17], off offset:132
+	global_load_dwordx4 v[14:17], v[10:11], off offset:384
+	s_waitcnt vmcnt(0)
+	scratch_store_dwordx4 off, v[14:17], off offset:116
+	global_load_dwordx4 v[14:17], v[10:11], off offset:512
+	s_waitcnt vmcnt(0)
+	scratch_store_dwordx4 off, v[14:17], off offset:100
+	global_load_dwordx4 v[94:97], v[10:11], off offset:640
+	global_load_dwordx4 v[90:93], v[10:11], off offset:768
+	global_load_dwordx4 v[86:89], v[10:11], off offset:896
+	.loc	1 109 68
+	v_cvt_f32_u32_e32 v17, s14
+	.loc	1 115 26
+	s_load_dword s8, s[0:1], 0x0
+	v_mov_b32_e32 v11, v254
+	v_mov_b32_e32 v10, v254
+	.loc	1 109 68
+	v_rcp_iflag_f32_e32 v17, v17
+	v_mov_b32_e32 v15, v254
+	.loc	1 115 26
+	s_waitcnt lgkmcnt(0)
+	s_ashr_i32 s9, s8, 31
+	.loc	1 124 40
+	s_lshl_b64 s[0:1], s[8:9], 2
+	.loc	1 109 68
+	v_mul_f32_e32 v17, 0x4f7ffffe, v17
+	v_cvt_u32_f32_e32 v19, v17
+	.loc	1 124 40
+	s_add_u32 s10, s2, s0
+	s_addc_u32 s11, s3, s1
+	.loc	1 107 30
+	v_cmp_gt_i32_e64 s[0:1], s75, v20
+	.loc	1 109 68
+	v_mul_lo_u32 v22, s4, v19
+	v_mul_hi_u32 v22, v19, v22
+	v_add_u32_e32 v19, v19, v22
+	.loc	1 112 31
+	v_lshrrev_b32_e32 v22, 31, v20
+	v_add_u32_e32 v20, v20, v22
+	v_ashrrev_i32_e32 v20, 1, v20
+	.loc	1 112 51 is_stmt 0
+	v_mad_u64_u32 v[162:163], s[2:3], v20, s76, v[50:51]
+	v_mov_b32_e32 v16, v254
+	v_mov_b32_e32 v14, v254
+	.loc	1 109 68 is_stmt 1
+	v_max_i32_e32 v17, v23, v25
+	.loc	1 112 8
+	v_ashrrev_i32_e32 v163, 31, v162
+	.loc	1 137 12
+	s_and_saveexec_b64 s[2:3], s[0:1]
+	s_cbranch_execz .LBB0_3
+	.loc	1 112 8
+	v_lshl_add_u64 v[6:7], s[80:81], 0, v[162:163]
+	.loc	1 137 12
+	global_load_dwordx4 v[34:37], v[6:7], off
+	s_waitcnt vmcnt(0)
+	v_lshrrev_b32_e32 v8, 24, v34
+	v_lshrrev_b32_e32 v5, 16, v34
+	v_lshrrev_b32_e32 v11, 8, v34
+	v_lshrrev_b32_e32 v10, 24, v35
+	v_lshrrev_b32_e32 v6, 16, v35
+	v_lshrrev_b32_e32 v13, 8, v35
+	v_lshrrev_b32_e32 v12, 24, v36
+	v_lshrrev_b32_e32 v7, 16, v36
+	v_lshrrev_b32_e32 v15, 8, v36
+	v_lshrrev_b32_e32 v14, 24, v37
+	v_lshrrev_b32_e32 v9, 16, v37
+	v_lshrrev_b32_e32 v16, 8, v37
+.LBB0_3:
+	.loc	1 0 12 is_stmt 0
+	s_or_b64 exec, exec, s[2:3]
+	v_mad_u64_u32 v[58:59], s[2:3], v31, v19, 0
+	v_mad_u64_u32 v[56:57], s[2:3], v27, v19, 0
+	v_mad_u64_u32 v[54:55], s[2:3], v21, v19, 0
+	v_mad_u64_u32 v[52:53], s[2:3], v17, v19, 0
+	.loc	1 112 31 is_stmt 1
+	v_lshrrev_b32_e32 v19, 31, v18
+	.loc	1 107 30
+	v_cmp_gt_i32_e64 s[2:3], s75, v18
+	.loc	1 112 31
+	v_add_u32_e32 v18, v18, v19
+	v_ashrrev_i32_e32 v18, 1, v18
+	.loc	1 112 51 is_stmt 0
+	v_mad_u64_u32 v[164:165], s[4:5], v18, s76, v[50:51]
+	.loc	1 112 8
+	v_ashrrev_i32_e32 v165, 31, v164
+	v_mov_b32_e32 v38, v233
+	v_mov_b32_e32 v20, v254
+	v_mov_b32_e32 v18, v233
+	v_mov_b32_e32 v19, v254
+	v_mov_b32_e32 v39, v233
+	v_mov_b32_e32 v24, v254
+	v_mov_b32_e32 v22, v233
+	v_mov_b32_e32 v23, v254
+	v_mov_b32_e32 v40, v233
+	v_mov_b32_e32 v28, v254
+	v_mov_b32_e32 v25, v233
+	v_mov_b32_e32 v26, v254
+	v_mov_b32_e32 v41, v233
+	v_mov_b32_e32 v32, v254
+	v_mov_b32_e32 v29, v233
+	v_mov_b32_e32 v30, v254
+	.loc	1 137 12 is_stmt 1
+	s_and_saveexec_b64 s[4:5], s[2:3]
+	s_cbranch_execz .LBB0_5
+	.loc	1 112 8
+	v_lshl_add_u64 v[18:19], s[80:81], 0, v[164:165]
+	.loc	1 137 12
+	global_load_dwordx4 v[38:41], v[18:19], off
+	s_waitcnt vmcnt(0)
+	v_lshrrev_b32_e32 v19, 24, v38
+	v_lshrrev_b32_e32 v18, 16, v38
+	v_lshrrev_b32_e32 v20, 8, v38
+	v_lshrrev_b32_e32 v23, 24, v39
+	v_lshrrev_b32_e32 v22, 16, v39
+	v_lshrrev_b32_e32 v24, 8, v39
+	v_lshrrev_b32_e32 v26, 24, v40
+	v_lshrrev_b32_e32 v25, 16, v40
+	v_lshrrev_b32_e32 v28, 8, v40
+	v_lshrrev_b32_e32 v30, 24, v41
+	v_lshrrev_b32_e32 v29, 16, v41
+	v_lshrrev_b32_e32 v32, 8, v41
+.LBB0_5:
+	.loc	1 0 12 is_stmt 0
+	s_or_b64 exec, exec, s[4:5]
+	.loc	1 112 31 is_stmt 1
+	v_lshrrev_b32_e32 v43, 31, v42
+	.loc	1 107 30
+	v_cmp_gt_i32_e64 s[4:5], s75, v42
+	.loc	1 112 31
+	v_add_u32_e32 v42, v42, v43
+	v_ashrrev_i32_e32 v42, 1, v42
+	.loc	1 112 51 is_stmt 0
+	v_mad_u64_u32 v[166:167], s[6:7], v42, s76, v[50:51]
+	.loc	1 0 0
+	s_bfe_i32 s9, s12, 0x10017
+	.loc	1 112 8
+	v_ashrrev_i32_e32 v167, 31, v166
+	v_mov_b32_e32 v46, v233
+	v_mov_b32_e32 v69, v254
+	v_mov_b32_e32 v67, v233
+	v_mov_b32_e32 v68, v254
+	v_mov_b32_e32 v47, v233
+	v_mov_b32_e32 v72, v254
+	v_mov_b32_e32 v70, v233
+	v_mov_b32_e32 v71, v254
+	v_mov_b32_e32 v48, v233
+	v_mov_b32_e32 v75, v254
+	v_mov_b32_e32 v73, v233
+	v_mov_b32_e32 v74, v254
+	v_mov_b32_e32 v49, v233
+	v_mov_b32_e32 v78, v254
+	v_mov_b32_e32 v76, v233
+	v_mov_b32_e32 v77, v254
+	.loc	1 137 12 is_stmt 1
+	s_and_saveexec_b64 s[6:7], s[4:5]
+	s_cbranch_execz .LBB0_7
+	.loc	1 112 8
+	v_lshl_add_u64 v[42:43], s[80:81], 0, v[166:167]
+	.loc	1 137 12
+	global_load_dwordx4 v[46:49], v[42:43], off
+	s_waitcnt vmcnt(0)
+	v_lshrrev_b32_e32 v68, 24, v46
+	v_lshrrev_b32_e32 v67, 16, v46
+	v_lshrrev_b32_e32 v69, 8, v46
+	v_lshrrev_b32_e32 v71, 24, v47
+	v_lshrrev_b32_e32 v70, 16, v47
+	v_lshrrev_b32_e32 v72, 8, v47
+	v_lshrrev_b32_e32 v74, 24, v48
+	v_lshrrev_b32_e32 v73, 16, v48
+	v_lshrrev_b32_e32 v75, 8, v48
+	v_lshrrev_b32_e32 v77, 24, v49
+	v_lshrrev_b32_e32 v76, 16, v49
+	v_lshrrev_b32_e32 v78, 8, v49
+.LBB0_7:
+	.loc	1 0 12 is_stmt 0
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 112 31 is_stmt 1
+	v_lshrrev_b32_e32 v42, 31, v33
+	.loc	1 107 30
+	v_cmp_gt_i32_e64 s[6:7], s75, v33
+	.loc	1 112 31
+	v_add_u32_e32 v33, v33, v42
+	.loc	1 0 0 is_stmt 0
+	v_lshrrev_b32_e32 v51, 6, v0
+	.loc	1 112 31
+	v_ashrrev_i32_e32 v33, 1, v33
+	.loc	1 112 51
+	v_mad_u64_u32 v[168:169], s[12:13], v33, s76, v[50:51]
+	.loc	1 112 8
+	v_ashrrev_i32_e32 v169, 31, v168
+	v_mov_b32_e32 v42, v233
+	v_mov_b32_e32 v54, v254
+	v_mov_b32_e32 v33, v233
+	v_mov_b32_e32 v52, v254
+	v_mov_b32_e32 v43, v233
+	v_mov_b32_e32 v60, v254
+	v_mov_b32_e32 v56, v233
+	v_mov_b32_e32 v58, v254
+	v_mov_b32_e32 v44, v233
+	v_mov_b32_e32 v63, v254
+	v_mov_b32_e32 v61, v233
+	v_mov_b32_e32 v62, v254
+	v_mov_b32_e32 v45, v233
+	v_mov_b32_e32 v66, v254
+	v_mov_b32_e32 v64, v233
+	v_mov_b32_e32 v65, v254
+	.loc	1 137 12 is_stmt 1
+	s_and_saveexec_b64 s[12:13], s[6:7]
+	s_cbranch_execz .LBB0_9
+	.loc	1 112 8
+	v_lshl_add_u64 v[42:43], s[80:81], 0, v[168:169]
+	.loc	1 137 12
+	global_load_dwordx4 v[42:45], v[42:43], off
+	s_waitcnt vmcnt(0)
+	v_lshrrev_b32_e32 v52, 24, v42
+	v_lshrrev_b32_e32 v33, 16, v42
+	v_lshrrev_b32_e32 v54, 8, v42
+	v_lshrrev_b32_e32 v58, 24, v43
+	v_lshrrev_b32_e32 v56, 16, v43
+	v_lshrrev_b32_e32 v60, 8, v43
+	v_lshrrev_b32_e32 v62, 24, v44
+	v_lshrrev_b32_e32 v61, 16, v44
+	v_lshrrev_b32_e32 v63, 8, v44
+	v_lshrrev_b32_e32 v65, 24, v45
+	v_lshrrev_b32_e32 v64, 16, v45
+	v_lshrrev_b32_e32 v66, 8, v45
+.LBB0_9:
+	.loc	1 0 12 is_stmt 0
+	s_or_b64 exec, exec, s[12:13]
+	.loc	1 109 68 is_stmt 1
+	v_mul_lo_u32 v59, v59, s14
+	v_sub_u32_e32 v31, v31, v59
+	v_subrev_u32_e32 v59, s14, v31
+	v_cmp_le_u32_e32 vcc, s14, v31
+	v_mul_lo_u32 v57, v57, s14
+	v_sub_u32_e32 v27, v27, v57
+	v_cndmask_b32_e32 v31, v31, v59, vcc
+	v_subrev_u32_e32 v59, s14, v31
+	v_cmp_le_u32_e32 vcc, s14, v31
+	v_subrev_u32_e32 v57, s14, v27
+	v_mul_lo_u32 v55, v55, s14
+	v_cndmask_b32_e32 v31, v31, v59, vcc
+	v_cmp_le_u32_e32 vcc, s14, v27
+	v_sub_u32_e32 v21, v21, v55
+	v_subrev_u32_e32 v55, s14, v21
+	v_cndmask_b32_e32 v27, v27, v57, vcc
+	v_subrev_u32_e32 v57, s14, v27
+	v_cmp_le_u32_e32 vcc, s14, v27
+	.loc	1 137 12
+	v_lshlrev_b16_e32 v69, 8, v69
+	v_lshlrev_b16_e32 v68, 8, v68
+	.loc	1 109 68
+	v_cndmask_b32_e32 v27, v27, v57, vcc
+	v_cmp_le_u32_e32 vcc, s14, v21
+	v_mul_lo_u32 v53, v53, s14
+	.loc	1 137 12
+	v_or_b32_sdwa v46, v46, v69 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	.loc	1 109 68
+	v_cndmask_b32_e32 v21, v21, v55, vcc
+	.loc	1 137 12
+	v_or_b32_sdwa v67, v67, v68 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	.loc	1 109 68
+	v_subrev_u32_e32 v55, s14, v21
+	v_cmp_le_u32_e32 vcc, s14, v21
+	v_sub_u32_e32 v17, v17, v53
+	.loc	1 137 12
+	v_or_b32_sdwa v46, v46, v67 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v67, 8, v72
+	.loc	1 109 68
+	v_cndmask_b32_e32 v21, v21, v55, vcc
+	v_subrev_u32_e32 v53, s14, v17
+	v_cmp_le_u32_e32 vcc, s14, v17
+	.loc	1 137 12
+	v_or_b32_sdwa v47, v47, v67 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v67, 8, v71
+	.loc	1 109 68
+	v_cndmask_b32_e32 v17, v17, v53, vcc
+	.loc	1 137 12
+	v_or_b32_sdwa v67, v70, v67 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	.loc	1 109 68
+	v_subrev_u32_e32 v53, s14, v17
+	v_cmp_le_u32_e32 vcc, s14, v17
+	s_load_dword s33, s[86:87], 0x0
+	s_load_dword s74, s[10:11], 0x0
+	.loc	1 137 12
+	v_or_b32_sdwa v47, v47, v67 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v67, 8, v75
+	.loc	1 109 68
+	v_xor_b32_e32 v31, s9, v31
+	v_xor_b32_e32 v27, s9, v27
+	v_xor_b32_e32 v21, s9, v21
+	v_cndmask_b32_e32 v17, v17, v53, vcc
+	.loc	1 118 24
+	s_mul_i32 s10, s8, s77
+	.loc	1 137 12
+	v_or_b32_sdwa v48, v48, v67 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v67, 8, v74
+	.loc	1 109 68
+	v_subrev_u32_e32 v31, s9, v31
+	v_subrev_u32_e32 v27, s9, v27
+	v_subrev_u32_e32 v21, s9, v21
+	v_xor_b32_e32 v17, s9, v17
+	.loc	1 118 10
+	s_ashr_i32 s11, s10, 31
+	.loc	1 137 12
+	v_or_b32_sdwa v67, v73, v67 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	.loc	1 109 68
+	v_subrev_u32_e32 v17, s9, v17
+	.loc	1 118 10
+	s_add_u32 s8, s82, s10
+	.loc	1 119 41
+	v_mad_u64_u32 v[176:177], s[12:13], v31, s78, v[50:51]
+	v_mad_u64_u32 v[174:175], s[12:13], v27, s78, v[50:51]
+	v_mad_u64_u32 v[172:173], s[12:13], v21, s78, v[50:51]
+	.loc	1 137 12
+	v_or_b32_sdwa v48, v48, v67 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v67, 8, v78
+	.loc	1 118 10
+	s_addc_u32 s9, s83, s11
+	.loc	1 119 41
+	v_mad_u64_u32 v[170:171], s[12:13], v17, s78, v[50:51]
+	.loc	1 119 11 is_stmt 0
+	v_ashrrev_i32_e32 v177, 31, v176
+	v_ashrrev_i32_e32 v175, 31, v174
+	v_ashrrev_i32_e32 v173, 31, v172
+	.loc	1 137 12 is_stmt 1
+	v_or_b32_sdwa v49, v49, v67 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v67, 8, v77
+	.loc	1 119 11
+	v_lshl_add_u64 v[68:69], s[8:9], 0, v[176:177]
+	v_lshl_add_u64 v[80:81], s[8:9], 0, v[174:175]
+	v_lshl_add_u64 v[82:83], s[8:9], 0, v[172:173]
+	v_ashrrev_i32_e32 v171, 31, v170
+	.loc	1 137 12
+	v_or_b32_sdwa v67, v76, v67 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	.loc	1 141 20
+	global_load_dwordx4 v[68:71], v[68:69], off
+	.loc	1 119 11
+	v_lshl_add_u64 v[84:85], s[8:9], 0, v[170:171]
+	.loc	1 141 20
+	global_load_dwordx4 v[72:75], v[80:81], off
+	global_load_dwordx4 v[76:79], v[82:83], off
+	s_nop 0
+	global_load_dwordx4 v[80:83], v[84:85], off
+	.loc	1 137 12
+	v_lshlrev_b16_e32 v19, 8, v19
+	v_lshlrev_b16_e32 v11, 8, v11
+	v_lshlrev_b16_e32 v8, 8, v8
+	v_or_b32_sdwa v18, v18, v19 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v19, 8, v23
+	v_or_b32_sdwa v11, v34, v11 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v5, v5, v8 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v19, v22, v19 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v22, v11, v5 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v5, 8, v13
+	v_lshlrev_b16_e32 v8, 8, v10
+	v_or_b32_sdwa v5, v35, v5 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v6, v6, v8 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v17, 8, v20
+	v_or_b32_sdwa v23, v5, v6 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v5, 8, v15
+	v_lshlrev_b16_e32 v6, 8, v12
+	v_or_b32_sdwa v17, v38, v17 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v5, v36, v5 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v6, v7, v6 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v18, v17, v18 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v17, 8, v24
+	v_or_b32_sdwa v24, v5, v6 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v5, 8, v16
+	v_lshlrev_b16_e32 v6, 8, v14
+	v_lshlrev_b16_e32 v20, 8, v26
+	v_or_b32_sdwa v5, v37, v5 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v6, v9, v6 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v20, v25, v20 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v25, v5, v6 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	.loc	1 105 56
+	v_lshlrev_b32_e32 v5, 4, v51
+	v_and_b32_e32 v10, 15, v0
+	v_and_or_b32 v11, v5, 48, v10
+	.loc	1 137 12
+	v_lshlrev_b16_e32 v5, 8, v54
+	v_lshlrev_b16_e32 v6, 8, v52
+	v_or_b32_sdwa v5, v42, v5 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v6, v33, v6 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v7, 8, v58
+	v_or_b32_sdwa v6, v5, v6 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v5, 8, v60
+	v_or_b32_sdwa v5, v43, v5 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v7, v56, v7 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v8, 8, v62
+	v_or_b32_sdwa v7, v5, v7 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v5, 8, v63
+	v_or_b32_sdwa v5, v44, v5 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v8, v61, v8 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v9, 8, v65
+	v_or_b32_sdwa v8, v5, v8 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v5, 8, v66
+	v_or_b32_sdwa v5, v45, v5 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v9, v64, v9 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v17, v39, v17 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v9, v5, v9 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b32_e32 v5, 1, v0
+	v_or_b32_sdwa v19, v17, v19 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v17, 8, v28
+	v_xor_b32_e32 v5, v5, v1
+	v_or_b32_sdwa v17, v40, v17 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_and_b32_e32 v5, 0x70, v5
+	s_movk_i32 s8, 0x1f80
+	v_or_b32_sdwa v20, v17, v20 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v17, 8, v32
+	v_lshlrev_b16_e32 v21, 8, v30
+	v_and_or_b32 v5, v1, s8, v5
+	.loc	1 141 20
+	s_add_i32 s8, 0, 0x8000
+	.loc	1 137 12
+	v_or_b32_sdwa v17, v41, v17 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v21, v29, v21 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_add_u32_e32 v1, 0, v5
+	.loc	1 141 20
+	v_add_u32_e32 v5, s8, v5
+	.loc	1 137 12
+	v_or_b32_sdwa v49, v49, v67 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_or_b32_sdwa v21, v17, v21 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	ds_write_b128 v1, v[22:25]
+	ds_write_b128 v1, v[18:21] offset:8192
+	ds_write_b128 v1, v[46:49] offset:16384
+	ds_write_b128 v1, v[6:9] offset:24576
+	.loc	1 141 20
+	s_waitcnt vmcnt(3)
+	ds_write_b128 v1, v[68:71] offset:32768
+	s_waitcnt vmcnt(2)
+	ds_write_b128 v5, v[72:75] offset:8192
+	s_waitcnt vmcnt(1)
+	ds_write_b128 v5, v[76:79] offset:16384
+	s_waitcnt vmcnt(0)
+	ds_write_b128 v5, v[80:83] offset:24576
+	v_and_b32_e32 v5, 7, v0
+	v_or_b32_e32 v4, v4, v10
+	v_xor_b32_e32 v0, v3, v5
+	v_and_or_b32 v2, v2, 3, 4
+	v_lshlrev_b32_e32 v0, 4, v0
+	v_lshlrev_b32_e32 v3, 7, v4
+	v_xor_b32_e32 v2, v2, v5
+	v_or_b32_e32 v6, v3, v0
+	v_lshlrev_b32_e32 v2, 4, v2
+	v_or_b32_e32 v232, v2, v3
+	v_or_b32_e32 v4, 0x1000, v6
+	scratch_store_dwordx2 off, v[4:5], off offset:288
+	v_or_b32_e32 v4, 0x1000, v232
+	scratch_store_dwordx2 off, v[4:5], off offset:280
+	v_or_b32_e32 v4, 0x2000, v6
+	scratch_store_dwordx2 off, v[4:5], off offset:272
+	v_or_b32_e32 v4, 0x2000, v232
+	scratch_store_dwordx2 off, v[4:5], off offset:264
+	v_or_b32_e32 v4, 0x3000, v6
+	scratch_store_dwordx2 off, v[4:5], off offset:256
+	v_or_b32_e32 v4, 0x3000, v232
+	scratch_store_dwordx2 off, v[4:5], off offset:248
+	v_or_b32_e32 v4, 0x4000, v6
+	scratch_store_dwordx2 off, v[4:5], off offset:240
+	v_or_b32_e32 v4, 0x4000, v232
+	scratch_store_dwordx2 off, v[4:5], off offset:232
+	v_or_b32_e32 v4, 0x5000, v6
+	scratch_store_dwordx2 off, v[4:5], off offset:224
+	v_or_b32_e32 v4, 0x5000, v232
+	scratch_store_dwordx2 off, v[4:5], off offset:216
+	v_or_b32_e32 v4, 0x6000, v6
+	scratch_store_dwordx2 off, v[4:5], off offset:208
+	v_or_b32_e32 v4, 0x6000, v232
+.Ltmp8:
+	.loc	2 40 22
+	s_add_i32 s12, s73, 0x7f
+	scratch_store_dwordx2 off, v[4:5], off offset:200
+	scratch_store_dword off, v6, off
+	v_or_b32_e32 v4, 0x7000, v6
+.Ltmp9:
+	.loc	1 133 22
+	s_cmpk_gt_i32 s12, 0xff
+	scratch_store_dwordx2 off, v[4:5], off offset:192
+	v_or_b32_e32 v4, 0x7000, v232
+	v_lshlrev_b32_e32 v3, 7, v11
+	scratch_store_dwordx2 off, v[4:5], off offset:184
+	scratch_store_dword off, v11, off offset:180
+	scratch_store_dwordx4 off, v[86:89], off offset:52
+	scratch_store_dwordx4 off, v[90:93], off offset:68
+	scratch_store_dwordx4 off, v[94:97], off offset:84
+	s_cbranch_scc1 .LBB0_11
+	.loc	1 141 20
+	v_or_b32_e32 v236, v3, v0
+	v_or_b32_e32 v234, v2, v3
+	v_or_b32_e32 v4, 0x2000, v236
+	scratch_store_dwordx2 off, v[4:5], off offset:328
+	v_or_b32_e32 v4, 0x2000, v234
+	scratch_store_dwordx2 off, v[4:5], off offset:336
+	v_or_b32_e32 v4, 0x4000, v236
+	scratch_store_dwordx2 off, v[4:5], off offset:312
+	v_or_b32_e32 v4, 0x4000, v234
+	scratch_store_dwordx2 off, v[4:5], off offset:320
+	v_or_b32_e32 v4, 0x6000, v236
+	.loc	1 137 12
+	s_mov_b32 s13, 0
+	.loc	1 141 20
+	scratch_store_dwordx2 off, v[4:5], off offset:296
+	v_or_b32_e32 v4, 0x6000, v234
+	s_mov_b64 s[8:9], 0
+	scratch_store_dwordx2 off, v[4:5], off offset:304
+	s_branch .LBB0_12
+.LBB0_11:
+	.loc	1 0 20 is_stmt 0
+	s_mov_b64 s[8:9], -1
+.LBB0_12:
+	.loc	1 133 22 is_stmt 1
+	s_andn2_b64 vcc, exec, s[8:9]
+	v_mov_b32_e32 v37, s13
+	v_mov_b32_e32 v36, s13
+	v_mov_b32_e32 v35, s13
+	v_mov_b32_e32 v34, s13
+	v_mov_b32_e32 v41, s13
+	v_mov_b32_e32 v40, s13
+	v_mov_b32_e32 v39, s13
+	v_mov_b32_e32 v38, s13
+	v_mov_b32_e32 v45, s13
+	v_mov_b32_e32 v44, s13
+	v_mov_b32_e32 v43, s13
+	v_mov_b32_e32 v42, s13
+	v_mov_b32_e32 v49, s13
+	v_mov_b32_e32 v48, s13
+	v_mov_b32_e32 v47, s13
+	v_mov_b32_e32 v46, s13
+	v_mov_b32_e32 v125, s13
+	v_mov_b32_e32 v124, s13
+	v_mov_b32_e32 v123, s13
+	v_mov_b32_e32 v122, s13
+	v_mov_b32_e32 v133, s13
+	v_mov_b32_e32 v132, s13
+	v_mov_b32_e32 v131, s13
+	v_mov_b32_e32 v130, s13
+	v_mov_b32_e32 v53, s13
+	v_mov_b32_e32 v52, s13
+	v_mov_b32_e32 v51, s13
+	v_mov_b32_e32 v50, s13
+	v_mov_b32_e32 v57, s13
+	v_mov_b32_e32 v56, s13
+	v_mov_b32_e32 v55, s13
+	v_mov_b32_e32 v54, s13
+	v_mov_b32_e32 v77, s13
+	v_mov_b32_e32 v76, s13
+	v_mov_b32_e32 v75, s13
+	v_mov_b32_e32 v74, s13
+	v_mov_b32_e32 v81, s13
+	v_mov_b32_e32 v80, s13
+	v_mov_b32_e32 v79, s13
+	v_mov_b32_e32 v78, s13
+	v_mov_b32_e32 v85, s13
+	v_mov_b32_e32 v84, s13
+	v_mov_b32_e32 v83, s13
+	v_mov_b32_e32 v82, s13
+	v_mov_b32_e32 v89, s13
+	v_mov_b32_e32 v88, s13
+	v_mov_b32_e32 v87, s13
+	v_mov_b32_e32 v86, s13
+	v_mov_b32_e32 v61, s13
+	v_mov_b32_e32 v60, s13
+	v_mov_b32_e32 v59, s13
+	v_mov_b32_e32 v58, s13
+	v_mov_b32_e32 v65, s13
+	v_mov_b32_e32 v64, s13
+	v_mov_b32_e32 v63, s13
+	v_mov_b32_e32 v62, s13
+	v_mov_b32_e32 v69, s13
+	v_mov_b32_e32 v68, s13
+	v_mov_b32_e32 v67, s13
+	v_mov_b32_e32 v66, s13
+	v_mov_b32_e32 v73, s13
+	v_mov_b32_e32 v72, s13
+	v_mov_b32_e32 v71, s13
+	v_mov_b32_e32 v70, s13
+	v_mov_b32_e32 v109, s13
+	v_mov_b32_e32 v108, s13
+	v_mov_b32_e32 v107, s13
+	v_mov_b32_e32 v106, s13
+	v_mov_b32_e32 v113, s13
+	v_mov_b32_e32 v112, s13
+	v_mov_b32_e32 v111, s13
+	v_mov_b32_e32 v110, s13
+	v_mov_b32_e32 v117, s13
+	v_mov_b32_e32 v116, s13
+	v_mov_b32_e32 v115, s13
+	v_mov_b32_e32 v114, s13
+	v_mov_b32_e32 v121, s13
+	v_mov_b32_e32 v120, s13
+	v_mov_b32_e32 v119, s13
+	v_mov_b32_e32 v118, s13
+	v_mov_b32_e32 v93, s13
+	v_mov_b32_e32 v92, s13
+	v_mov_b32_e32 v91, s13
+	v_mov_b32_e32 v90, s13
+	v_mov_b32_e32 v97, s13
+	v_mov_b32_e32 v96, s13
+	v_mov_b32_e32 v95, s13
+	v_mov_b32_e32 v94, s13
+	v_mov_b32_e32 v101, s13
+	v_mov_b32_e32 v100, s13
+	v_mov_b32_e32 v99, s13
+	v_mov_b32_e32 v98, s13
+	v_mov_b32_e32 v105, s13
+	v_mov_b32_e32 v104, s13
+	v_mov_b32_e32 v103, s13
+	v_mov_b32_e32 v102, s13
+	v_mov_b32_e32 v145, s13
+	v_mov_b32_e32 v144, s13
+	v_mov_b32_e32 v143, s13
+	v_mov_b32_e32 v142, s13
+	v_mov_b32_e32 v149, s13
+	v_mov_b32_e32 v148, s13
+	v_mov_b32_e32 v147, s13
+	v_mov_b32_e32 v146, s13
+	v_mov_b32_e32 v153, s13
+	v_mov_b32_e32 v152, s13
+	v_mov_b32_e32 v151, s13
+	v_mov_b32_e32 v150, s13
+	v_mov_b32_e32 v157, s13
+	v_mov_b32_e32 v156, s13
+	v_mov_b32_e32 v155, s13
+	v_mov_b32_e32 v154, s13
+	v_mov_b32_e32 v129, s13
+	v_mov_b32_e32 v128, s13
+	v_mov_b32_e32 v127, s13
+	v_mov_b32_e32 v126, s13
+	v_mov_b32_e32 v137, s13
+	v_mov_b32_e32 v136, s13
+	v_mov_b32_e32 v135, s13
+	v_mov_b32_e32 v134, s13
+	v_mov_b32_e32 v141, s13
+	v_mov_b32_e32 v140, s13
+	v_mov_b32_e32 v139, s13
+	v_mov_b32_e32 v138, s13
+	v_mov_b32_e32 v161, s13
+	v_mov_b32_e32 v160, s13
+	v_mov_b32_e32 v159, s13
+	v_mov_b32_e32 v158, s13
+	s_cbranch_vccnz .LBB0_23
+.Ltmp10:
+	.loc	2 40 28
+	s_ashr_i32 s8, s12, 31
+	s_lshr_b32 s8, s8, 25
+	s_add_i32 s12, s12, s8
+	v_or_b32_e32 v236, v3, v0
+	v_or_b32_e32 v234, v2, v3
+.Ltmp11:
+	.loc	1 133 22
+	v_lshl_add_u64 v[2:3], v[162:163], 0, s[80:81]
+	s_mov_b64 s[8:9], 0x80
+	v_lshl_add_u64 v[2:3], v[2:3], 0, s[8:9]
+	scratch_store_dwordx2 off, v[2:3], off offset:20
+	v_lshl_add_u64 v[2:3], v[164:165], 0, s[80:81]
+	v_lshl_add_u64 v[2:3], v[2:3], 0, s[8:9]
+.Ltmp12:
+	.loc	2 40 28
+	s_ashr_i32 s12, s12, 7
+.Ltmp13:
+	.loc	1 133 22
+	scratch_store_dwordx2 off, v[2:3], off offset:28
+	v_lshl_add_u64 v[2:3], v[166:167], 0, s[80:81]
+	s_add_i32 s12, s12, -1
+	v_lshl_add_u64 v[2:3], v[2:3], 0, s[8:9]
+	scratch_store_dwordx2 off, v[2:3], off offset:36
+	v_lshl_add_u64 v[2:3], v[168:169], 0, s[80:81]
+	s_add_u32 s10, s82, s10
+	v_lshl_add_u64 v[2:3], v[2:3], 0, s[8:9]
+	s_addc_u32 s11, s83, s11
+	scratch_store_dwordx2 off, v[2:3], off offset:44
+	v_lshl_add_u64 v[2:3], s[10:11], 0, v[176:177]
+	v_or_b32_e32 v0, 0x2000, v236
+	v_lshl_add_u64 v[2:3], v[2:3], 0, s[8:9]
+	scratch_store_dwordx2 off, v[0:1], off offset:328
+	v_or_b32_e32 v0, 0x2000, v234
+	scratch_store_dwordx2 off, v[2:3], off offset:4
+	v_lshl_add_u64 v[2:3], s[10:11], 0, v[174:175]
+	scratch_store_dwordx2 off, v[0:1], off offset:336
+	v_or_b32_e32 v0, 0x4000, v236
+	v_lshl_add_u64 v[2:3], v[2:3], 0, s[8:9]
+	scratch_store_dwordx2 off, v[0:1], off offset:312
+	v_or_b32_e32 v0, 0x4000, v234
+	scratch_store_dwordx2 off, v[2:3], off offset:12
+	v_lshl_add_u64 v[2:3], s[10:11], 0, v[172:173]
+	v_mov_b32_e32 v158, 0
+	scratch_store_dwordx2 off, v[0:1], off offset:320
+	v_or_b32_e32 v0, 0x6000, v236
+	v_lshl_add_u64 v[250:251], v[2:3], 0, s[8:9]
+	v_lshl_add_u64 v[2:3], s[10:11], 0, v[170:171]
+	s_mov_b32 s13, 0
+	scratch_store_dwordx2 off, v[0:1], off offset:296
+	v_or_b32_e32 v0, 0x6000, v234
+	v_lshl_add_u64 v[252:253], v[2:3], 0, s[8:9]
+	s_mov_b64 s[8:9], 0
+	v_mov_b32_e32 v159, v158
+	v_mov_b32_e32 v160, v158
+	v_mov_b32_e32 v161, v158
+	v_mov_b32_e32 v138, v158
+	v_mov_b32_e32 v139, v158
+	v_mov_b32_e32 v140, v158
+	v_mov_b32_e32 v141, v158
+	v_mov_b32_e32 v134, v158
+	v_mov_b32_e32 v135, v158
+	v_mov_b32_e32 v136, v158
+	v_mov_b32_e32 v137, v158
+	v_mov_b32_e32 v126, v158
+	v_mov_b32_e32 v127, v158
+	v_mov_b32_e32 v128, v158
+	v_mov_b32_e32 v129, v158
+	v_mov_b32_e32 v154, v158
+	v_mov_b32_e32 v155, v158
+	v_mov_b32_e32 v156, v158
+	v_mov_b32_e32 v157, v158
+	v_mov_b32_e32 v150, v158
+	v_mov_b32_e32 v151, v158
+	v_mov_b32_e32 v152, v158
+	v_mov_b32_e32 v153, v158
+	v_mov_b32_e32 v146, v158
+	v_mov_b32_e32 v147, v158
+	v_mov_b32_e32 v148, v158
+	v_mov_b32_e32 v149, v158
+	v_mov_b32_e32 v142, v158
+	v_mov_b32_e32 v143, v158
+	v_mov_b32_e32 v144, v158
+	v_mov_b32_e32 v145, v158
+	v_mov_b32_e32 v102, v158
+	v_mov_b32_e32 v103, v158
+	v_mov_b32_e32 v104, v158
+	v_mov_b32_e32 v105, v158
+	v_mov_b32_e32 v98, v158
+	v_mov_b32_e32 v99, v158
+	v_mov_b32_e32 v100, v158
+	v_mov_b32_e32 v101, v158
+	v_mov_b32_e32 v94, v158
+	v_mov_b32_e32 v95, v158
+	v_mov_b32_e32 v96, v158
+	v_mov_b32_e32 v97, v158
+	v_mov_b32_e32 v90, v158
+	v_mov_b32_e32 v91, v158
+	v_mov_b32_e32 v92, v158
+	v_mov_b32_e32 v93, v158
+	v_mov_b32_e32 v118, v158
+	v_mov_b32_e32 v119, v158
+	v_mov_b32_e32 v120, v158
+	v_mov_b32_e32 v121, v158
+	v_mov_b32_e32 v114, v158
+	v_mov_b32_e32 v115, v158
+	v_mov_b32_e32 v116, v158
+	v_mov_b32_e32 v117, v158
+	v_mov_b32_e32 v110, v158
+	v_mov_b32_e32 v111, v158
+	v_mov_b32_e32 v112, v158
+	v_mov_b32_e32 v113, v158
+	v_mov_b32_e32 v106, v158
+	v_mov_b32_e32 v107, v158
+	v_mov_b32_e32 v108, v158
+	v_mov_b32_e32 v109, v158
+	v_mov_b32_e32 v70, v158
+	v_mov_b32_e32 v71, v158
+	v_mov_b32_e32 v72, v158
+	v_mov_b32_e32 v73, v158
+	v_mov_b32_e32 v66, v158
+	v_mov_b32_e32 v67, v158
+	v_mov_b32_e32 v68, v158
+	v_mov_b32_e32 v69, v158
+	v_mov_b32_e32 v62, v158
+	v_mov_b32_e32 v63, v158
+	v_mov_b32_e32 v64, v158
+	v_mov_b32_e32 v65, v158
+	v_mov_b32_e32 v58, v158
+	v_mov_b32_e32 v59, v158
+	v_mov_b32_e32 v60, v158
+	v_mov_b32_e32 v61, v158
+	v_mov_b32_e32 v86, v158
+	v_mov_b32_e32 v87, v158
+	v_mov_b32_e32 v88, v158
+	v_mov_b32_e32 v89, v158
+	v_mov_b32_e32 v82, v158
+	v_mov_b32_e32 v83, v158
+	v_mov_b32_e32 v84, v158
+	v_mov_b32_e32 v85, v158
+	v_mov_b32_e32 v78, v158
+	v_mov_b32_e32 v79, v158
+	v_mov_b32_e32 v80, v158
+	v_mov_b32_e32 v81, v158
+	v_mov_b32_e32 v74, v158
+	v_mov_b32_e32 v75, v158
+	v_mov_b32_e32 v76, v158
+	v_mov_b32_e32 v77, v158
+	v_mov_b32_e32 v54, v158
+	v_mov_b32_e32 v55, v158
+	v_mov_b32_e32 v56, v158
+	v_mov_b32_e32 v57, v158
+	v_mov_b32_e32 v50, v158
+	v_mov_b32_e32 v51, v158
+	v_mov_b32_e32 v52, v158
+	v_mov_b32_e32 v53, v158
+	v_mov_b32_e32 v130, v158
+	v_mov_b32_e32 v131, v158
+	v_mov_b32_e32 v132, v158
+	v_mov_b32_e32 v133, v158
+	v_mov_b32_e32 v122, v158
+	v_mov_b32_e32 v123, v158
+	v_mov_b32_e32 v124, v158
+	v_mov_b32_e32 v125, v158
+	v_mov_b32_e32 v46, v158
+	v_mov_b32_e32 v47, v158
+	v_mov_b32_e32 v48, v158
+	v_mov_b32_e32 v49, v158
+	v_mov_b32_e32 v42, v158
+	v_mov_b32_e32 v43, v158
+	v_mov_b32_e32 v44, v158
+	v_mov_b32_e32 v45, v158
+	v_mov_b32_e32 v38, v158
+	v_mov_b32_e32 v39, v158
+	v_mov_b32_e32 v40, v158
+	v_mov_b32_e32 v41, v158
+	v_mov_b32_e32 v34, v158
+	v_mov_b32_e32 v35, v158
+	v_mov_b32_e32 v36, v158
+	v_mov_b32_e32 v37, v158
+	scratch_store_dwordx2 off, v[0:1], off offset:304
+	s_branch .LBB0_15
+.LBB0_14:
+	.loc	1 0 22 is_stmt 0
+	s_or_b64 exec, exec, s[10:11]
+	.loc	1 149 18 is_stmt 1
+	scratch_load_dwordx2 v[170:171], off, off offset:12
+	.loc	1 148 18
+	scratch_load_dwordx2 v[172:173], off, off offset:4
+	.loc	1 149 18
+	v_lshl_add_u64 v[178:179], v[252:253], 0, s[8:9]
+	v_lshl_add_u64 v[174:175], v[250:251], 0, s[8:9]
+	.loc	1 141 20
+	v_add_u32_e32 v198, 0, v236
+	.loc	1 137 12
+	v_lshlrev_b16_e32 v240, 8, v240
+	v_or_b32_sdwa v190, v190, v240 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v240, 8, v242
+	v_or_b32_sdwa v191, v191, v240 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v240, 8, v243
+	v_add_u32_e32 v255, 0, v232
+	v_or_b32_sdwa v192, v192, v240 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v240, 8, v244
+	v_lshlrev_b16_e32 v26, 8, v26
+	v_or_b32_sdwa v193, v193, v240 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v240, v183, v26 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v26, 8, v27
+	v_or_b32_sdwa v242, v184, v26 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v26, 8, v28
+	v_lshlrev_b16_e32 v25, 8, v25
+	v_or_b32_sdwa v243, v185, v26 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v26, 8, v30
+	v_lshlrev_b16_e32 v20, 8, v20
+	v_or_b32_sdwa v25, v182, v25 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v26, v29, v26 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v27, 8, v32
+	v_or_b32_sdwa v19, v19, v20 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v20, 8, v22
+	v_or_b32_sdwa v27, v31, v27 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v182, v190, v26 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_or_b32_sdwa v20, v21, v20 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v190, v25, v19 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v19, 8, v24
+	v_or_b32_sdwa v183, v191, v27 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_or_b32_sdwa v191, v240, v20 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_or_b32_sdwa v19, v23, v19 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v26, 8, v238
+	v_or_b32_sdwa v26, v33, v26 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v185, 8, v241
+	v_or_b32_sdwa v184, v192, v26 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v6, 8, v6
+	v_or_b32_sdwa v5, v5, v6 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v6, 8, v227
+	v_or_b32_sdwa v0, v0, v6 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v2, 8, v2
+	v_or_b32_sdwa v2, v228, v2 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	.loc	1 141 20
+	v_lshlrev_b16_e32 v6, 8, v8
+	v_or_b32_sdwa v6, v7, v6 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v7, 8, v11
+	v_or_b32_sdwa v7, v10, v7 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v8, 8, v15
+	.loc	1 133 22
+	s_add_i32 s13, s13, 1
+	.loc	1 141 20
+	v_or_b32_sdwa v8, v9, v8 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v9, 8, v13
+	v_or_b32_sdwa v9, v12, v9 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	.loc	1 137 12
+	v_or_b32_sdwa v192, v242, v19 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	.loc	1 149 18
+	s_waitcnt vmcnt(1)
+	v_lshl_add_u64 v[170:171], v[170:171], 0, s[8:9]
+	.loc	1 148 18
+	s_waitcnt vmcnt(0)
+	v_lshl_add_u64 v[172:173], v[172:173], 0, s[8:9]
+	.loc	1 141 20
+	global_load_dwordx4 v[186:189], v[172:173], off
+	s_nop 0
+	global_load_dwordx4 v[170:173], v[170:171], off
+	s_nop 0
+	global_load_dwordx4 v[174:177], v[174:175], off
+	s_nop 0
+	global_load_dwordx4 v[178:181], v[178:179], off
+	.loc	1 137 12
+	s_waitcnt lgkmcnt(0)
+	s_barrier
+	scratch_load_dword v194, off, off
+	.loc	1 133 22
+	s_add_u32 s8, s8, 0x80
+	s_addc_u32 s9, s9, 0
+	s_cmp_lt_i32 s13, s12
+	.loc	1 141 20
+	ds_read_b128 v[214:217], v198 offset:40960
+	ds_read_b128 v[210:213], v198 offset:49152
+	.loc	1 137 12
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v245, 0, v194
+	ds_read_b128 v[202:205], v245
+	.loc	1 141 20
+	ds_read_b128 v[194:197], v198 offset:32768
+	ds_read_b128 v[198:201], v198 offset:57344
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(1)
+	v_mfma_f32_16x16x32_fp8_fp8 v[158:161], v[202:203], v[194:195], v[158:161]
+	v_mfma_f32_16x16x32_fp8_fp8 v[138:141], v[202:203], v[214:215], v[138:141]
+	v_mfma_f32_16x16x32_fp8_fp8 v[134:137], v[202:203], v[210:211], v[134:137]
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[126:129], v[202:203], v[198:199], v[126:129]
+	.loc	1 141 20
+	v_add_u32_e32 v202, 0, v234
+	.loc	1 137 12
+	ds_read_b128 v[246:249], v255
+	.loc	1 141 20
+	ds_read_b128 v[222:225], v202 offset:32768
+	ds_read_b128 v[218:221], v202 offset:40960
+	ds_read_b128 v[206:209], v202 offset:49152
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[158:161], v[204:205], v[196:197], v[158:161]
+	.loc	1 137 12
+	ds_read_b128 v[20:23], v245 offset:28672
+	ds_read_b128 v[26:29], v255 offset:24576
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[138:141], v[204:205], v[216:217], v[138:141]
+	v_mfma_f32_16x16x32_fp8_fp8 v[134:137], v[204:205], v[212:213], v[134:137]
+	v_mfma_f32_16x16x32_fp8_fp8 v[126:129], v[204:205], v[200:201], v[126:129]
+	.loc	1 141 20
+	ds_read_b128 v[202:205], v202 offset:57344
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(5)
+	v_mfma_f32_16x16x32_fp8_fp8 v[158:161], v[246:247], v[222:223], v[158:161]
+	s_waitcnt lgkmcnt(4)
+	v_mfma_f32_16x16x32_fp8_fp8 v[138:141], v[246:247], v[218:219], v[138:141]
+	s_waitcnt lgkmcnt(3)
+	v_mfma_f32_16x16x32_fp8_fp8 v[134:137], v[246:247], v[206:207], v[134:137]
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[126:129], v[246:247], v[202:203], v[126:129]
+	v_mfma_f32_16x16x32_fp8_fp8 v[158:161], v[248:249], v[224:225], v[158:161]
+	v_mfma_f32_16x16x32_fp8_fp8 v[138:141], v[248:249], v[220:221], v[138:141]
+	v_mfma_f32_16x16x32_fp8_fp8 v[134:137], v[248:249], v[208:209], v[134:137]
+	v_mfma_f32_16x16x32_fp8_fp8 v[126:129], v[248:249], v[204:205], v[126:129]
+	.loc	1 137 12
+	ds_read_b128 v[246:249], v245 offset:4096
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[154:157], v[246:247], v[194:195], v[154:157]
+	v_mfma_f32_16x16x32_fp8_fp8 v[150:153], v[246:247], v[214:215], v[150:153]
+	v_mfma_f32_16x16x32_fp8_fp8 v[146:149], v[246:247], v[210:211], v[146:149]
+	v_mfma_f32_16x16x32_fp8_fp8 v[142:145], v[246:247], v[198:199], v[142:145]
+	v_mfma_f32_16x16x32_fp8_fp8 v[154:157], v[248:249], v[196:197], v[154:157]
+	v_mfma_f32_16x16x32_fp8_fp8 v[150:153], v[248:249], v[216:217], v[150:153]
+	v_mfma_f32_16x16x32_fp8_fp8 v[146:149], v[248:249], v[212:213], v[146:149]
+	v_mfma_f32_16x16x32_fp8_fp8 v[142:145], v[248:249], v[200:201], v[142:145]
+	.loc	1 137 12
+	ds_read_b128 v[246:249], v255 offset:4096
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[154:157], v[246:247], v[222:223], v[154:157]
+	v_mfma_f32_16x16x32_fp8_fp8 v[150:153], v[246:247], v[218:219], v[150:153]
+	v_mfma_f32_16x16x32_fp8_fp8 v[146:149], v[246:247], v[206:207], v[146:149]
+	v_mfma_f32_16x16x32_fp8_fp8 v[142:145], v[246:247], v[202:203], v[142:145]
+	v_mfma_f32_16x16x32_fp8_fp8 v[154:157], v[248:249], v[224:225], v[154:157]
+	v_mfma_f32_16x16x32_fp8_fp8 v[150:153], v[248:249], v[220:221], v[150:153]
+	v_mfma_f32_16x16x32_fp8_fp8 v[146:149], v[248:249], v[208:209], v[146:149]
+	v_mfma_f32_16x16x32_fp8_fp8 v[142:145], v[248:249], v[204:205], v[142:145]
+	.loc	1 137 12
+	ds_read_b128 v[246:249], v245 offset:8192
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[102:105], v[246:247], v[194:195], v[102:105]
+	v_mfma_f32_16x16x32_fp8_fp8 v[98:101], v[246:247], v[214:215], v[98:101]
+	v_mfma_f32_16x16x32_fp8_fp8 v[94:97], v[246:247], v[210:211], v[94:97]
+	v_mfma_f32_16x16x32_fp8_fp8 v[90:93], v[246:247], v[198:199], v[90:93]
+	v_mfma_f32_16x16x32_fp8_fp8 v[102:105], v[248:249], v[196:197], v[102:105]
+	v_mfma_f32_16x16x32_fp8_fp8 v[98:101], v[248:249], v[216:217], v[98:101]
+	v_mfma_f32_16x16x32_fp8_fp8 v[94:97], v[248:249], v[212:213], v[94:97]
+	v_mfma_f32_16x16x32_fp8_fp8 v[90:93], v[248:249], v[200:201], v[90:93]
+	.loc	1 137 12
+	ds_read_b128 v[246:249], v255 offset:8192
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[102:105], v[246:247], v[222:223], v[102:105]
+	v_mfma_f32_16x16x32_fp8_fp8 v[98:101], v[246:247], v[218:219], v[98:101]
+	v_mfma_f32_16x16x32_fp8_fp8 v[94:97], v[246:247], v[206:207], v[94:97]
+	v_mfma_f32_16x16x32_fp8_fp8 v[90:93], v[246:247], v[202:203], v[90:93]
+	v_mfma_f32_16x16x32_fp8_fp8 v[102:105], v[248:249], v[224:225], v[102:105]
+	v_mfma_f32_16x16x32_fp8_fp8 v[98:101], v[248:249], v[220:221], v[98:101]
+	v_mfma_f32_16x16x32_fp8_fp8 v[94:97], v[248:249], v[208:209], v[94:97]
+	v_mfma_f32_16x16x32_fp8_fp8 v[90:93], v[248:249], v[204:205], v[90:93]
+	.loc	1 137 12
+	ds_read_b128 v[246:249], v245 offset:12288
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[118:121], v[246:247], v[194:195], v[118:121]
+	v_mfma_f32_16x16x32_fp8_fp8 v[114:117], v[246:247], v[214:215], v[114:117]
+	v_mfma_f32_16x16x32_fp8_fp8 v[110:113], v[246:247], v[210:211], v[110:113]
+	v_mfma_f32_16x16x32_fp8_fp8 v[106:109], v[246:247], v[198:199], v[106:109]
+	v_mfma_f32_16x16x32_fp8_fp8 v[118:121], v[248:249], v[196:197], v[118:121]
+	v_mfma_f32_16x16x32_fp8_fp8 v[114:117], v[248:249], v[216:217], v[114:117]
+	v_mfma_f32_16x16x32_fp8_fp8 v[110:113], v[248:249], v[212:213], v[110:113]
+	v_mfma_f32_16x16x32_fp8_fp8 v[106:109], v[248:249], v[200:201], v[106:109]
+	.loc	1 137 12
+	ds_read_b128 v[246:249], v255 offset:12288
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[118:121], v[246:247], v[222:223], v[118:121]
+	v_mfma_f32_16x16x32_fp8_fp8 v[114:117], v[246:247], v[218:219], v[114:117]
+	v_mfma_f32_16x16x32_fp8_fp8 v[110:113], v[246:247], v[206:207], v[110:113]
+	v_mfma_f32_16x16x32_fp8_fp8 v[106:109], v[246:247], v[202:203], v[106:109]
+	v_mfma_f32_16x16x32_fp8_fp8 v[118:121], v[248:249], v[224:225], v[118:121]
+	v_mfma_f32_16x16x32_fp8_fp8 v[114:117], v[248:249], v[220:221], v[114:117]
+	v_mfma_f32_16x16x32_fp8_fp8 v[110:113], v[248:249], v[208:209], v[110:113]
+	v_mfma_f32_16x16x32_fp8_fp8 v[106:109], v[248:249], v[204:205], v[106:109]
+	.loc	1 137 12
+	ds_read_b128 v[246:249], v245 offset:16384
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[70:73], v[246:247], v[194:195], v[70:73]
+	v_mfma_f32_16x16x32_fp8_fp8 v[66:69], v[246:247], v[214:215], v[66:69]
+	v_mfma_f32_16x16x32_fp8_fp8 v[62:65], v[246:247], v[210:211], v[62:65]
+	v_mfma_f32_16x16x32_fp8_fp8 v[58:61], v[246:247], v[198:199], v[58:61]
+	v_mfma_f32_16x16x32_fp8_fp8 v[70:73], v[248:249], v[196:197], v[70:73]
+	v_mfma_f32_16x16x32_fp8_fp8 v[66:69], v[248:249], v[216:217], v[66:69]
+	v_mfma_f32_16x16x32_fp8_fp8 v[62:65], v[248:249], v[212:213], v[62:65]
+	v_mfma_f32_16x16x32_fp8_fp8 v[58:61], v[248:249], v[200:201], v[58:61]
+	.loc	1 137 12
+	ds_read_b128 v[246:249], v255 offset:16384
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[70:73], v[246:247], v[222:223], v[70:73]
+	v_mfma_f32_16x16x32_fp8_fp8 v[66:69], v[246:247], v[218:219], v[66:69]
+	v_mfma_f32_16x16x32_fp8_fp8 v[62:65], v[246:247], v[206:207], v[62:65]
+	v_mfma_f32_16x16x32_fp8_fp8 v[58:61], v[246:247], v[202:203], v[58:61]
+	v_mfma_f32_16x16x32_fp8_fp8 v[70:73], v[248:249], v[224:225], v[70:73]
+	v_mfma_f32_16x16x32_fp8_fp8 v[66:69], v[248:249], v[220:221], v[66:69]
+	v_mfma_f32_16x16x32_fp8_fp8 v[62:65], v[248:249], v[208:209], v[62:65]
+	v_mfma_f32_16x16x32_fp8_fp8 v[58:61], v[248:249], v[204:205], v[58:61]
+	.loc	1 137 12
+	ds_read_b128 v[246:249], v245 offset:20480
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[86:89], v[246:247], v[194:195], v[86:89]
+	v_mfma_f32_16x16x32_fp8_fp8 v[82:85], v[246:247], v[214:215], v[82:85]
+	v_mfma_f32_16x16x32_fp8_fp8 v[78:81], v[246:247], v[210:211], v[78:81]
+	v_mfma_f32_16x16x32_fp8_fp8 v[74:77], v[246:247], v[198:199], v[74:77]
+	v_mfma_f32_16x16x32_fp8_fp8 v[86:89], v[248:249], v[196:197], v[86:89]
+	v_mfma_f32_16x16x32_fp8_fp8 v[82:85], v[248:249], v[216:217], v[82:85]
+	v_mfma_f32_16x16x32_fp8_fp8 v[78:81], v[248:249], v[212:213], v[78:81]
+	v_mfma_f32_16x16x32_fp8_fp8 v[74:77], v[248:249], v[200:201], v[74:77]
+	.loc	1 137 12
+	ds_read_b128 v[246:249], v255 offset:20480
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[86:89], v[246:247], v[222:223], v[86:89]
+	v_mfma_f32_16x16x32_fp8_fp8 v[82:85], v[246:247], v[218:219], v[82:85]
+	v_mfma_f32_16x16x32_fp8_fp8 v[78:81], v[246:247], v[206:207], v[78:81]
+	v_mfma_f32_16x16x32_fp8_fp8 v[74:77], v[246:247], v[202:203], v[74:77]
+	v_mfma_f32_16x16x32_fp8_fp8 v[86:89], v[248:249], v[224:225], v[86:89]
+	v_mfma_f32_16x16x32_fp8_fp8 v[82:85], v[248:249], v[220:221], v[82:85]
+	v_mfma_f32_16x16x32_fp8_fp8 v[78:81], v[248:249], v[208:209], v[78:81]
+	v_mfma_f32_16x16x32_fp8_fp8 v[74:77], v[248:249], v[204:205], v[74:77]
+	.loc	1 137 12
+	ds_read_b128 v[246:249], v245 offset:24576
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[54:57], v[246:247], v[194:195], v[54:57]
+	v_mfma_f32_16x16x32_fp8_fp8 v[54:57], v[248:249], v[196:197], v[54:57]
+	v_mfma_f32_16x16x32_fp8_fp8 v[50:53], v[246:247], v[214:215], v[50:53]
+	v_mfma_f32_16x16x32_fp8_fp8 v[50:53], v[248:249], v[216:217], v[50:53]
+	v_mfma_f32_16x16x32_fp8_fp8 v[130:133], v[246:247], v[210:211], v[130:133]
+	v_mfma_f32_16x16x32_fp8_fp8 v[30:33], v[26:27], v[222:223], v[54:57]
+	.loc	1 137 12
+	s_nop 2
+	v_or_b32_sdwa v54, v239, v185 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[130:133], v[248:249], v[212:213], v[130:133]
+	.loc	1 137 12
+	v_or_b32_sdwa v185, v193, v54 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_or_b32_sdwa v193, v243, v5 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v5, 8, v235
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[54:57], v[28:29], v[224:225], v[30:33]
+	.loc	1 137 12
+	v_or_b32_sdwa v5, v162, v5 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	ds_read_b128 v[238:241], v255 offset:28672
+	s_waitcnt lgkmcnt(0)
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[30:33], v[26:27], v[218:219], v[50:53]
+	.loc	1 137 12
+	s_barrier
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[50:53], v[28:29], v[220:221], v[30:33]
+	v_mfma_f32_16x16x32_fp8_fp8 v[30:33], v[26:27], v[206:207], v[130:133]
+	v_mfma_f32_16x16x32_fp8_fp8 v[130:133], v[28:29], v[208:209], v[30:33]
+	.loc	1 137 12
+	s_nop 5
+	v_or_b32_sdwa v30, v5, v0 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v0, 8, v3
+	v_lshlrev_b16_e32 v3, 8, v226
+	v_or_b32_sdwa v0, v163, v0 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v3, v237, v3 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[122:125], v[246:247], v[198:199], v[122:125]
+	.loc	1 137 12
+	v_or_b32_sdwa v31, v0, v3 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v0, 8, v230
+	v_lshlrev_b16_e32 v3, 8, v231
+	v_or_b32_sdwa v0, v164, v0 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v3, v229, v3 dst_sel:WORD_1 dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[122:125], v[248:249], v[200:201], v[122:125]
+	.loc	1 137 12
+	v_or_b32_sdwa v32, v0, v3 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	v_lshlrev_b16_e32 v0, 8, v4
+	v_or_b32_sdwa v0, v165, v0 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v33, v0, v2 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[2:5], v[20:21], v[214:215], v[42:45]
+	.loc	1 141 20
+	v_lshlrev_b16_e32 v0, 8, v17
+	v_or_b32_sdwa v0, v166, v0 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v6, v0, v6 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[2:5], v[22:23], v[216:217], v[2:5]
+	.loc	1 141 20
+	v_lshlrev_b16_e32 v0, 8, v14
+	v_or_b32_sdwa v0, v167, v0 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v7, v0, v7 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[2:5], v[238:239], v[218:219], v[2:5]
+	.loc	1 141 20
+	v_lshlrev_b16_e32 v0, 8, v18
+	v_or_b32_sdwa v0, v168, v0 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v8, v0, v8 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[42:45], v[240:241], v[220:221], v[2:5]
+	.loc	1 141 20
+	v_lshlrev_b16_e32 v0, 8, v16
+	v_or_b32_sdwa v0, v169, v0 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:BYTE_0 src1_sel:DWORD
+	v_or_b32_sdwa v9, v0, v9 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0 src1_sel:DWORD
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[2:5], v[20:21], v[210:211], v[38:41]
+	.loc	1 137 12
+	ds_write_b128 v1, v[30:33]
+	ds_write_b128 v1, v[190:193] offset:8192
+	ds_write_b128 v1, v[182:185] offset:16384
+	ds_write_b128 v1, v[6:9] offset:24576
+	.loc	1 141 20
+	ds_write_b128 v1, v[186:189] offset:32768
+	ds_write_b128 v1, v[170:173] offset:40960
+	ds_write_b128 v1, v[174:177] offset:49152
+	ds_write_b128 v1, v[178:181] offset:57344
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[2:5], v[22:23], v[212:213], v[2:5]
+	v_mfma_f32_16x16x32_fp8_fp8 v[24:27], v[26:27], v[202:203], v[122:125]
+	v_mfma_f32_16x16x32_fp8_fp8 v[2:5], v[238:239], v[206:207], v[2:5]
+	v_mfma_f32_16x16x32_fp8_fp8 v[122:125], v[28:29], v[204:205], v[24:27]
+	v_mfma_f32_16x16x32_fp8_fp8 v[24:27], v[20:21], v[194:195], v[46:49]
+	v_mfma_f32_16x16x32_fp8_fp8 v[38:41], v[240:241], v[208:209], v[2:5]
+	v_mfma_f32_16x16x32_fp8_fp8 v[2:5], v[20:21], v[198:199], v[34:37]
+	v_mfma_f32_16x16x32_fp8_fp8 v[24:27], v[22:23], v[196:197], v[24:27]
+	v_mfma_f32_16x16x32_fp8_fp8 v[2:5], v[22:23], v[200:201], v[2:5]
+	v_mfma_f32_16x16x32_fp8_fp8 v[24:27], v[238:239], v[222:223], v[24:27]
+	v_mfma_f32_16x16x32_fp8_fp8 v[2:5], v[238:239], v[202:203], v[2:5]
+	v_mfma_f32_16x16x32_fp8_fp8 v[46:49], v[240:241], v[224:225], v[24:27]
+	v_mfma_f32_16x16x32_fp8_fp8 v[34:37], v[240:241], v[204:205], v[2:5]
+	.loc	1 133 22
+	s_cbranch_scc0 .LBB0_23
+.LBB0_15:
+	.loc	1 0 22 is_stmt 0
+	v_mov_b32_e32 v162, v233
+	v_mov_b32_e32 v235, v254
+	v_mov_b32_e32 v0, v233
+	v_mov_b32_e32 v227, v254
+	v_mov_b32_e32 v163, v233
+	v_mov_b32_e32 v3, v254
+	v_mov_b32_e32 v237, v233
+	v_mov_b32_e32 v226, v254
+	v_mov_b32_e32 v164, v233
+	v_mov_b32_e32 v230, v254
+	v_mov_b32_e32 v229, v233
+	v_mov_b32_e32 v231, v254
+	v_mov_b32_e32 v165, v233
+	v_mov_b32_e32 v4, v254
+	v_mov_b32_e32 v228, v233
+	v_mov_b32_e32 v2, v254
+	.loc	1 137 12 is_stmt 1
+	s_and_saveexec_b64 s[10:11], s[0:1]
+	s_cbranch_execz .LBB0_17
+	scratch_load_dwordx2 v[2:3], off, off offset:20
+	s_waitcnt vmcnt(0)
+	v_lshl_add_u64 v[2:3], v[2:3], 0, s[8:9]
+	global_load_dwordx4 v[162:165], v[2:3], off
+	s_waitcnt vmcnt(0)
+	v_lshrrev_b32_e32 v227, 24, v162
+	v_lshrrev_b32_e32 v0, 16, v162
+	v_lshrrev_b32_e32 v235, 8, v162
+	v_lshrrev_b32_e32 v226, 24, v163
+	v_lshrrev_b32_e32 v237, 16, v163
+	v_lshrrev_b32_e32 v3, 8, v163
+	v_lshrrev_b32_e32 v231, 24, v164
+	v_lshrrev_b32_e32 v229, 16, v164
+	v_lshrrev_b32_e32 v230, 8, v164
+	v_lshrrev_b32_e32 v2, 24, v165
+	v_lshrrev_b32_e32 v228, 16, v165
+	v_lshrrev_b32_e32 v4, 8, v165
+.LBB0_17:
+	.loc	1 0 12 is_stmt 0
+	s_or_b64 exec, exec, s[10:11]
+	v_mov_b32_e32 v182, v233
+	v_mov_b32_e32 v25, v254
+	v_mov_b32_e32 v19, v233
+	v_mov_b32_e32 v20, v254
+	v_mov_b32_e32 v183, v233
+	v_mov_b32_e32 v26, v254
+	v_mov_b32_e32 v21, v233
+	v_mov_b32_e32 v22, v254
+	v_mov_b32_e32 v184, v233
+	v_mov_b32_e32 v27, v254
+	v_mov_b32_e32 v23, v233
+	v_mov_b32_e32 v24, v254
+	v_mov_b32_e32 v185, v233
+	v_mov_b32_e32 v28, v254
+	v_mov_b32_e32 v5, v233
+	v_mov_b32_e32 v6, v254
+	.loc	1 137 12
+	s_and_saveexec_b64 s[10:11], s[2:3]
+	s_cbranch_execz .LBB0_19
+	.loc	1 148 18 is_stmt 1
+	scratch_load_dwordx2 v[6:7], off, off offset:28
+	s_waitcnt vmcnt(0)
+	v_lshl_add_u64 v[6:7], v[6:7], 0, s[8:9]
+	.loc	1 137 12
+	global_load_dwordx4 v[182:185], v[6:7], off
+	s_waitcnt vmcnt(0)
+	v_lshrrev_b32_e32 v20, 24, v182
+	v_lshrrev_b32_e32 v19, 16, v182
+	v_lshrrev_b32_e32 v25, 8, v182
+	v_lshrrev_b32_e32 v22, 24, v183
+	v_lshrrev_b32_e32 v21, 16, v183
+	v_lshrrev_b32_e32 v26, 8, v183
+	v_lshrrev_b32_e32 v24, 24, v184
+	v_lshrrev_b32_e32 v23, 16, v184
+	v_lshrrev_b32_e32 v27, 8, v184
+	v_lshrrev_b32_e32 v6, 24, v185
+	v_lshrrev_b32_e32 v5, 16, v185
+	v_lshrrev_b32_e32 v28, 8, v185
+.LBB0_19:
+	.loc	1 0 12 is_stmt 0
+	s_or_b64 exec, exec, s[10:11]
+	v_mov_b32_e32 v190, v233
+	v_mov_b32_e32 v240, v254
+	v_mov_b32_e32 v29, v233
+	v_mov_b32_e32 v30, v254
+	v_mov_b32_e32 v191, v233
+	v_mov_b32_e32 v242, v254
+	v_mov_b32_e32 v31, v233
+	v_mov_b32_e32 v32, v254
+	v_mov_b32_e32 v192, v233
+	v_mov_b32_e32 v243, v254
+	v_mov_b32_e32 v33, v233
+	v_mov_b32_e32 v238, v254
+	v_mov_b32_e32 v193, v233
+	v_mov_b32_e32 v244, v254
+	v_mov_b32_e32 v239, v233
+	v_mov_b32_e32 v241, v254
+	.loc	1 137 12
+	s_and_saveexec_b64 s[10:11], s[4:5]
+	s_cbranch_execz .LBB0_21
+	.loc	1 148 18 is_stmt 1
+	scratch_load_dwordx2 v[8:9], off, off offset:36
+	s_waitcnt vmcnt(0)
+	v_lshl_add_u64 v[8:9], v[8:9], 0, s[8:9]
+	.loc	1 137 12
+	global_load_dwordx4 v[190:193], v[8:9], off
+	s_waitcnt vmcnt(0)
+	v_lshrrev_b32_e32 v30, 24, v190
+	v_lshrrev_b32_e32 v29, 16, v190
+	v_lshrrev_b32_e32 v240, 8, v190
+	v_lshrrev_b32_e32 v32, 24, v191
+	v_lshrrev_b32_e32 v31, 16, v191
+	v_lshrrev_b32_e32 v242, 8, v191
+	v_lshrrev_b32_e32 v238, 24, v192
+	v_lshrrev_b32_e32 v33, 16, v192
+	v_lshrrev_b32_e32 v243, 8, v192
+	v_lshrrev_b32_e32 v241, 24, v193
+	v_lshrrev_b32_e32 v239, 16, v193
+	v_lshrrev_b32_e32 v244, 8, v193
+.LBB0_21:
+	.loc	1 0 12 is_stmt 0
+	s_or_b64 exec, exec, s[10:11]
+	v_mov_b32_e32 v166, v233
+	v_mov_b32_e32 v17, v254
+	v_mov_b32_e32 v7, v233
+	v_mov_b32_e32 v8, v254
+	v_mov_b32_e32 v167, v233
+	v_mov_b32_e32 v14, v254
+	v_mov_b32_e32 v10, v233
+	v_mov_b32_e32 v11, v254
+	v_mov_b32_e32 v168, v233
+	v_mov_b32_e32 v18, v254
+	v_mov_b32_e32 v9, v233
+	v_mov_b32_e32 v15, v254
+	v_mov_b32_e32 v169, v233
+	v_mov_b32_e32 v16, v254
+	v_mov_b32_e32 v12, v233
+	v_mov_b32_e32 v13, v254
+	.loc	1 137 12
+	s_and_saveexec_b64 s[10:11], s[6:7]
+	s_cbranch_execz .LBB0_14
+	.loc	1 148 18 is_stmt 1
+	scratch_load_dwordx2 v[8:9], off, off offset:44
+	s_waitcnt vmcnt(0)
+	v_lshl_add_u64 v[8:9], v[8:9], 0, s[8:9]
+	.loc	1 137 12
+	global_load_dwordx4 v[166:169], v[8:9], off
+	s_waitcnt vmcnt(0)
+	v_lshrrev_b32_e32 v8, 24, v166
+	v_lshrrev_b32_e32 v7, 16, v166
+	v_lshrrev_b32_e32 v17, 8, v166
+	v_lshrrev_b32_e32 v11, 24, v167
+	v_lshrrev_b32_e32 v10, 16, v167
+	v_lshrrev_b32_e32 v14, 8, v167
+	v_lshrrev_b32_e32 v15, 24, v168
+	v_lshrrev_b32_e32 v9, 16, v168
+	v_lshrrev_b32_e32 v18, 8, v168
+	v_lshrrev_b32_e32 v13, 24, v169
+	v_lshrrev_b32_e32 v12, 16, v169
+	v_lshrrev_b32_e32 v16, 8, v169
+	s_branch .LBB0_14
+.LBB0_23:
+	s_waitcnt lgkmcnt(0)
+	s_barrier
+	scratch_load_dword v0, off, off
+	scratch_load_dwordx4 v[14:17], off, off offset:100
+	.loc	1 141 20
+	scratch_load_dwordx2 v[8:9], off, off offset:328
+	v_add_u32_e32 v4, 0, v234
+	scratch_load_dwordx4 v[30:33], off, off offset:164
+	scratch_load_dwordx4 v[26:29], off, off offset:148
+	scratch_load_dwordx4 v[22:25], off, off offset:132
+	scratch_load_dwordx4 v[18:21], off, off offset:116
+	ds_read_b128 v[166:169], v4 offset:32768
+	.loc	1 137 12
+	s_waitcnt vmcnt(6)
+	v_add_u32_e32 v0, 0, v0
+	ds_read_b128 v[162:165], v0
+	.loc	1 141 20
+	s_waitcnt vmcnt(4)
+	v_add_u32_e32 v8, 0, v8
+	ds_read_b128 v[206:209], v8 offset:32768
+	scratch_load_dwordx2 v[8:9], off, off offset:336
+	v_add_u32_e32 v0, 0, v236
+	ds_read_b128 v[170:173], v0 offset:32768
+	.loc	1 137 12
+	v_add_u32_e32 v0, 0, v232
+	ds_read_b128 v[0:3], v0
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(1)
+	v_mfma_f32_16x16x32_fp8_fp8 v[4:7], v[162:163], v[170:171], v[158:161]
+	.loc	1 107 30
+	s_waitcnt vmcnt(3)
+	v_cmp_gt_i32_e64 s[56:57], s75, v29
+	v_cmp_gt_i32_e64 s[58:59], s75, v28
+	v_cmp_gt_i32_e64 s[60:61], s75, v27
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[4:7], v[164:165], v[172:173], v[4:7]
+	.loc	1 107 30
+	v_cmp_gt_i32_e64 s[62:63], s75, v26
+	s_waitcnt vmcnt(2)
+	v_cmp_gt_i32_e64 s[48:49], s75, v25
+	v_cmp_gt_i32_e64 s[50:51], s75, v24
+	v_cmp_gt_i32_e64 s[52:53], s75, v23
+	v_cmp_gt_i32_e64 s[54:55], s75, v22
+	v_cmp_gt_i32_e64 s[30:31], s75, v17
+	v_cmp_gt_i32_e64 s[34:35], s75, v16
+	v_cmp_gt_i32_e64 s[36:37], s75, v15
+	v_cmp_gt_i32_e64 s[38:39], s75, v14
+	.loc	1 141 20
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v8, 0, v8
+	ds_read_b128 v[198:201], v8 offset:32768
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[162:163], v[206:207], v[138:141]
+	s_waitcnt lgkmcnt(1)
+	v_mfma_f32_16x16x32_fp8_fp8 v[4:7], v[0:1], v[166:167], v[4:7]
+	v_mfma_f32_16x16x32_fp8_fp8 v[182:185], v[2:3], v[168:169], v[4:7]
+	v_mfma_f32_16x16x32_fp8_fp8 v[4:7], v[164:165], v[208:209], v[8:11]
+	.loc	1 141 20
+	s_nop 2
+	scratch_load_dwordx2 v[8:9], off, off offset:312
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[4:7], v[0:1], v[198:199], v[4:7]
+	v_mfma_f32_16x16x32_fp8_fp8 v[178:181], v[2:3], v[200:201], v[4:7]
+	.loc	1 141 20
+	s_nop 5
+	scratch_load_dwordx2 v[4:5], off, off offset:320
+	s_waitcnt vmcnt(1)
+	v_add_u32_e32 v8, 0, v8
+	ds_read_b128 v[202:205], v8 offset:32768
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	ds_read_b128 v[194:197], v4 offset:32768
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(1)
+	v_mfma_f32_16x16x32_fp8_fp8 v[4:7], v[162:163], v[202:203], v[134:137]
+	.loc	1 141 20
+	scratch_load_dwordx2 v[8:9], off, off offset:296
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[4:7], v[164:165], v[204:205], v[4:7]
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[4:7], v[0:1], v[194:195], v[4:7]
+	v_mfma_f32_16x16x32_fp8_fp8 v[174:177], v[2:3], v[196:197], v[4:7]
+	.loc	1 141 20
+	s_nop 5
+	scratch_load_dwordx2 v[4:5], off, off offset:304
+	s_waitcnt vmcnt(1)
+	v_add_u32_e32 v8, 0, v8
+	ds_read_b128 v[190:193], v8 offset:32768
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	ds_read_b128 v[186:189], v4 offset:32768
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(1)
+	v_mfma_f32_16x16x32_fp8_fp8 v[4:7], v[162:163], v[190:191], v[126:129]
+	v_mfma_f32_16x16x32_fp8_fp8 v[4:7], v[164:165], v[192:193], v[4:7]
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[4:7], v[0:1], v[186:187], v[4:7]
+	.loc	1 137 12
+	scratch_load_dwordx2 v[0:1], off, off offset:288
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[162:165], v[2:3], v[188:189], v[4:7]
+	.loc	1 137 12
+	s_nop 4
+	scratch_load_dwordx2 v[4:5], off, off offset:280
+	s_waitcnt vmcnt(1)
+	v_add_u32_e32 v0, 0, v0
+	ds_read_b128 v[0:3], v0
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	ds_read_b128 v[4:7], v4
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(1)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[170:171], v[154:157]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[172:173], v[8:11]
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[166:167], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[158:161], v[6:7], v[168:169], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[206:207], v[150:153]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[208:209], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[198:199], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[154:157], v[6:7], v[200:201], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[202:203], v[146:149]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[204:205], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[194:195], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[150:153], v[6:7], v[196:197], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[190:191], v[142:145]
+	v_mfma_f32_16x16x32_fp8_fp8 v[0:3], v[2:3], v[192:193], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[0:3], v[4:5], v[186:187], v[0:3]
+	.loc	1 137 12
+	scratch_load_dwordx2 v[4:5], off, off offset:272
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[146:149], v[6:7], v[188:189], v[0:3]
+	.loc	1 137 12
+	s_nop 2
+	ds_read_b128 v[0:3], v4
+	scratch_load_dwordx2 v[4:5], off, off offset:264
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[170:171], v[102:105]
+	.loc	1 137 12
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	ds_read_b128 v[4:7], v4
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[172:173], v[8:11]
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[166:167], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[142:145], v[6:7], v[168:169], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[206:207], v[98:101]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[208:209], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[198:199], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[138:141], v[6:7], v[200:201], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[202:203], v[94:97]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[204:205], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[194:195], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[134:137], v[6:7], v[196:197], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[190:191], v[90:93]
+	v_mfma_f32_16x16x32_fp8_fp8 v[0:3], v[2:3], v[192:193], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[0:3], v[4:5], v[186:187], v[0:3]
+	.loc	1 137 12
+	scratch_load_dwordx2 v[4:5], off, off offset:256
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[126:129], v[6:7], v[188:189], v[0:3]
+	.loc	1 137 12
+	s_nop 2
+	ds_read_b128 v[0:3], v4
+	scratch_load_dwordx2 v[4:5], off, off offset:248
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[170:171], v[118:121]
+	.loc	1 137 12
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	ds_read_b128 v[4:7], v4
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[172:173], v[8:11]
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[166:167], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[118:121], v[6:7], v[168:169], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[206:207], v[114:117]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[208:209], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[198:199], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[114:117], v[6:7], v[200:201], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[202:203], v[110:113]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[204:205], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[194:195], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[110:113], v[6:7], v[196:197], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[190:191], v[106:109]
+	v_mfma_f32_16x16x32_fp8_fp8 v[0:3], v[2:3], v[192:193], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[0:3], v[4:5], v[186:187], v[0:3]
+	.loc	1 137 12
+	scratch_load_dwordx2 v[4:5], off, off offset:240
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[106:109], v[6:7], v[188:189], v[0:3]
+	.loc	1 137 12
+	s_nop 2
+	ds_read_b128 v[0:3], v4
+	scratch_load_dwordx2 v[4:5], off, off offset:232
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[170:171], v[70:73]
+	.loc	1 137 12
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	ds_read_b128 v[4:7], v4
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[172:173], v[8:11]
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[166:167], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[102:105], v[6:7], v[168:169], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[206:207], v[66:69]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[208:209], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[198:199], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[98:101], v[6:7], v[200:201], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[202:203], v[62:65]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[204:205], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[194:195], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[94:97], v[6:7], v[196:197], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[190:191], v[58:61]
+	v_mfma_f32_16x16x32_fp8_fp8 v[0:3], v[2:3], v[192:193], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[0:3], v[4:5], v[186:187], v[0:3]
+	.loc	1 137 12
+	scratch_load_dwordx2 v[4:5], off, off offset:224
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[90:93], v[6:7], v[188:189], v[0:3]
+	.loc	1 137 12
+	s_nop 2
+	ds_read_b128 v[0:3], v4
+	scratch_load_dwordx2 v[4:5], off, off offset:216
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[170:171], v[86:89]
+	.loc	1 137 12
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	ds_read_b128 v[4:7], v4
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[172:173], v[8:11]
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[166:167], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[86:89], v[6:7], v[168:169], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[206:207], v[82:85]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[208:209], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[198:199], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[82:85], v[6:7], v[200:201], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[202:203], v[78:81]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[204:205], v[8:11]
+	s_nop 1
+	scratch_load_dwordx4 v[78:81], off, off offset:52
+	.loc	1 107 30
+	s_waitcnt vmcnt(0)
+	v_cmp_gt_i32_e32 vcc, s75, v81
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[194:195], v[8:11]
+	.loc	1 107 30
+	v_cmp_gt_i32_e64 s[0:1], s75, v80
+	v_cmp_gt_i32_e64 s[2:3], s75, v79
+	v_cmp_gt_i32_e64 s[4:5], s75, v78
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[70:73], v[6:7], v[196:197], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[190:191], v[74:77]
+	v_mfma_f32_16x16x32_fp8_fp8 v[0:3], v[2:3], v[192:193], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[0:3], v[4:5], v[186:187], v[0:3]
+	.loc	1 137 12
+	scratch_load_dwordx2 v[4:5], off, off offset:208
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[66:69], v[6:7], v[188:189], v[0:3]
+	.loc	1 137 12
+	s_nop 2
+	ds_read_b128 v[0:3], v4
+	scratch_load_dwordx2 v[4:5], off, off offset:200
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[170:171], v[54:57]
+	.loc	1 137 12
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	ds_read_b128 v[4:7], v4
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[172:173], v[8:11]
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[166:167], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[62:65], v[6:7], v[168:169], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[206:207], v[50:53]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[208:209], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[198:199], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[58:61], v[6:7], v[200:201], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[202:203], v[130:133]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[204:205], v[8:11]
+	s_nop 1
+	scratch_load_dwordx4 v[130:133], off, off offset:84
+	.loc	1 107 30
+	v_cmp_gt_i32_e64 s[40:41], s75, v21
+	v_cmp_gt_i32_e64 s[42:43], s75, v20
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[194:195], v[8:11]
+	.loc	1 107 30
+	v_cmp_gt_i32_e64 s[44:45], s75, v19
+	v_cmp_gt_i32_e64 s[46:47], s75, v18
+	s_waitcnt vmcnt(0)
+	v_cmp_gt_i32_e64 s[22:23], s75, v133
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[54:57], v[6:7], v[196:197], v[8:11]
+	.loc	1 107 30
+	v_cmp_gt_i32_e64 s[24:25], s75, v132
+	v_cmp_gt_i32_e64 s[26:27], s75, v131
+	v_cmp_gt_i32_e64 s[28:29], s75, v130
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[190:191], v[122:125]
+	v_mfma_f32_16x16x32_fp8_fp8 v[0:3], v[2:3], v[192:193], v[8:11]
+	s_nop 1
+	scratch_load_dwordx4 v[122:125], off, off offset:68
+	.loc	1 107 30
+	s_waitcnt vmcnt(0)
+	v_cmp_gt_i32_e64 s[14:15], s75, v125
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[0:3], v[4:5], v[186:187], v[0:3]
+	.loc	1 137 12
+	scratch_load_dwordx2 v[4:5], off, off offset:192
+	.loc	1 107 30
+	v_cmp_gt_i32_e64 s[16:17], s75, v124
+	v_cmp_gt_i32_e64 s[18:19], s75, v123
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[50:53], v[6:7], v[188:189], v[0:3]
+	.loc	1 107 30
+	v_cmp_gt_i32_e64 s[20:21], s75, v122
+	.loc	1 137 12
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	ds_read_b128 v[0:3], v4
+	scratch_load_dwordx2 v[4:5], off, off offset:184
+	.loc	1 144 36
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[170:171], v[46:49]
+	.loc	1 137 12
+	s_waitcnt vmcnt(0)
+	v_add_u32_e32 v4, 0, v4
+	ds_read_b128 v[4:7], v4
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[172:173], v[8:11]
+	s_waitcnt lgkmcnt(0)
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[166:167], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[46:49], v[6:7], v[168:169], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[206:207], v[42:45]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[208:209], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[198:199], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[42:45], v[6:7], v[200:201], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[202:203], v[38:41]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[204:205], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[4:5], v[194:195], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[38:41], v[6:7], v[196:197], v[8:11]
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[0:1], v[190:191], v[34:37]
+	.loc	1 109 38
+	scratch_load_dword v0, off, off offset:180
+	.loc	1 107 30
+	v_cmp_gt_i32_e64 s[70:71], s75, v30
+	v_cmp_gt_i32_e64 s[64:65], s75, v33
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[8:11], v[2:3], v[192:193], v[8:11]
+	.loc	1 162 33
+	v_mul_lo_u32 v2, v30, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[12:13], v[2:3], 1, s[84:85]
+	.loc	1 144 36 is_stmt 1
+	v_mfma_f32_16x16x32_fp8_fp8 v[2:5], v[4:5], v[186:187], v[8:11]
+	.loc	1 107 30
+	v_cmp_gt_i32_e64 s[66:67], s75, v32
+	v_cmp_gt_i32_e64 s[68:69], s75, v31
+	.loc	1 109 38
+	s_waitcnt vmcnt(0)
+	v_or_b32_e32 v0, s88, v0
+	.loc	1 144 36
+	v_mfma_f32_16x16x32_fp8_fp8 v[34:37], v[6:7], v[188:189], v[2:5]
+	.loc	1 162 55
+	v_ashrrev_i32_e32 v1, 31, v0
+	.loc	1 163 55
+	v_cmp_gt_i32_e64 s[6:7], s72, v0
+	.loc	1 162 55
+	v_lshl_add_u64 v[74:75], v[0:1], 1, v[12:13]
+	.loc	1 163 36
+	s_and_b64 s[10:11], s[6:7], s[70:71]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[8:9], s[10:11]
+	s_cbranch_execz .LBB0_25
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v182
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[74:75], v2, off
+.LBB0_25:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[8:9]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v31, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[30:31], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[10:11], s[6:7], s[68:69]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[8:9], s[10:11]
+	s_cbranch_execz .LBB0_27
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v183
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[30:31], v2, off
+.LBB0_27:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[8:9]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v32, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[76:77], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[10:11], s[6:7], s[66:67]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[8:9], s[10:11]
+	s_cbranch_execz .LBB0_29
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v184
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[76:77], v2, off
+.LBB0_29:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[8:9]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v33, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[32:33], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[10:11], s[6:7], s[64:65]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[8:9], s[10:11]
+	s_cbranch_execz .LBB0_31
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v185
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[32:33], v2, off
+.LBB0_31:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[8:9]
+	.loc	1 109 38 is_stmt 1
+	v_or_b32_e32 v2, 64, v0
+	.loc	1 163 55
+	v_cmp_gt_i32_e64 s[8:9], s72, v2
+	.loc	1 163 36 is_stmt 0
+	s_and_b64 s[12:13], s[8:9], s[70:71]
+	.loc	1 164 21 is_stmt 1
+	s_and_saveexec_b64 s[10:11], s[12:13]
+	s_cbranch_execnz .LBB0_188
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[10:11]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[12:13], s[8:9], s[68:69]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[10:11], s[12:13]
+	s_cbranch_execnz .LBB0_189
+.LBB0_33:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[10:11]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[12:13], s[8:9], s[66:67]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[10:11], s[12:13]
+	s_cbranch_execnz .LBB0_190
+.LBB0_34:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[10:11]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[12:13], s[8:9], s[64:65]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[10:11], s[12:13]
+	s_cbranch_execz .LBB0_36
+.LBB0_35:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v181
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[32:33], v2, off offset:128
+.LBB0_36:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[10:11]
+	.loc	1 109 38 is_stmt 1
+	v_or_b32_e32 v2, 0x80, v0
+	.loc	1 163 55
+	v_cmp_gt_i32_e64 s[10:11], s72, v2
+	.loc	1 163 36 is_stmt 0
+	s_and_b64 s[76:77], s[10:11], s[70:71]
+	.loc	1 164 21 is_stmt 1
+	s_and_saveexec_b64 s[12:13], s[76:77]
+	s_cbranch_execnz .LBB0_191
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[12:13]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[76:77], s[10:11], s[68:69]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[12:13], s[76:77]
+	s_cbranch_execnz .LBB0_192
+.LBB0_38:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[12:13]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[76:77], s[10:11], s[66:67]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[12:13], s[76:77]
+	s_cbranch_execnz .LBB0_193
+.LBB0_39:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[12:13]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[76:77], s[10:11], s[64:65]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[12:13], s[76:77]
+	s_cbranch_execz .LBB0_41
+.LBB0_40:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v177
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[32:33], v2, off offset:256
+.LBB0_41:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[12:13]
+	.loc	1 109 38 is_stmt 1
+	v_or_b32_e32 v2, 0xc0, v0
+	.loc	1 163 55
+	v_cmp_gt_i32_e64 s[12:13], s72, v2
+	.loc	1 163 36 is_stmt 0
+	s_and_b64 s[72:73], s[12:13], s[70:71]
+	.loc	1 164 21 is_stmt 1
+	s_and_saveexec_b64 s[70:71], s[72:73]
+	s_cbranch_execnz .LBB0_194
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[70:71]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[70:71], s[12:13], s[68:69]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[68:69], s[70:71]
+	s_cbranch_execnz .LBB0_195
+.LBB0_43:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[68:69]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[68:69], s[12:13], s[66:67]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[66:67], s[68:69]
+	s_cbranch_execnz .LBB0_196
+.LBB0_44:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[66:67]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[66:67], s[12:13], s[64:65]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execz .LBB0_46
+.LBB0_45:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v165
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[32:33], v2, off offset:384
+.LBB0_46:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v26, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[30:31], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[66:67], s[6:7], s[62:63]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execz .LBB0_48
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v158
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[30:31], v2, off
+.LBB0_48:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v27, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[26:27], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[66:67], s[6:7], s[60:61]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execz .LBB0_50
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v159
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[26:27], v2, off
+.LBB0_50:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v28, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[32:33], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[66:67], s[6:7], s[58:59]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execz .LBB0_52
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v160
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[32:33], v2, off
+.LBB0_52:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v29, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[28:29], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[66:67], s[6:7], s[56:57]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execnz .LBB0_197
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[66:67], s[8:9], s[62:63]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execnz .LBB0_198
+.LBB0_54:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[66:67], s[8:9], s[60:61]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execnz .LBB0_199
+.LBB0_55:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[66:67], s[8:9], s[58:59]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execnz .LBB0_200
+.LBB0_56:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[66:67], s[8:9], s[56:57]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execnz .LBB0_201
+.LBB0_57:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[66:67], s[10:11], s[62:63]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execnz .LBB0_202
+.LBB0_58:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[66:67], s[10:11], s[60:61]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execnz .LBB0_203
+.LBB0_59:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[66:67], s[10:11], s[58:59]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execnz .LBB0_204
+.LBB0_60:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[66:67], s[10:11], s[56:57]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execnz .LBB0_205
+.LBB0_61:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[64:65], s[12:13], s[62:63]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[62:63], s[64:65]
+	s_cbranch_execnz .LBB0_206
+.LBB0_62:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[62:63]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[62:63], s[12:13], s[60:61]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[60:61], s[62:63]
+	s_cbranch_execnz .LBB0_207
+.LBB0_63:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[60:61]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[60:61], s[12:13], s[58:59]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[58:59], s[60:61]
+	s_cbranch_execnz .LBB0_208
+.LBB0_64:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[58:59]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[58:59], s[12:13], s[56:57]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execz .LBB0_66
+.LBB0_65:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v149
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[28:29], v2, off offset:384
+.LBB0_66:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v22, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[26:27], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[58:59], s[6:7], s[54:55]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execz .LBB0_68
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v142
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[26:27], v2, off
+.LBB0_68:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v23, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[22:23], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[58:59], s[6:7], s[52:53]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execz .LBB0_70
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v143
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[22:23], v2, off
+.LBB0_70:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v24, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[28:29], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[58:59], s[6:7], s[50:51]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execz .LBB0_72
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v144
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[28:29], v2, off
+.LBB0_72:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v25, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[24:25], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[58:59], s[6:7], s[48:49]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execnz .LBB0_209
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[58:59], s[8:9], s[54:55]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execnz .LBB0_210
+.LBB0_74:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[58:59], s[8:9], s[52:53]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execnz .LBB0_211
+.LBB0_75:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[58:59], s[8:9], s[50:51]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execnz .LBB0_212
+.LBB0_76:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[58:59], s[8:9], s[48:49]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execnz .LBB0_213
+.LBB0_77:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[58:59], s[10:11], s[54:55]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execnz .LBB0_214
+.LBB0_78:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[58:59], s[10:11], s[52:53]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execnz .LBB0_215
+.LBB0_79:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[58:59], s[10:11], s[50:51]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execnz .LBB0_216
+.LBB0_80:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[58:59], s[10:11], s[48:49]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execnz .LBB0_217
+.LBB0_81:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[56:57], s[12:13], s[54:55]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[54:55], s[56:57]
+	s_cbranch_execnz .LBB0_218
+.LBB0_82:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[54:55]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[54:55], s[12:13], s[52:53]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[52:53], s[54:55]
+	s_cbranch_execnz .LBB0_219
+.LBB0_83:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[52:53]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[52:53], s[12:13], s[50:51]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[50:51], s[52:53]
+	s_cbranch_execnz .LBB0_220
+.LBB0_84:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[50:51]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[50:51], s[12:13], s[48:49]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execz .LBB0_86
+.LBB0_85:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v129
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[24:25], v2, off offset:384
+.LBB0_86:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v18, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[22:23], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[50:51], s[6:7], s[46:47]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execz .LBB0_88
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v118
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[22:23], v2, off
+.LBB0_88:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v19, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[18:19], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[50:51], s[6:7], s[44:45]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execz .LBB0_90
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v119
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[18:19], v2, off
+.LBB0_90:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v20, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[24:25], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[50:51], s[6:7], s[42:43]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execz .LBB0_92
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v120
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[24:25], v2, off
+.LBB0_92:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v21, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[20:21], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[50:51], s[6:7], s[40:41]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execnz .LBB0_221
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[50:51], s[8:9], s[46:47]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execnz .LBB0_222
+.LBB0_94:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[50:51], s[8:9], s[44:45]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execnz .LBB0_223
+.LBB0_95:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[50:51], s[8:9], s[42:43]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execnz .LBB0_224
+.LBB0_96:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[50:51], s[8:9], s[40:41]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execnz .LBB0_225
+.LBB0_97:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[50:51], s[10:11], s[46:47]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execnz .LBB0_226
+.LBB0_98:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[50:51], s[10:11], s[44:45]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execnz .LBB0_227
+.LBB0_99:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[50:51], s[10:11], s[42:43]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execnz .LBB0_228
+.LBB0_100:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[50:51], s[10:11], s[40:41]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execnz .LBB0_229
+.LBB0_101:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[48:49], s[12:13], s[46:47]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[46:47], s[48:49]
+	s_cbranch_execnz .LBB0_230
+.LBB0_102:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[46:47]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[46:47], s[12:13], s[44:45]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[44:45], s[46:47]
+	s_cbranch_execnz .LBB0_231
+.LBB0_103:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[44:45]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[44:45], s[12:13], s[42:43]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[42:43], s[44:45]
+	s_cbranch_execnz .LBB0_232
+.LBB0_104:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[42:43]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[42:43], s[12:13], s[40:41]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execz .LBB0_106
+.LBB0_105:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v109
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[20:21], v2, off offset:384
+.LBB0_106:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v14, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[18:19], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[42:43], s[6:7], s[38:39]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execz .LBB0_108
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v102
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[18:19], v2, off
+.LBB0_108:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v15, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[14:15], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[42:43], s[6:7], s[36:37]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execz .LBB0_110
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v103
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[14:15], v2, off
+.LBB0_110:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v16, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[20:21], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[42:43], s[6:7], s[34:35]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execz .LBB0_112
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v104
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[20:21], v2, off
+.LBB0_112:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v17, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[16:17], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[42:43], s[6:7], s[30:31]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execnz .LBB0_233
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[42:43], s[8:9], s[38:39]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execnz .LBB0_234
+.LBB0_114:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[42:43], s[8:9], s[36:37]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execnz .LBB0_235
+.LBB0_115:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[42:43], s[8:9], s[34:35]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execnz .LBB0_236
+.LBB0_116:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[42:43], s[8:9], s[30:31]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execnz .LBB0_237
+.LBB0_117:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[42:43], s[10:11], s[38:39]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execnz .LBB0_238
+.LBB0_118:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[42:43], s[10:11], s[36:37]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execnz .LBB0_239
+.LBB0_119:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[42:43], s[10:11], s[34:35]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execnz .LBB0_240
+.LBB0_120:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[42:43], s[10:11], s[30:31]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execnz .LBB0_241
+.LBB0_121:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[40:41], s[12:13], s[38:39]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[38:39], s[40:41]
+	s_cbranch_execnz .LBB0_242
+.LBB0_122:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[38:39]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[38:39], s[12:13], s[36:37]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[36:37], s[38:39]
+	s_cbranch_execnz .LBB0_243
+.LBB0_123:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[36:37]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[36:37], s[12:13], s[34:35]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[34:35], s[36:37]
+	s_cbranch_execnz .LBB0_244
+.LBB0_124:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[34:35]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[34:35], s[12:13], s[30:31]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execz .LBB0_126
+.LBB0_125:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v93
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[16:17], v2, off offset:384
+.LBB0_126:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v130, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[14:15], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[34:35], s[6:7], s[28:29]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execz .LBB0_128
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v86
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[14:15], v2, off
+.LBB0_128:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v131, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[10:11], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[34:35], s[6:7], s[26:27]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execz .LBB0_130
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v87
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[10:11], v2, off
+.LBB0_130:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v132, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[16:17], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[34:35], s[6:7], s[24:25]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execz .LBB0_132
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v88
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[16:17], v2, off
+.LBB0_132:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v133, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[12:13], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[34:35], s[6:7], s[22:23]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execnz .LBB0_245
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[34:35], s[8:9], s[28:29]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execnz .LBB0_246
+.LBB0_134:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[34:35], s[8:9], s[26:27]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execnz .LBB0_247
+.LBB0_135:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[34:35], s[8:9], s[24:25]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execnz .LBB0_248
+.LBB0_136:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[34:35], s[8:9], s[22:23]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execnz .LBB0_249
+.LBB0_137:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[34:35], s[10:11], s[28:29]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execnz .LBB0_250
+.LBB0_138:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[34:35], s[10:11], s[26:27]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execnz .LBB0_251
+.LBB0_139:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[34:35], s[10:11], s[24:25]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execnz .LBB0_252
+.LBB0_140:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[34:35], s[10:11], s[22:23]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execnz .LBB0_253
+.LBB0_141:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[30:31], s[12:13], s[28:29]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[28:29], s[30:31]
+	s_cbranch_execnz .LBB0_254
+.LBB0_142:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[28:29]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[28:29], s[12:13], s[26:27]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[26:27], s[28:29]
+	s_cbranch_execnz .LBB0_255
+.LBB0_143:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[26:27]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[26:27], s[12:13], s[24:25]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[24:25], s[26:27]
+	s_cbranch_execnz .LBB0_256
+.LBB0_144:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[24:25]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[24:25], s[12:13], s[22:23]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execz .LBB0_146
+.LBB0_145:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v69
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[12:13], v2, off offset:384
+.LBB0_146:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v122, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[10:11], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[24:25], s[6:7], s[20:21]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execz .LBB0_148
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v62
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[10:11], v2, off
+.LBB0_148:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v123, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[6:7], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[24:25], s[6:7], s[18:19]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execz .LBB0_150
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v63
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[6:7], v2, off
+.LBB0_150:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v124, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[12:13], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[24:25], s[6:7], s[16:17]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execz .LBB0_152
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v64
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[12:13], v2, off
+.LBB0_152:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v125, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[8:9], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[24:25], s[6:7], s[14:15]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execnz .LBB0_257
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[24:25], s[8:9], s[20:21]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execnz .LBB0_258
+.LBB0_154:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[24:25], s[8:9], s[18:19]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execnz .LBB0_259
+.LBB0_155:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[24:25], s[8:9], s[16:17]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execnz .LBB0_260
+.LBB0_156:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[24:25], s[8:9], s[14:15]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execnz .LBB0_261
+.LBB0_157:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[24:25], s[10:11], s[20:21]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execnz .LBB0_262
+.LBB0_158:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[24:25], s[10:11], s[18:19]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execnz .LBB0_263
+.LBB0_159:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[24:25], s[10:11], s[16:17]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execnz .LBB0_264
+.LBB0_160:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[24:25], s[10:11], s[14:15]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execnz .LBB0_265
+.LBB0_161:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[22:23], s[12:13], s[20:21]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[20:21], s[22:23]
+	s_cbranch_execnz .LBB0_266
+.LBB0_162:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[20:21]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[20:21], s[12:13], s[18:19]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[18:19], s[20:21]
+	s_cbranch_execnz .LBB0_267
+.LBB0_163:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[18:19]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[18:19], s[12:13], s[16:17]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[16:17], s[18:19]
+	s_cbranch_execnz .LBB0_268
+.LBB0_164:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[16:17]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[16:17], s[12:13], s[14:15]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[14:15], s[16:17]
+	s_cbranch_execz .LBB0_166
+.LBB0_165:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v53
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[8:9], v2, off offset:384
+.LBB0_166:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[14:15]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v78, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[6:7], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[16:17], s[6:7], s[4:5]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[14:15], s[16:17]
+	s_cbranch_execz .LBB0_168
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v46
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[6:7], v2, off
+.LBB0_168:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[14:15]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v2, v79, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v3, 31, v2
+	v_lshl_add_u64 v[2:3], v[2:3], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[2:3], v[0:1], 1, v[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[16:17], s[6:7], s[2:3]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[14:15], s[16:17]
+	s_cbranch_execz .LBB0_170
+	.loc	1 156 37
+	v_mul_f32_e32 v4, s33, v47
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v4, s74, v4, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[2:3], v4, off
+.LBB0_170:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[14:15]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v4, v80, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v5, 31, v4
+	v_lshl_add_u64 v[4:5], v[4:5], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[8:9], v[0:1], 1, v[4:5]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[16:17], s[6:7], s[0:1]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[14:15], s[16:17]
+	s_cbranch_execz .LBB0_172
+	.loc	1 156 37
+	v_mul_f32_e32 v4, s33, v48
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v4, s74, v4, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[8:9], v4, off
+.LBB0_172:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[14:15]
+	.loc	1 162 33 is_stmt 1
+	v_mul_lo_u32 v4, v81, s79
+	.loc	1 162 21 is_stmt 0
+	v_ashrrev_i32_e32 v5, 31, v4
+	v_lshl_add_u64 v[4:5], v[4:5], 1, s[84:85]
+	.loc	1 162 55
+	v_lshl_add_u64 v[0:1], v[0:1], 1, v[4:5]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[14:15], s[6:7], vcc
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[14:15]
+	s_cbranch_execnz .LBB0_269
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[14:15], s[8:9], s[4:5]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[14:15]
+	s_cbranch_execnz .LBB0_270
+.LBB0_174:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[14:15], s[8:9], s[2:3]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[14:15]
+	s_cbranch_execnz .LBB0_271
+.LBB0_175:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[14:15], s[8:9], s[0:1]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[14:15]
+	s_cbranch_execnz .LBB0_272
+.LBB0_176:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[8:9], s[8:9], vcc
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[8:9]
+	s_cbranch_execnz .LBB0_273
+.LBB0_177:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[8:9], s[10:11], s[4:5]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[8:9]
+	s_cbranch_execnz .LBB0_274
+.LBB0_178:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[8:9], s[10:11], s[2:3]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[8:9]
+	s_cbranch_execnz .LBB0_275
+.LBB0_179:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[8:9], s[10:11], s[0:1]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[8:9]
+	s_cbranch_execnz .LBB0_276
+.LBB0_180:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[8:9], s[10:11], vcc
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[8:9]
+	s_cbranch_execnz .LBB0_277
+.LBB0_181:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[6:7], s[12:13], s[4:5]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[4:5], s[6:7]
+	s_cbranch_execnz .LBB0_278
+.LBB0_182:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[4:5]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[4:5], s[12:13], s[2:3]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[2:3], s[4:5]
+	s_cbranch_execnz .LBB0_279
+.LBB0_183:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[2:3]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[2:3], s[12:13], s[0:1]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[0:1], s[2:3]
+	s_cbranch_execz .LBB0_185
+.LBB0_184:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v36
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[8:9], v2, off offset:384
+.LBB0_185:
+	.loc	1 0 21 is_stmt 0
+	s_or_b64 exec, exec, s[0:1]
+	.loc	1 163 36 is_stmt 1
+	s_and_b64 s[0:1], s[12:13], vcc
+	.loc	1 164 21
+	s_and_saveexec_b64 s[2:3], s[0:1]
+	s_xor_b64 s[2:3], exec, s[2:3]
+	s_cbranch_execz .LBB0_187
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v37
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[0:1], v2, off offset:384
+.LBB0_187:
+	.loc	1 104 8
+	s_endpgm
+.LBB0_188:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v178
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[74:75], v2, off offset:128
+	s_or_b64 exec, exec, s[10:11]
+	.loc	1 163 36
+	s_and_b64 s[12:13], s[8:9], s[68:69]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[10:11], s[12:13]
+	s_cbranch_execz .LBB0_33
+.LBB0_189:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v179
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[30:31], v2, off offset:128
+	s_or_b64 exec, exec, s[10:11]
+	.loc	1 163 36
+	s_and_b64 s[12:13], s[8:9], s[66:67]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[10:11], s[12:13]
+	s_cbranch_execz .LBB0_34
+.LBB0_190:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v180
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[76:77], v2, off offset:128
+	s_or_b64 exec, exec, s[10:11]
+	.loc	1 163 36
+	s_and_b64 s[12:13], s[8:9], s[64:65]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[10:11], s[12:13]
+	s_cbranch_execnz .LBB0_35
+	s_branch .LBB0_36
+.LBB0_191:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v174
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[74:75], v2, off offset:256
+	s_or_b64 exec, exec, s[12:13]
+	.loc	1 163 36
+	s_and_b64 s[76:77], s[10:11], s[68:69]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[12:13], s[76:77]
+	s_cbranch_execz .LBB0_38
+.LBB0_192:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v175
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[30:31], v2, off offset:256
+	s_or_b64 exec, exec, s[12:13]
+	.loc	1 163 36
+	s_and_b64 s[76:77], s[10:11], s[66:67]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[12:13], s[76:77]
+	s_cbranch_execz .LBB0_39
+.LBB0_193:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v176
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[76:77], v2, off offset:256
+	s_or_b64 exec, exec, s[12:13]
+	.loc	1 163 36
+	s_and_b64 s[76:77], s[10:11], s[64:65]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[12:13], s[76:77]
+	s_cbranch_execnz .LBB0_40
+	s_branch .LBB0_41
+.LBB0_194:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v162
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[74:75], v2, off offset:384
+	s_or_b64 exec, exec, s[70:71]
+	.loc	1 163 36
+	s_and_b64 s[70:71], s[12:13], s[68:69]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[68:69], s[70:71]
+	s_cbranch_execz .LBB0_43
+.LBB0_195:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v163
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[30:31], v2, off offset:384
+	s_or_b64 exec, exec, s[68:69]
+	.loc	1 163 36
+	s_and_b64 s[68:69], s[12:13], s[66:67]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[66:67], s[68:69]
+	s_cbranch_execz .LBB0_44
+.LBB0_196:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v164
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[76:77], v2, off offset:384
+	s_or_b64 exec, exec, s[66:67]
+	.loc	1 163 36
+	s_and_b64 s[66:67], s[12:13], s[64:65]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execnz .LBB0_45
+	s_branch .LBB0_46
+.LBB0_197:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v161
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[28:29], v2, off
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36
+	s_and_b64 s[66:67], s[8:9], s[62:63]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execz .LBB0_54
+.LBB0_198:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v154
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[30:31], v2, off offset:128
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36
+	s_and_b64 s[66:67], s[8:9], s[60:61]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execz .LBB0_55
+.LBB0_199:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v155
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[26:27], v2, off offset:128
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36
+	s_and_b64 s[66:67], s[8:9], s[58:59]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execz .LBB0_56
+.LBB0_200:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v156
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[32:33], v2, off offset:128
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36
+	s_and_b64 s[66:67], s[8:9], s[56:57]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execz .LBB0_57
+.LBB0_201:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v157
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[28:29], v2, off offset:128
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36
+	s_and_b64 s[66:67], s[10:11], s[62:63]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execz .LBB0_58
+.LBB0_202:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v150
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[30:31], v2, off offset:256
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36
+	s_and_b64 s[66:67], s[10:11], s[60:61]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execz .LBB0_59
+.LBB0_203:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v151
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[26:27], v2, off offset:256
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36
+	s_and_b64 s[66:67], s[10:11], s[58:59]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execz .LBB0_60
+.LBB0_204:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v152
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[32:33], v2, off offset:256
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36
+	s_and_b64 s[66:67], s[10:11], s[56:57]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[64:65], s[66:67]
+	s_cbranch_execz .LBB0_61
+.LBB0_205:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v153
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[28:29], v2, off offset:256
+	s_or_b64 exec, exec, s[64:65]
+	.loc	1 163 36
+	s_and_b64 s[64:65], s[12:13], s[62:63]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[62:63], s[64:65]
+	s_cbranch_execz .LBB0_62
+.LBB0_206:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v146
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[30:31], v2, off offset:384
+	s_or_b64 exec, exec, s[62:63]
+	.loc	1 163 36
+	s_and_b64 s[62:63], s[12:13], s[60:61]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[60:61], s[62:63]
+	s_cbranch_execz .LBB0_63
+.LBB0_207:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v147
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[26:27], v2, off offset:384
+	s_or_b64 exec, exec, s[60:61]
+	.loc	1 163 36
+	s_and_b64 s[60:61], s[12:13], s[58:59]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[58:59], s[60:61]
+	s_cbranch_execz .LBB0_64
+.LBB0_208:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v148
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[32:33], v2, off offset:384
+	s_or_b64 exec, exec, s[58:59]
+	.loc	1 163 36
+	s_and_b64 s[58:59], s[12:13], s[56:57]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execnz .LBB0_65
+	s_branch .LBB0_66
+.LBB0_209:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v145
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[24:25], v2, off
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36
+	s_and_b64 s[58:59], s[8:9], s[54:55]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execz .LBB0_74
+.LBB0_210:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v138
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[26:27], v2, off offset:128
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36
+	s_and_b64 s[58:59], s[8:9], s[52:53]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execz .LBB0_75
+.LBB0_211:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v139
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[22:23], v2, off offset:128
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36
+	s_and_b64 s[58:59], s[8:9], s[50:51]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execz .LBB0_76
+.LBB0_212:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v140
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[28:29], v2, off offset:128
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36
+	s_and_b64 s[58:59], s[8:9], s[48:49]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execz .LBB0_77
+.LBB0_213:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v141
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[24:25], v2, off offset:128
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36
+	s_and_b64 s[58:59], s[10:11], s[54:55]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execz .LBB0_78
+.LBB0_214:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v134
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[26:27], v2, off offset:256
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36
+	s_and_b64 s[58:59], s[10:11], s[52:53]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execz .LBB0_79
+.LBB0_215:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v135
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[22:23], v2, off offset:256
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36
+	s_and_b64 s[58:59], s[10:11], s[50:51]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execz .LBB0_80
+.LBB0_216:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v136
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[28:29], v2, off offset:256
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36
+	s_and_b64 s[58:59], s[10:11], s[48:49]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[56:57], s[58:59]
+	s_cbranch_execz .LBB0_81
+.LBB0_217:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v137
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[24:25], v2, off offset:256
+	s_or_b64 exec, exec, s[56:57]
+	.loc	1 163 36
+	s_and_b64 s[56:57], s[12:13], s[54:55]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[54:55], s[56:57]
+	s_cbranch_execz .LBB0_82
+.LBB0_218:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v126
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[26:27], v2, off offset:384
+	s_or_b64 exec, exec, s[54:55]
+	.loc	1 163 36
+	s_and_b64 s[54:55], s[12:13], s[52:53]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[52:53], s[54:55]
+	s_cbranch_execz .LBB0_83
+.LBB0_219:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v127
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[22:23], v2, off offset:384
+	s_or_b64 exec, exec, s[52:53]
+	.loc	1 163 36
+	s_and_b64 s[52:53], s[12:13], s[50:51]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[50:51], s[52:53]
+	s_cbranch_execz .LBB0_84
+.LBB0_220:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v128
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[28:29], v2, off offset:384
+	s_or_b64 exec, exec, s[50:51]
+	.loc	1 163 36
+	s_and_b64 s[50:51], s[12:13], s[48:49]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execnz .LBB0_85
+	s_branch .LBB0_86
+.LBB0_221:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v121
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[20:21], v2, off
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36
+	s_and_b64 s[50:51], s[8:9], s[46:47]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execz .LBB0_94
+.LBB0_222:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v114
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[22:23], v2, off offset:128
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36
+	s_and_b64 s[50:51], s[8:9], s[44:45]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execz .LBB0_95
+.LBB0_223:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v115
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[18:19], v2, off offset:128
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36
+	s_and_b64 s[50:51], s[8:9], s[42:43]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execz .LBB0_96
+.LBB0_224:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v116
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[24:25], v2, off offset:128
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36
+	s_and_b64 s[50:51], s[8:9], s[40:41]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execz .LBB0_97
+.LBB0_225:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v117
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[20:21], v2, off offset:128
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36
+	s_and_b64 s[50:51], s[10:11], s[46:47]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execz .LBB0_98
+.LBB0_226:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v110
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[22:23], v2, off offset:256
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36
+	s_and_b64 s[50:51], s[10:11], s[44:45]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execz .LBB0_99
+.LBB0_227:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v111
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[18:19], v2, off offset:256
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36
+	s_and_b64 s[50:51], s[10:11], s[42:43]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execz .LBB0_100
+.LBB0_228:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v112
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[24:25], v2, off offset:256
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36
+	s_and_b64 s[50:51], s[10:11], s[40:41]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[48:49], s[50:51]
+	s_cbranch_execz .LBB0_101
+.LBB0_229:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v113
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[20:21], v2, off offset:256
+	s_or_b64 exec, exec, s[48:49]
+	.loc	1 163 36
+	s_and_b64 s[48:49], s[12:13], s[46:47]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[46:47], s[48:49]
+	s_cbranch_execz .LBB0_102
+.LBB0_230:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v106
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[22:23], v2, off offset:384
+	s_or_b64 exec, exec, s[46:47]
+	.loc	1 163 36
+	s_and_b64 s[46:47], s[12:13], s[44:45]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[44:45], s[46:47]
+	s_cbranch_execz .LBB0_103
+.LBB0_231:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v107
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[18:19], v2, off offset:384
+	s_or_b64 exec, exec, s[44:45]
+	.loc	1 163 36
+	s_and_b64 s[44:45], s[12:13], s[42:43]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[42:43], s[44:45]
+	s_cbranch_execz .LBB0_104
+.LBB0_232:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v108
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[24:25], v2, off offset:384
+	s_or_b64 exec, exec, s[42:43]
+	.loc	1 163 36
+	s_and_b64 s[42:43], s[12:13], s[40:41]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execnz .LBB0_105
+	s_branch .LBB0_106
+.LBB0_233:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v105
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[16:17], v2, off
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36
+	s_and_b64 s[42:43], s[8:9], s[38:39]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execz .LBB0_114
+.LBB0_234:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v98
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[18:19], v2, off offset:128
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36
+	s_and_b64 s[42:43], s[8:9], s[36:37]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execz .LBB0_115
+.LBB0_235:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v99
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[14:15], v2, off offset:128
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36
+	s_and_b64 s[42:43], s[8:9], s[34:35]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execz .LBB0_116
+.LBB0_236:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v100
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[20:21], v2, off offset:128
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36
+	s_and_b64 s[42:43], s[8:9], s[30:31]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execz .LBB0_117
+.LBB0_237:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v101
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[16:17], v2, off offset:128
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36
+	s_and_b64 s[42:43], s[10:11], s[38:39]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execz .LBB0_118
+.LBB0_238:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v94
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[18:19], v2, off offset:256
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36
+	s_and_b64 s[42:43], s[10:11], s[36:37]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execz .LBB0_119
+.LBB0_239:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v95
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[14:15], v2, off offset:256
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36
+	s_and_b64 s[42:43], s[10:11], s[34:35]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execz .LBB0_120
+.LBB0_240:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v96
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[20:21], v2, off offset:256
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36
+	s_and_b64 s[42:43], s[10:11], s[30:31]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[40:41], s[42:43]
+	s_cbranch_execz .LBB0_121
+.LBB0_241:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v97
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[16:17], v2, off offset:256
+	s_or_b64 exec, exec, s[40:41]
+	.loc	1 163 36
+	s_and_b64 s[40:41], s[12:13], s[38:39]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[38:39], s[40:41]
+	s_cbranch_execz .LBB0_122
+.LBB0_242:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v90
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[18:19], v2, off offset:384
+	s_or_b64 exec, exec, s[38:39]
+	.loc	1 163 36
+	s_and_b64 s[38:39], s[12:13], s[36:37]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[36:37], s[38:39]
+	s_cbranch_execz .LBB0_123
+.LBB0_243:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v91
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[14:15], v2, off offset:384
+	s_or_b64 exec, exec, s[36:37]
+	.loc	1 163 36
+	s_and_b64 s[36:37], s[12:13], s[34:35]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[34:35], s[36:37]
+	s_cbranch_execz .LBB0_124
+.LBB0_244:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v92
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[20:21], v2, off offset:384
+	s_or_b64 exec, exec, s[34:35]
+	.loc	1 163 36
+	s_and_b64 s[34:35], s[12:13], s[30:31]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execnz .LBB0_125
+	s_branch .LBB0_126
+.LBB0_245:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v89
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[12:13], v2, off
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36
+	s_and_b64 s[34:35], s[8:9], s[28:29]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execz .LBB0_134
+.LBB0_246:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v82
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[14:15], v2, off offset:128
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36
+	s_and_b64 s[34:35], s[8:9], s[26:27]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execz .LBB0_135
+.LBB0_247:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v83
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[10:11], v2, off offset:128
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36
+	s_and_b64 s[34:35], s[8:9], s[24:25]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execz .LBB0_136
+.LBB0_248:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v84
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[16:17], v2, off offset:128
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36
+	s_and_b64 s[34:35], s[8:9], s[22:23]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execz .LBB0_137
+.LBB0_249:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v85
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[12:13], v2, off offset:128
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36
+	s_and_b64 s[34:35], s[10:11], s[28:29]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execz .LBB0_138
+.LBB0_250:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v70
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[14:15], v2, off offset:256
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36
+	s_and_b64 s[34:35], s[10:11], s[26:27]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execz .LBB0_139
+.LBB0_251:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v71
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[10:11], v2, off offset:256
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36
+	s_and_b64 s[34:35], s[10:11], s[24:25]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execz .LBB0_140
+.LBB0_252:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v72
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[16:17], v2, off offset:256
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36
+	s_and_b64 s[34:35], s[10:11], s[22:23]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[30:31], s[34:35]
+	s_cbranch_execz .LBB0_141
+.LBB0_253:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v73
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[12:13], v2, off offset:256
+	s_or_b64 exec, exec, s[30:31]
+	.loc	1 163 36
+	s_and_b64 s[30:31], s[12:13], s[28:29]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[28:29], s[30:31]
+	s_cbranch_execz .LBB0_142
+.LBB0_254:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v66
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[14:15], v2, off offset:384
+	s_or_b64 exec, exec, s[28:29]
+	.loc	1 163 36
+	s_and_b64 s[28:29], s[12:13], s[26:27]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[26:27], s[28:29]
+	s_cbranch_execz .LBB0_143
+.LBB0_255:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v67
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[10:11], v2, off offset:384
+	s_or_b64 exec, exec, s[26:27]
+	.loc	1 163 36
+	s_and_b64 s[26:27], s[12:13], s[24:25]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[24:25], s[26:27]
+	s_cbranch_execz .LBB0_144
+.LBB0_256:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v68
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[16:17], v2, off offset:384
+	s_or_b64 exec, exec, s[24:25]
+	.loc	1 163 36
+	s_and_b64 s[24:25], s[12:13], s[22:23]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execnz .LBB0_145
+	s_branch .LBB0_146
+.LBB0_257:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v65
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[8:9], v2, off
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36
+	s_and_b64 s[24:25], s[8:9], s[20:21]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execz .LBB0_154
+.LBB0_258:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v58
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[10:11], v2, off offset:128
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36
+	s_and_b64 s[24:25], s[8:9], s[18:19]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execz .LBB0_155
+.LBB0_259:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v59
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[6:7], v2, off offset:128
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36
+	s_and_b64 s[24:25], s[8:9], s[16:17]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execz .LBB0_156
+.LBB0_260:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v60
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[12:13], v2, off offset:128
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36
+	s_and_b64 s[24:25], s[8:9], s[14:15]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execz .LBB0_157
+.LBB0_261:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v61
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[8:9], v2, off offset:128
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36
+	s_and_b64 s[24:25], s[10:11], s[20:21]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execz .LBB0_158
+.LBB0_262:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v54
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[10:11], v2, off offset:256
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36
+	s_and_b64 s[24:25], s[10:11], s[18:19]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execz .LBB0_159
+.LBB0_263:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v55
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[6:7], v2, off offset:256
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36
+	s_and_b64 s[24:25], s[10:11], s[16:17]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execz .LBB0_160
+.LBB0_264:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v56
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[12:13], v2, off offset:256
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36
+	s_and_b64 s[24:25], s[10:11], s[14:15]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[22:23], s[24:25]
+	s_cbranch_execz .LBB0_161
+.LBB0_265:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v57
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[8:9], v2, off offset:256
+	s_or_b64 exec, exec, s[22:23]
+	.loc	1 163 36
+	s_and_b64 s[22:23], s[12:13], s[20:21]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[20:21], s[22:23]
+	s_cbranch_execz .LBB0_162
+.LBB0_266:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v50
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[10:11], v2, off offset:384
+	s_or_b64 exec, exec, s[20:21]
+	.loc	1 163 36
+	s_and_b64 s[20:21], s[12:13], s[18:19]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[18:19], s[20:21]
+	s_cbranch_execz .LBB0_163
+.LBB0_267:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v51
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[6:7], v2, off offset:384
+	s_or_b64 exec, exec, s[18:19]
+	.loc	1 163 36
+	s_and_b64 s[18:19], s[12:13], s[16:17]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[16:17], s[18:19]
+	s_cbranch_execz .LBB0_164
+.LBB0_268:
+	.loc	1 156 37
+	v_mul_f32_e32 v2, s33, v52
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v2, s74, v2, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[12:13], v2, off offset:384
+	s_or_b64 exec, exec, s[16:17]
+	.loc	1 163 36
+	s_and_b64 s[16:17], s[12:13], s[14:15]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[14:15], s[16:17]
+	s_cbranch_execnz .LBB0_165
+	s_branch .LBB0_166
+.LBB0_269:
+	.loc	1 156 37
+	v_mul_f32_e32 v4, s33, v49
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v4, s74, v4, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[0:1], v4, off
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36
+	s_and_b64 s[14:15], s[8:9], s[4:5]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[14:15]
+	s_cbranch_execz .LBB0_174
+.LBB0_270:
+	.loc	1 156 37
+	v_mul_f32_e32 v4, s33, v42
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v4, s74, v4, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[6:7], v4, off offset:128
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36
+	s_and_b64 s[14:15], s[8:9], s[2:3]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[14:15]
+	s_cbranch_execz .LBB0_175
+.LBB0_271:
+	.loc	1 156 37
+	v_mul_f32_e32 v4, s33, v43
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v4, s74, v4, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[2:3], v4, off offset:128
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36
+	s_and_b64 s[14:15], s[8:9], s[0:1]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[14:15]
+	s_cbranch_execz .LBB0_176
+.LBB0_272:
+	.loc	1 156 37
+	v_mul_f32_e32 v4, s33, v44
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v4, s74, v4, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[8:9], v4, off offset:128
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36
+	s_and_b64 s[8:9], s[8:9], vcc
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[8:9]
+	s_cbranch_execz .LBB0_177
+.LBB0_273:
+	.loc	1 156 37
+	v_mul_f32_e32 v4, s33, v45
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v4, s74, v4, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[0:1], v4, off offset:128
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36
+	s_and_b64 s[8:9], s[10:11], s[4:5]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[8:9]
+	s_cbranch_execz .LBB0_178
+.LBB0_274:
+	.loc	1 156 37
+	v_mul_f32_e32 v4, s33, v38
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v4, s74, v4, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[6:7], v4, off offset:256
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36
+	s_and_b64 s[8:9], s[10:11], s[2:3]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[8:9]
+	s_cbranch_execz .LBB0_179
+.LBB0_275:
+	.loc	1 156 37
+	v_mul_f32_e32 v4, s33, v39
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v4, s74, v4, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[2:3], v4, off offset:256
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36
+	s_and_b64 s[8:9], s[10:11], s[0:1]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[8:9]
+	s_cbranch_execz .LBB0_180
+.LBB0_276:
+	.loc	1 156 37
+	v_mul_f32_e32 v4, s33, v40
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v4, s74, v4, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[8:9], v4, off offset:256
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36
+	s_and_b64 s[8:9], s[10:11], vcc
+	.loc	1 164 21
+	s_and_saveexec_b64 s[6:7], s[8:9]
+	s_cbranch_execz .LBB0_181
+.LBB0_277:
+	.loc	1 156 37
+	v_mul_f32_e32 v4, s33, v41
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v4, s74, v4, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[0:1], v4, off offset:256
+	s_or_b64 exec, exec, s[6:7]
+	.loc	1 163 36
+	s_and_b64 s[6:7], s[12:13], s[4:5]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[4:5], s[6:7]
+	s_cbranch_execz .LBB0_182
+.LBB0_278:
+	.loc	1 156 37
+	v_mul_f32_e32 v4, s33, v34
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v4, s74, v4, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[6:7], v4, off offset:384
+	s_or_b64 exec, exec, s[4:5]
+	.loc	1 163 36
+	s_and_b64 s[4:5], s[12:13], s[2:3]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[2:3], s[4:5]
+	s_cbranch_execz .LBB0_183
+.LBB0_279:
+	.loc	1 156 37
+	v_mul_f32_e32 v4, s33, v35
+	.loc	1 156 59 is_stmt 0
+	v_fma_mixlo_f16 v4, s74, v4, 0
+	.loc	1 164 21 is_stmt 1
+	global_store_short v[2:3], v4, off offset:384
+	s_or_b64 exec, exec, s[2:3]
+	.loc	1 163 36
+	s_and_b64 s[2:3], s[12:13], s[0:1]
+	.loc	1 164 21
+	s_and_saveexec_b64 s[0:1], s[2:3]
+	s_cbranch_execnz .LBB0_184
+	s_branch .LBB0_185
+.Ltmp14:
+	.section	.rodata,"a",@progbits
+	.p2align	6, 0x0
+	.amdhsa_kernel fused_moe_kernel
+		.amdhsa_group_segment_fixed_size 0
+		.amdhsa_private_segment_fixed_size 348
+		.amdhsa_kernarg_size 104
+		.amdhsa_user_sgpr_count 2
+		.amdhsa_user_sgpr_dispatch_ptr 0
+		.amdhsa_user_sgpr_queue_ptr 0
+		.amdhsa_user_sgpr_kernarg_segment_ptr 1
+		.amdhsa_user_sgpr_dispatch_id 0
+		.amdhsa_user_sgpr_kernarg_preload_length 0
+		.amdhsa_user_sgpr_kernarg_preload_offset 0
+		.amdhsa_user_sgpr_private_segment_size 0
+		.amdhsa_enable_private_segment 1
+		.amdhsa_system_sgpr_workgroup_id_x 1
+		.amdhsa_system_sgpr_workgroup_id_y 0
+		.amdhsa_system_sgpr_workgroup_id_z 0
+		.amdhsa_system_sgpr_workgroup_info 0
+		.amdhsa_system_vgpr_workitem_id 0
+		.amdhsa_next_free_vgpr 256
+		.amdhsa_next_free_sgpr 89
+		.amdhsa_accum_offset 256
+		.amdhsa_reserve_xnack_mask 1
+		.amdhsa_float_round_mode_32 0
+		.amdhsa_float_round_mode_16_64 0
+		.amdhsa_float_denorm_mode_32 3
+		.amdhsa_float_denorm_mode_16_64 3
+		.amdhsa_dx10_clamp 1
+		.amdhsa_ieee_mode 1
+		.amdhsa_fp16_overflow 0
+		.amdhsa_tg_split 0
+		.amdhsa_exception_fp_ieee_invalid_op 0
+		.amdhsa_exception_fp_denorm_src 0
+		.amdhsa_exception_fp_ieee_div_zero 0
+		.amdhsa_exception_fp_ieee_overflow 0
+		.amdhsa_exception_fp_ieee_underflow 0
+		.amdhsa_exception_fp_ieee_inexact 0
+		.amdhsa_exception_int_div_zero 0
+	.end_amdhsa_kernel
+	.text
+.Lfunc_end0:
+	.size	fused_moe_kernel, .Lfunc_end0-fused_moe_kernel
+	.cfi_endproc
+
+	.p2alignl 6, 3212836864
+	.fill 256, 4, 3212836864
+	.section	.debug_abbrev,"",@progbits
+	.byte	1
+	.byte	17
+	.byte	1
+	.byte	37
+	.byte	14
+	.byte	19
+	.byte	5
+	.byte	3
+	.byte	14
+	.byte	16
+	.byte	23
+	.byte	27
+	.byte	14
+	.byte	17
+	.byte	1
+	.byte	18
+	.byte	6
+	.byte	0
+	.byte	0
+	.byte	2
+	.byte	46
+	.byte	0
+	.byte	3
+	.byte	14
+	.byte	32
+	.byte	11
+	.byte	0
+	.byte	0
+	.byte	3
+	.byte	46
+	.byte	1
+	.byte	17
+	.byte	1
+	.byte	18
+	.byte	6
+	.byte	49
+	.byte	19
+	.byte	0
+	.byte	0
+	.byte	4
+	.byte	29
+	.byte	0
+	.byte	49
+	.byte	19
+	.byte	17
+	.byte	1
+	.byte	18
+	.byte	6
+	.byte	88
+	.byte	11
+	.byte	89
+	.byte	11
+	.byte	87
+	.byte	11
+	.byte	0
+	.byte	0
+	.byte	5
+	.byte	29
+	.byte	0
+	.byte	49
+	.byte	19
+	.byte	85
+	.byte	23
+	.byte	88
+	.byte	11
+	.byte	89
+	.byte	11
+	.byte	87
+	.byte	11
+	.byte	0
+	.byte	0
+	.byte	0
+	.section	.debug_info,"",@progbits
+.Lcu_begin0:
+	.long	.Ldebug_info_end0-.Ldebug_info_start0
+.Ldebug_info_start0:
+	.short	4
+	.long	.debug_abbrev
+	.byte	8
+	.byte	1
+	.long	.Linfo_string0
+	.short	2
+	.long	.Linfo_string1
+	.long	.Lline_table_start0
+	.long	.Linfo_string2
+	.quad	.Lfunc_begin0
+	.long	.Lfunc_end0-.Lfunc_begin0
+	.byte	2
+	.long	.Linfo_string3
+	.byte	1
+	.byte	3
+	.quad	.Lfunc_begin0
+	.long	.Lfunc_end0-.Lfunc_begin0
+	.long	42
+	.byte	4
+	.long	42
+	.quad	.Ltmp0
+	.long	.Ltmp1-.Ltmp0
+	.byte	1
+	.byte	88
+	.byte	27
+	.byte	5
+	.long	42
+	.long	.Ldebug_ranges0
+	.byte	1
+	.byte	87
+	.byte	28
+	.byte	5
+	.long	42
+	.long	.Ldebug_ranges1
+	.byte	1
+	.byte	133
+	.byte	33
+	.byte	0
+	.byte	0
+.Ldebug_info_end0:
+	.section	.debug_ranges,"",@progbits
+.Ldebug_ranges0:
+	.quad	.Ltmp2-.Lfunc_begin0
+	.quad	.Ltmp3-.Lfunc_begin0
+	.quad	.Ltmp4-.Lfunc_begin0
+	.quad	.Ltmp5-.Lfunc_begin0
+	.quad	.Ltmp6-.Lfunc_begin0
+	.quad	.Ltmp7-.Lfunc_begin0
+	.quad	0
+	.quad	0
+.Ldebug_ranges1:
+	.quad	.Ltmp8-.Lfunc_begin0
+	.quad	.Ltmp9-.Lfunc_begin0
+	.quad	.Ltmp10-.Lfunc_begin0
+	.quad	.Ltmp11-.Lfunc_begin0
+	.quad	.Ltmp12-.Lfunc_begin0
+	.quad	.Ltmp13-.Lfunc_begin0
+	.quad	0
+	.quad	0
+	.section	.debug_str,"MS",@progbits,1
+.Linfo_string0:
+	.asciz	"triton"
+.Linfo_string1:
+	.asciz	"fused_moe.py"
+.Linfo_string2:
+	.asciz	"/sglang/python/sglang/srt/layers/fused_moe"
+.Linfo_string3:
+	.asciz	"fused_moe_kernel"
+	.section	".note.GNU-stack","",@progbits
+	.amdgpu_metadata
+---
+amdhsa.kernels:
+  - .agpr_count:     0
+    .args:
+      - .address_space:  global
+        .offset:         0
+        .size:           8
+        .value_kind:     global_buffer
+      - .address_space:  global
+        .offset:         8
+        .size:           8
+        .value_kind:     global_buffer
+      - .address_space:  global
+        .offset:         16
+        .size:           8
+        .value_kind:     global_buffer
+      - .address_space:  global
+        .offset:         24
+        .size:           8
+        .value_kind:     global_buffer
+      - .address_space:  global
+        .offset:         32
+        .size:           8
+        .value_kind:     global_buffer
+      - .address_space:  global
+        .offset:         40
+        .size:           8
+        .value_kind:     global_buffer
+      - .address_space:  global
+        .offset:         48
+        .size:           8
+        .value_kind:     global_buffer
+      - .address_space:  global
+        .offset:         56
+        .size:           8
+        .value_kind:     global_buffer
+      - .address_space:  global
+        .offset:         64
+        .size:           8
+        .value_kind:     global_buffer
+      - .offset:         72
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         76
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         80
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         84
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         88
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         92
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         96
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         100
+        .size:           4
+        .value_kind:     by_value
+    .group_segment_fixed_size: 0
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 104
+    .max_flat_workgroup_size: 512
+    .name:           fused_moe_kernel
+    .private_segment_fixed_size: 348
+    .sgpr_count:     95
+    .sgpr_spill_count: 0
+    .symbol:         fused_moe_kernel.kd
+    .vgpr_count:     256
+    .vgpr_spill_count: 98
+    .wavefront_size: 64
+amdhsa.target:   amdgcn-amd-amdhsa--gfx942
+amdhsa.version:
+  - 1
+  - 1
+...
+
+	.end_amdgpu_metadata
+	.section	.debug_line,"",@progbits
+.Lline_table_start0:
