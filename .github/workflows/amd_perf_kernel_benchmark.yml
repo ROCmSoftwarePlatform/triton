@@ -101,7 +101,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-csv-results
-          path: *.csv
+          path: ./*.csv
           if-no-files-found: error
 
   Analyze-Results:
