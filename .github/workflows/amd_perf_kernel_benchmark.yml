@@ -94,7 +94,7 @@ jobs:
           python ./python/perf-kernels/softmax.py
           python ./python/perf-kernels/rmsnorm.py
           python ./python/perf-kernels/layernorm.py
-          python ./python/perf-kernels/multreduce_matmul_kernel.py bench
+        # python ./python/perf-kernels/multreduce_matmul_kernel.py bench
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         with:
