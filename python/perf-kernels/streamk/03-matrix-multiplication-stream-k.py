@@ -3,7 +3,6 @@ import triton
 import random
 
 from streamk_kernel import streamk_gemm
-#from persistent_loop import streamk_gemm
 
 torch.manual_seed(123)
 random.seed(123)
@@ -74,8 +73,6 @@ class matmul(torch.autograd.Function):
         stride_bias = bias.stride(0) if use_bias else 0
         # MI300X settings, MI250 set num_xcds = 1
         num_xcds = 8
-        #  P=P*0.0
-        #  locks=locks*0
         kk = streamk_gemm[(grids, )](
             a,
             b,
@@ -131,17 +128,26 @@ class matmul(torch.autograd.Function):
 
 perf = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
 
+## sweet shapes has multiple of 304 tiles
 #m, n, k = 4864, 4096, 8256  # some problem size to test
-#m, n, k = 4096, 4096, 8192  # some problem size to test
-#m, n, k = 1, 1024, 256
-#m, n, k = 8133, 8132, 8172  # some problem size to test
-#m, n, k = 8192, 8192, 8192  # some problem size to test
-#m, n, k = 8128, 6878, 7378  # some problem size to test
-#m, n, k = 8192, 4864, 6878  # some problem size to test
-#m, n, k = 512, 512, 512  # some problem size to test
-#m, n, k = 6912, 768, 256  # some problem size to test
 #m, n, k =4864, 8192, 4160  # some problem size to test
+#m, n, k = 8192, 4864, 6878  # some problem size to test
+
+## test for tiles that is not multipe of 304 tiles
+#m, n, k = 4096, 4096, 8192  # some problem size to test
+#m, n, k = 8192, 8192, 8192  # some problem size to test
+#m, n, k = 512, 512, 512  # some problem size to test
+
+## memory bound sizes
+#m, n, k = 1, 1024, 256
+
+## sizes that have to do masked load/store
+#m, n, k = 8133, 8132, 8172  # some problem size to test
+#m, n, k = 8128, 6878, 7378  # some problem size to test
+#m, n, k = 6912, 768, 256  # some problem size to test
 #m, n, k = 5632, 6656, 7936
+
+## test when k is not multiple of 16
 m, n, k = 4864, 4096, 4300
 
 A = torch.randn(m, k, device="cuda", dtype=torch.float16)
