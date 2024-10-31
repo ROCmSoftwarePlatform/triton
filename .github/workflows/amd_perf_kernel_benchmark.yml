@@ -105,9 +105,13 @@ jobs:
           if-no-files-found: error
 
   Analyze-Results:
-    needs: Benchmark-AMD
+    needs: [Benchmark-AMD, Runner-Preparation-AMD]
+    if: needs.Runner-Preparation-AMD.outputs.matrix-HIP != ''
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation-AMD.outputs.matrix-HIP)}}
     steps:
       - name: Checkout reporting system
         uses: actions/checkout@v4
@@ -130,7 +134,7 @@ jobs:
               branch: 'main_perf',
               status: 'success'
             });
-            
+
             console.log(runs)
 
             if (runs.data.workflow_runs.length > 1) {
