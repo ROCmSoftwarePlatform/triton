@@ -25,11 +25,14 @@ def streamk_gemm(
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     NUM_SMS: tl.constexpr,
+    NUM_XCDS: tl.constexpr,
     BIAS: tl.constexpr,
     EVEN_K: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    pid = (pid % 8) * (NUM_SMS // 8) + (pid // 8)
+    if NUM_XCDS != 1:
+        pid = (pid % NUM_XCDS) * (NUM_SMS // NUM_XCDS) + (pid // NUM_XCDS)
+
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     iters_per_tile = tl.cdiv(K, BLOCK_SIZE_K)

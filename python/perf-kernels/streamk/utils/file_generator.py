@@ -76,6 +76,9 @@ def gen_kernel_and_configStr_from_config(config, EVEN_K, dtype_a, dtype_b, dtype
 
     use_bias = bias_size > 0
 
+    #xcd is fixed to 8. tuning for MI308, change it to 4
+    num_xcds = 8
+
     if warmup:
         torch_dtype_a = 'fp16'
         torch_dtype_b = 'fp16'
@@ -104,6 +107,7 @@ def matmul_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
         BLOCK_SIZE_K = {block_k},
         GROUP_SIZE_M = {group_m},
         NUM_SMS = {num_sms},
+        NUM_XCDS = {num_xcds},
         num_warps = {num_warps},
         num_stages = {num_stages},
         waves_per_eu = {waves_per_eu},
@@ -137,6 +141,7 @@ def matmul_{configStr}(a, b, c, bias, P, locks, M, N, K, am, ak, bk, bn, cm, cn,
         BLOCK_SIZE_K = {block_k},
         GROUP_SIZE_M = {group_m},
         NUM_SMS = {num_sms},
+        NUM_XCDS = {num_xcds},
         num_warps = {num_warps},
         num_stages = {num_stages},
         waves_per_eu = {waves_per_eu},
