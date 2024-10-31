@@ -91,7 +91,7 @@ def torch_rmsnorm(x, g):
         rms_norm = torch.nn.RMSNorm(N, device='cuda')
         return rms_norm(x)
     else:
-        rms = torch.sqrt(torch.sum(x * x, dim=-1) * 1/N)
+        rms = torch.sqrt(torch.sum(x * x, dim=-1) * 1 / N)
         rms_norm = torch.div(x, rms.unsqueeze(1).repeat(1, N)) * g
         return rms_norm
 
