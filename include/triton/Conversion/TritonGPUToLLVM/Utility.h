@@ -391,6 +391,19 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
   Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
   return base;
 }
+
+// -----------------------------------------------------------------------
+// MXFP utilities
+// -----------------------------------------------------------------------
+
+// Convert each value, which is an int8 containing 2 packed mxfp4 values,
+// into 2 standalone bf16 values
+SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
+                                          ArrayRef<Value> values);
+
+// Scale a mxfp4 value by a given scale.
+Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale);
+
 } // namespace LLVM
 
 /* ------------------------------------ */
@@ -1366,11 +1379,11 @@ SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target);
 
-void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
-                              Type elemLlvmTy, ArrayRef<Value> srcVals,
-                              Value smemBase, ArrayRef<Value> dstStrides,
-                              Location loc, RewriterBase &rewriter,
-                              const TargetInfoBase &target);
+void storeDistributedToShared(
+    MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
+    ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
+    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+    std::pair<size_t, Type> *const llvmOpCount = nullptr);
 
 inline Value getStructFromSharedMemoryObject(Location loc,
                                              const SharedMemoryObject &smemObj,

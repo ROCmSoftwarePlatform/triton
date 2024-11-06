@@ -108,6 +108,8 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
     let assemblyFormat = "$src attr-dict  (`,` `rounding` `=` $rounding^)? `:` type($src) `->` type($result)";
 
     let hasVerifier = 1;
+
+    let hasFolder = 1;
 }
 
 //
@@ -685,15 +687,15 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 
     let arguments = (
       ins
-      // inputs are integer types as they are packed types and we currently
-      // don't have a representation for those.
-      TT_IntTensor:$lhs,
-      TT_IntTensor:$rhs,
+      // inputs are floats if we have a type for them, otherwise (fp4),
+      // they are packed in pairs in an I8Tensor
+      RankedTensorOf<[TT_Float,I8]>:$lhs,
+      RankedTensorOf<[TT_Float,I8]>:$rhs,
       TT_FloatTensor:$c,
-      TT_IntTensor:$lhs_scale,
-      Optional<TT_IntTensor>:$rhs_scale,
-      TT_F8F6F4TypeAttr:$lhs_type,
-      TT_F8F6F4TypeAttr:$rhs_type
+      RankedTensorOf<[I8]>:$lhs_scale,
+      Optional<RankedTensorOf<[I8]>>:$rhs_scale,
+      TT_ScaleDotElemTypeAttr:$lhs_type,
+      TT_ScaleDotElemTypeAttr:$rhs_type
     );
 
     let results = (outs TT_FloatTensor:$d);
@@ -776,7 +778,8 @@ def TT_ScanReturnOp: TT_Op<"scan.return",
 def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
                                                             SameOperandsAndResultEncoding,
                                                             SameVariadicOperandSize,
-                                                            DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+                                                            DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+                                                            ConditionallySpeculatable]> {
 
     let description = [{
         call an external function $symbol implemented in $libpath/$libname with $args
@@ -788,6 +791,12 @@ def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
     let results = (outs TT_Type:$result);
 
     let assemblyFormat = "operands attr-dict `:` functional-type(operands, $result)";
+
+    let extraClassDeclaration = [{
+      // Interface method for ConditionallySpeculatable.
+      Speculation::Speculatability getSpeculatability();
+    }];
+
 }
 
 //
@@ -891,7 +900,7 @@ def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
     `tt.assert` takes a condition tensor and a message string.
     If the condition is false, the message is printed, and the program is aborted.
   }];
-  let arguments = (ins TT_Tensor:$condition, StrAttr:$message);
+  let arguments = (ins AnyTypeOf<[I1, I1Tensor]>:$condition, StrAttr:$message);
   let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
 }
 
