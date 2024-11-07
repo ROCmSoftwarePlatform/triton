@@ -1,3 +1,5 @@
+#!/opt/conda/envs/py_3.10/bin/python
+
 import argparse
 import torch
 import sys
@@ -44,15 +46,14 @@ def get_autotune_config():
         return get_hip_autotune_config()
 
 
-@triton.autotune(configs=get_autotune_config(), key=['n_rows', 'n_cols'], use_cuda_graph=True)
+#@triton.autotune(configs=get_autotune_config(), key=['n_rows', 'n_cols'], use_cuda_graph=True)
 @triton.jit
 def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride, n_rows, n_cols, epsilon,
-               BLOCK_SIZE: tl.constexpr):
+               BLOCK_SIZE: tl.constexpr, NUM_PRGMS: tl.constexpr):
     row_start = tl.program_id(0)
-    row_step = tl.num_programs(0)
     col_offsets = tl.arange(0, BLOCK_SIZE)
     mask = col_offsets < n_cols
-    for row_idx in tl.range(row_start, n_rows, row_step):
+    for row_idx in tl.range(row_start, n_rows, NUM_PRGMS):
         row_start_ptr = input_ptr + row_idx * input_row_stride
         input_ptrs = row_start_ptr + col_offsets
         input_ptrs = tl.multiple_of(input_ptrs, (16, ))
@@ -80,7 +81,8 @@ def triton_rmsnorm(x, g, epsilon=1e-6):
 
     num_programs = n_rows
     grid = lambda meta: (num_programs, )
-    rms_kernel[grid](y, x, g, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, BLOCK_SIZE)
+    NUM_PRGMS = num_programs
+    rms_kernel[grid](y, x, g, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, BLOCK_SIZE, NUM_PRGMS)
 
     return y
 
@@ -194,7 +196,7 @@ def parse_args():
 def main():
     args = parse_args()
     if args.no_benchmark:
-        x = torch.randn(args.M_start, args.N_start)
+        x = torch.randn(args.M_start, args.N_start, device='cuda')
         g = torch.ones((1, args.N_start), device='cuda')
         triton_rmsnorm(x, g)
     else:
