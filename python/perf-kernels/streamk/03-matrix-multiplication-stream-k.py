@@ -3,6 +3,7 @@ import triton
 import random
 
 #from streamk_kernel import streamk_gemm
+#from streamk_kernel_atomic import streamk_gemm
 from persistent_gemm import streamk_gemm
 
 torch.manual_seed(123)
@@ -96,6 +97,7 @@ class matmul(torch.autograd.Function):
             BLOCK_SIZE_K=BLK_K,
             GROUP_SIZE_M=gsize_m,
             NUM_SMS=total_programs_streamk,
+            STREAMK_TILES=total_tiles_streamk,
             NUM_XCDS=num_xcds,
             BIAS=use_bias,
             EVEN_K=even_k,

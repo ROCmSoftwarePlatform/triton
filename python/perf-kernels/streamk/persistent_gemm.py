@@ -25,6 +25,7 @@ def streamk_gemm(
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     NUM_SMS: tl.constexpr,
+    STREAMK_TILES: tl.constexpr,
     NUM_XCDS: tl.constexpr,
     BIAS: tl.constexpr,
     EVEN_K: tl.constexpr,
