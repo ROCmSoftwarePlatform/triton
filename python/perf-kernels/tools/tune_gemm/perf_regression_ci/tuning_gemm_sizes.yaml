@@ -1,3 +1,6 @@
+# If new gemm sizes/configs are added please provide a fallback tuned config in fallback_configs.yaml.
+# The fallback configs will be used in case the weekly tuning has not been run
+#
 # M // BLOCK_M * N // BLOCK_N % 304 == 0
 ## 1 workgroup / CU
 - {'M': 4864, 'N': 4096, 'K': 4096, 'rowMajorA': 'T', 'rowMajorB': 'N'}

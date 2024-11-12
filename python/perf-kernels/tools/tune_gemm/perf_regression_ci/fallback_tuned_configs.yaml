@@ -1,4 +1,5 @@
-# M // BLOCK_M * N // BLOCK_N % 304 == 0
+# Fallback tuned configs for CI in case the weekly tuning has not been run yet
+
 ## 1 workgroup / CU
 - {'M': 4864, 'N': 4096, 'K': 4096, 'rowMajorA': 'T', 'rowMajorB': 'N', 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'SPLIT_K': 1, 'num_warps': 8, 'num_stages': 2, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 2}
 - {'M': 4864, 'N': 4096, 'K': 4160, 'rowMajorA': 'T', 'rowMajorB': 'N', 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'SPLIT_K': 1, 'num_warps': 8, 'num_stages': 2, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 2}
