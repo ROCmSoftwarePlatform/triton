@@ -10,7 +10,6 @@ using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
-using ::mlir::LLVM::AMD::storeDistributedToShared;
 
 namespace SharedToDotOperandMFMA {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
@@ -142,87 +141,55 @@ private:
   }
 };
 
-struct LocalAllocOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::LocalAllocOp> {
-  LocalAllocOpConversion(const LLVMTypeConverter &converter,
-                         const TargetInfoBase &targetInfo,
-                         PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<triton::gpu::LocalAllocOp>(converter, benefit),
-        targetInfo(targetInfo) {}
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::LocalAllocOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (!op.isSharedMemoryAlloc())
-      return failure();
-    Location loc = op->getLoc();
-    Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-    auto resultTy = cast<MemDescType>(op.getType());
-    auto typeConverter = getTypeConverter();
-    auto sharedLayout =
-        cast<triton::gpu::SharedEncodingAttr>(resultTy.getEncoding());
-    auto order = sharedLayout.getOrder();
-    // Workaround for 3D tensors
-    // TODO: we need to modify the pipeline pass to give a proper shared
-    // encoding to 3D tensors
-    SmallVector<unsigned> newOrder;
-    if (resultTy.getShape().size() != order.size()) {
-      for (auto i = 0; i < order.size(); ++i)
-        newOrder.push_back(order[i] + 1);
-      newOrder.push_back(0);
-    } else {
-      newOrder = SmallVector<unsigned>(order.begin(), order.end());
-    }
-
-    auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
-    auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
-    auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
-                                      newOrder, loc, rewriter);
-    // If there is an initial tensor, store it into the shared memory.
-    if (op.getSrc()) {
-      lowerDistributedToShared(loc, op.getSrc(), op.getResult(),
-                               adaptor.getSrc(), smemObj, typeConverter,
-                               rewriter, targetInfo);
-    }
-    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
-    rewriter.replaceOp(op, retVal);
-    return success();
-  }
-
-private:
-  const TargetInfoBase &targetInfo;
-};
-
-struct LocalStoreOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::LocalStoreOp> {
+struct ConvertLayoutOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
   using ConvertOpToLLVMPattern<
-      triton::gpu::LocalStoreOp>::ConvertOpToLLVMPattern;
-
-  LocalStoreOpConversion(const LLVMTypeConverter &converter,
-                         const TargetInfoBase &targetInfo,
-                         PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<triton::gpu::LocalStoreOp>(converter, benefit),
-        targetInfo(targetInfo) {}
+      triton::gpu::ConvertLayoutOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::LocalStoreOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value memDescVal = op.getDst();
-    auto llvmElemTy =
-        getTypeConverter()->convertType(op.getDst().getType().getElementType());
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
-    lowerDistributedToShared(op.getLoc(), op.getSrc(), op.getDst(),
-                             adaptor.getSrc(), smemObj, getTypeConverter(),
-                             rewriter, targetInfo);
-    rewriter.eraseOp(op);
-    return success();
+    Value src = op.getSrc();
+    Value dst = op.getResult();
+    auto srcTy = cast<RankedTensorType>(src.getType());
+    auto dstTy = cast<RankedTensorType>(dst.getType());
+    Attribute srcLayout = srcTy.getEncoding();
+    Attribute dstLayout = dstTy.getEncoding();
+
+    if (isa<AMDMfmaEncodingAttr>(srcLayout) &&
+        isa<DotOperandEncodingAttr>(dstLayout)) {
+      return lowerMfmaToDotOperand(op, adaptor, rewriter);
+    }
+    return failure();
   }
 
 private:
-  const TargetInfoBase &targetInfo;
+  LogicalResult
+  lowerMfmaToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+                        ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
+    if (isMfmaToDotShortcut(srcTy, dstTy)) {
+      // vecSize is an number of sequential elements stored by one thread
+      // - For MFMA encoding (encoding of the result tensor of dot
+      // operation) it is 4
+      // - For MFMA operand encoding it is
+      // dotOperandEncoding::kWidth,
+      //   which is 4 in certain cases (e.g. fp16 and bfloat16 dtypes with kpack
+      //   = 1)
+      //
+      // For cases where these two values are equal MFMA and MFMA operand
+      // layouts are the same.
+      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      Value view =
+          packLLElements(loc, getTypeConverter(), vals, rewriter, dstTy);
+      rewriter.replaceOp(op, view);
+      return success();
+    }
+    return failure();
+  }
 };
 } // namespace
 
@@ -232,7 +199,5 @@ void populateConvertLayoutOpToLLVMPatterns(
     RewritePatternSet &patterns, int numWarps,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
-  patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
 }
 } // namespace mlir::triton::AMD
