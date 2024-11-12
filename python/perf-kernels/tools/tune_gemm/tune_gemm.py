@@ -147,7 +147,7 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
         LDSB = BLOCK_SIZE_K * BLOCK_SIZE_N * elemBytes_b
         if num_stages <= 1:
             # No pipeline, buffer A and buffer B can re-use each other
-            LDS = min(LDSA, LDSB)
+            LDS = max(LDSA, LDSB)
         else:
             # Pipeline, we need (num_stages - 1) buffers for both A and B at the same time
             LDS = (LDSA + LDSB) * (num_stages - 1)
