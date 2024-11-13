@@ -77,7 +77,7 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_transpose_kouter",
                      mlir::createTritonAMDGPUTransposeKOuterPass);
   ADD_PASS_WRAPPER_0("add_in_thread_tranpose",
-                     mlir::createTritonAMDGPUPerformInThreadTransposePass);
+                     mlir::createTritonAMDGPUInThreadTransposePass);
 }
 
 void addControlConstant(llvm::Module *module, const char *name,
