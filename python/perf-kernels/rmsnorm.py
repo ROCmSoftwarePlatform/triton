@@ -53,6 +53,8 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
     row_start = tl.program_id(0)
     col_offsets = tl.arange(0, BLOCK_SIZE)
     mask = col_offsets < n_cols
+    tl.assume(input_row_stride >= 0)
+    tl.assume(output_row_stride >= 0)
     for row_idx in tl.range(row_start, n_rows, NUM_PRGMS):
         row_start_ptr = input_ptr + row_idx * input_row_stride
         input_ptrs = row_start_ptr + col_offsets
@@ -82,7 +84,9 @@ def triton_rmsnorm(x, g, epsilon=1e-6):
     num_programs = n_rows
     grid = lambda meta: (num_programs, )
     NUM_PRGMS = num_programs
-    rms_kernel[grid](y, x, g, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, BLOCK_SIZE, NUM_PRGMS)
+    extra_kargs = {"waves_per_eu": 0, "num_warps": 8, "num_stages": 2}
+    rms_kernel[grid](y, x, g, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, BLOCK_SIZE, NUM_PRGMS, **extra_kargs,)
+#    rms_kernel[grid](y, x, g, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, BLOCK_SIZE, NUM_PRGMS, num_warps = 8, num_stages = 1, waves_per_eu = 0)
 
     return y
 
