@@ -459,6 +459,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
             # If we have no blocks after adjusting for seqlen deltas, this WG is part of
             # the blocks that are all 0. We exit early.
         
+        # early returns not allowed inside while loop in triton, so unfold the if (IS_CAUSAL) branch
         if (IS_CAUSAL) and n_blocks <= 0:
             o_offset = Out + off_z * stride_oz + off_h_q * stride_oh + cu_seqlens_q_start * stride_om
             o_ptrs = o_offset + offs_m[:, None] * stride_om + offs_d[None, :] * stride_on

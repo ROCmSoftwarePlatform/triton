@@ -122,35 +122,20 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
 
     # STAGE is either 3 (meaning this is causal attention) or 1
 
-    # make this persistent so we only launch number of programs = number of CUs
-    # workgroup assigned to run the program must loop over multiple tasks (multiple Q_i)
-    # total time to execute all the tasks per workgroup should be roughly the same for all workgroups (balanced workload). 
-
     num_tiles_per_head = tl.cdiv(N_CTX, BLOCK_M) #h te number of work units (tiles) of a single head
     num_tiles_per_sample = num_tiles_per_head * H # times the number of heads
     num_tiles_total = num_tiles_per_sample * Z # times the number of samples
     # num_tiles_per_SMS = num_tiles_total // NUM_SMS
 
-
-    # easiest thing is to just keep the single task as it is (so task=_attn_fwd_inner), and then we just loop over as many as needed to fill the entire problem space
-    # trick is how to access the correct elements for the task (for that we can look at the access patter in persistent matmul where they conditionally increase the pointers).
-
     start_pid = tl.program_id(0)
     tile_id = start_pid - NUM_SMS
 
-
-
     while tile_id + NUM_SMS < num_tiles_total:
         tl.static_assert(BLOCK_N <= HEAD_DIM)
-
-        # cant assume these anymore
-        # start_m = tl.program_id(0) # # the first one is just the sequence length divided by BLOCK M
-        # off_hz = tl.program_id(1) # we have batch size * num heads as the max here
         
         tile_id += NUM_SMS # tile id will range (0...total number of tiles)
 
         off_hz = tile_id // (num_tiles_per_head) # at which head are we
-        
         off_z = tile_id // (num_tiles_per_sample) # at which batch sample are
         off_h = tile_id % (num_tiles_per_sample) // num_tiles_per_head # at which head are we inside the sample
         qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
@@ -568,7 +553,7 @@ class _attention(torch.autograd.Function):
         return dq, dk, dv, None, None
 
 
-attention_persistent = _attention.apply
+attention = _attention.apply
 
 
 @pytest.mark.parametrize("Z, H, N_CTX, HEAD_DIM", [(1, 2, 1024, 64)])
@@ -596,7 +581,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
 
     torch.cuda.synchronize()
     start_t = time.time()
-    tri_out = attention_persistent(q, k, v, causal, sm_scale).half()
+    tri_out = attention(q, k, v, causal, sm_scale).half()
     torch.cuda.synchronize()
     print(f"Time: {time.time()-start_t} s")
     tri_out.backward(dout)
