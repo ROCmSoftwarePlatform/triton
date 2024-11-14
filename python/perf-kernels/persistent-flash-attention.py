@@ -395,6 +395,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
              MAX_SEQLENS_K: tl.constexpr, VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
              BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
              ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr):
+    
     #start_m = tl.program_id(0) # 0...
     #off_h_q = tl.program_id(1) # 0...n_heads_q
     #off_z = tl.program_id(2)
@@ -402,34 +403,20 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
     num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M) #the number of work units (tiles) of a single head
     num_tiles_per_sample = num_tiles_per_head * HQ # times the number of heads
     num_tiles_total = num_tiles_per_sample * ZQ # times the number of samples
-    
     # num_tiles_per_SMS = num_tiles_total // NUM_SMS
-
-    # tl.static_print("HQ: ", HQ)
-    # tl.static_print("ZQ: ", ZQ)
-
-
-    # easiest thing is to just keep the single task as it is (so task=_attn_fwd_inner), and then we just loop over as many as needed to fill the entire problem space
-    # trick is how to access the correct elements for the task (for that we can look at the access patter in persistent matmul where they conditionally increase the pointers).
 
     start_pid = tl.program_id(0)
     tile_id = start_pid - NUM_SMS
     
     
     while tile_id + NUM_SMS < num_tiles_total:
-
-
+        
         tile_id += NUM_SMS # tile id will range (0...total number of tiles)
-
         # off_hz = tile_id // (num_tiles_per_head) # at which head are we
-        
         off_z = tile_id // num_tiles_per_sample # at which batch sample are we
-        
         off_h_q = tile_id % num_tiles_per_sample // num_tiles_per_head # at which head are we inside the sample
-        
         # off_h = tile_id % (num_tiles_per_sample) // num_tiles_per_head # at which head are we inside the sample
         # qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
-
         start_m = tile_id % num_tiles_per_sample % num_tiles_per_head # at which tile are we inside the head
 
         offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
