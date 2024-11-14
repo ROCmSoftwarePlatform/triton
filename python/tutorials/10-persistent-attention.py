@@ -19,6 +19,7 @@ import torch
 import triton
 import triton.language as tl
 
+import time
 
 def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
@@ -251,48 +252,40 @@ def _attn_fwd_persistent(Q, K, V, sm_scale, M, Out,  #
 
     # STAGE is either 3 (meaning this is causal attention) or 1
 
-
-    
     # make this persistent so we only launch number of programs = number of CUs
-    # workgroup assigned to run the program must loop over multiple work units
-    # total time to execute all the work units per workgroup should be roughly the same for all workgroups (balanced workload). 
-    # This can mean that we statically divide the program into <number of CUs> equally large sets of work units time wise. Or we could implement a dynamic scheduler of tasks, but that is most likely too much.
+    # workgroup assigned to run the program must loop over multiple tasks (multiple Q_i)
+    # total time to execute all the tasks per workgroup should be roughly the same for all workgroups (balanced workload). 
 
-    num_tiles_per_head = tl.cdiv(N_CTX, BLOCK_M) # the number of work units (tiles) of a single head
+    num_tiles_per_head = tl.cdiv(N_CTX, BLOCK_M) #h te number of work units (tiles) of a single head
     num_tiles_per_sample = num_tiles_per_head * H # times the number of heads
     num_tiles_total = num_tiles_per_sample * Z # times the number of samples
-    num_tiles_per_SMS = num_tiles_total // NUM_SMS
+    # num_tiles_per_SMS = num_tiles_total // NUM_SMS
 
 
     # easiest thing is to just keep the single task as it is (so task=_attn_fwd_inner), and then we just loop over as many as needed to fill the entire problem space
-    # trick is how to access the correct elements for the task (for that we can look at the access patter in persistent matmul where they conditionally increase the pointers)
+    # trick is how to access the correct elements for the task (for that we can look at the access patter in persistent matmul where they conditionally increase the pointers).
 
     start_pid = tl.program_id(0)
     tile_id = start_pid - NUM_SMS
 
-    
+
 
     while tile_id + NUM_SMS < num_tiles_total:
-
-
         tl.static_assert(BLOCK_N <= HEAD_DIM)
-        
 
         # cant assume these anymore
         # start_m = tl.program_id(0) # # the first one is just the sequence length divided by BLOCK M
         # off_hz = tl.program_id(1) # we have batch size * num heads as the max here
         
-        
-        tile_id += NUM_SMS
+        tile_id += NUM_SMS # tile id will range (0...total number of tiles)
 
-        off_hz = tile_id // (num_tiles_per_sample * num_tiles_per_head)
+        off_hz = tile_id // (num_tiles_per_head) # at which head are we
         
-        off_z = tile_id // (num_tiles_per_sample) # at which batch sample we are on
-        off_h = tile_id % (num_tiles_per_sample) // num_tiles_per_head # which head there
+        off_z = tile_id // (num_tiles_per_sample) # at which batch sample are
+        off_h = tile_id % (num_tiles_per_sample) // num_tiles_per_head # at which head are we inside the sample
         qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
 
-        start_m = tile_id % (num_tiles_per_sample) % num_tiles_per_head # at which tile there
-
+        start_m = tile_id % (num_tiles_per_sample) % num_tiles_per_head # at which tile are we inside the head
 
         # block pointers
         Q_block_ptr = tl.make_block_ptr(
@@ -634,24 +627,13 @@ class _attention_persistent(torch.autograd.Function):
             waves_per_eu = 3 if HEAD_DIM_K <= 64 else 2
             extra_kern_args = {"waves_per_eu": waves_per_eu, "allow_flush_denorm": True}
 
-        # print("q shape", q.shape)
-        # print("grid dimensions: ", (triton.cdiv(q.shape[2], 128), q.shape[0] * q.shape[1], 1))
-
-        # the first one is just the sequence length divided by BLOCK M. Second one is batch size * number of heads.
-
-        # grid = lambda args: (triton.cdiv(q.shape[2], args["BLOCK_M"]), q.shape[0] * q.shape[1], 1) # old
-
         NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
-        print("num of CUS: ", NUM_SMS)
-
         grid = lambda _: (NUM_SMS, ) # launch as many triton programs as we have CUs
-
-        
 
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         _attn_fwd_persistent[grid](
             q, k, v, sm_scale, M, o,  #
-            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  # 
             k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
             v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
             o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
@@ -813,6 +795,57 @@ attention = _attention.apply
 
 @pytest.mark.parametrize("Z, H, N_CTX, HEAD_DIM", [(1, 2, 1024, 64)])
 @pytest.mark.parametrize("causal", [True])
+def test_persistent_op(Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
+    torch.manual_seed(20)
+    q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
+    k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
+    v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
+    sm_scale = 0.5
+    dout = torch.randn_like(q)
+    # reference implementation
+    M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
+    p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
+    if causal:
+        p[:, :, M == 0] = float("-inf")
+    p = torch.softmax(p.float(), dim=-1).half()
+    # p = torch.exp(p)
+    ref_out = torch.matmul(p, v)
+    ref_out.backward(dout)
+    ref_dv, v.grad = v.grad.clone(), None
+    ref_dk, k.grad = k.grad.clone(), None
+    ref_dq, q.grad = q.grad.clone(), None
+    # triton implementation
+
+    torch.cuda.synchronize()
+    start_t = time.time()
+    tri_out = attention_persistent(q, k, v, causal, sm_scale).half()
+    torch.cuda.synchronize()
+    print(f"Time: {time.time()-start_t} s")
+    tri_out.backward(dout)
+    tri_dv, v.grad = v.grad.clone(), None
+    tri_dk, k.grad = k.grad.clone(), None
+    tri_dq, q.grad = q.grad.clone(), None
+    # compare
+
+    #print(f"triton_output_with_fp16_inputs={tri_out[:10]}")
+    #print(f"torch_output_with_fp16_inputs={ref_out[:10]}")
+    assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
+    print("all forward close")
+
+    rtol = 0.0
+    # Relative tolerance workaround for known hardware limitation of MI200 GPU.
+    # For details see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+    if torch.version.hip is not None and triton.runtime.driver.active.get_current_target().arch == "gfx90a":
+        rtol = 1e-2
+    assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=rtol)
+    assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=rtol)
+    assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=rtol)
+    print("all backward close")
+
+
+
+@pytest.mark.parametrize("Z, H, N_CTX, HEAD_DIM", [(1, 2, 1024, 64)])
+@pytest.mark.parametrize("causal", [True])
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
     torch.manual_seed(20)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
@@ -833,26 +866,32 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
     ref_dk, k.grad = k.grad.clone(), None
     ref_dq, q.grad = q.grad.clone(), None
     # triton implementation
-    tri_out = attention_persistent(q, k, v, causal, sm_scale).half()
+
+    torch.cuda.synchronize()
+    start_t = time.time()
+    tri_out = attention(q, k, v, causal, sm_scale).half()
+    torch.cuda.synchronize()
+    print(f"Time: {time.time()-start_t} s")
     tri_out.backward(dout)
     tri_dv, v.grad = v.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
     tri_dq, q.grad = q.grad.clone(), None
     # compare
 
-    print(f"triton_output_with_fp16_inputs={tri_out}")
-    print(f"torch_output_with_fp16_inputs={ref_out}")
+    #print(f"triton_output_with_fp16_inputs={tri_out[:10]}")
+    #print(f"torch_output_with_fp16_inputs={ref_out[:10]}")
     assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
-    print("all close")
+    print("all forward close")
 
     rtol = 0.0
     # Relative tolerance workaround for known hardware limitation of MI200 GPU.
     # For details see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
-    # if torch.version.hip is not None and triton.runtime.driver.active.get_current_target().arch == "gfx90a":
-    #     rtol = 1e-2
-    # assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=rtol)
-    # assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=rtol)
-    # assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=rtol)
+    if torch.version.hip is not None and triton.runtime.driver.active.get_current_target().arch == "gfx90a":
+        rtol = 1e-2
+    assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=rtol)
+    assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=rtol)
+    assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=rtol)
+    print("all backward close")
 
 
 try:
@@ -866,8 +905,8 @@ TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
 # vary seq length for fixed head and batch=4
 configs = []
-for mode in ["fwd", "bwd"]:
-    for causal in [True, False]:
+for mode in ["fwd"]: #, "bwd"]:
+    for causal in [True]: # , False]:
         if mode == "bwd" and not causal:
             continue
         configs.append(
@@ -913,14 +952,52 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn)
-    if provider == "flash":
-        qkv = torch.randn((BATCH, N_CTX, 3, H, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
-        fn = lambda: flash_attn_func(qkv, causal=causal)
+    # if provider == "flash":
+    #     qkv = torch.randn((BATCH, N_CTX, 3, H, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
+    #     fn = lambda: flash_attn_func(qkv, causal=causal)
+    #     if mode == "bwd":
+    #         o = fn()
+    #         do = torch.randn_like(o)
+    #         fn = lambda: o.backward(do, retain_graph=True)
+    #     ms = triton.testing.do_bench(fn)
+    flops_per_matmul = 2.0 * BATCH * H * N_CTX * N_CTX * HEAD_DIM
+    total_flops = 2 * flops_per_matmul
+    if causal:
+        total_flops *= 0.5
+    if mode == "bwd":
+        total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
+    return total_flops * 1e-12 / (ms * 1e-3)
+
+
+@triton.testing.perf_report(configs)
+def bench_persistent_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, device="cuda"):
+    assert mode in ["fwd", "bwd"]
+    dtype = torch.float16
+    if "triton" in provider:
+        q = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
+        k = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
+        v = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
+        if mode == "fwd" and "fp8" in provider:
+            q = q.to(torch.float8_e5m2)
+            k = k.to(torch.float8_e5m2)
+            v = v.permute(0, 1, 3, 2).contiguous()
+            v = v.permute(0, 1, 3, 2)
+            v = v.to(torch.float8_e5m2)
+        sm_scale = 1.3
+        fn = lambda: attention_persistent(q, k, v, causal, sm_scale)
         if mode == "bwd":
             o = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn)
+    # if provider == "flash":
+    #     qkv = torch.randn((BATCH, N_CTX, 3, H, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
+    #     fn = lambda: flash_attn_func(qkv, causal=causal)
+    #     if mode == "bwd":
+    #         o = fn()
+    #         do = torch.randn_like(o)
+    #         fn = lambda: o.backward(do, retain_graph=True)
+    #     ms = triton.testing.do_bench(fn)
     flops_per_matmul = 2.0 * BATCH * H * N_CTX * N_CTX * HEAD_DIM
     total_flops = 2 * flops_per_matmul
     if causal:
@@ -933,4 +1010,9 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
 if __name__ == "__main__":
     # only works on post-Ampere GPUs right now
     # bench_flash_attention.run(save_path=".", print_data=True)
-    test_op(1, 2, 1024, 64, True)
+    # bench_persistent_attention.run(save_path=".", print_data=True)
+
+    print("Testing persistent kernel flash attention")
+    test_persistent_op(1, 2, 512, 32, causal=True)
+    print("Testing normal flash attention")
+    test_op(1, 2, 512, 32, causal=True)
