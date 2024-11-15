@@ -343,6 +343,8 @@ def get_cdna_autotune_configs():
                       num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
                       num_warps=4),
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=4),
         # Fall-back config.
         triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
                       num_warps=4),
@@ -1621,8 +1623,8 @@ def main():
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
 
-    # test_op_fwd(4, 48, 24, 1024, 1024, 64, True, False, "bhsd")
-    run_benchmark(custom_config, args)
+    test_op_fwd(4, 48, 24, 1024, 1024, 64, True, False, "bhsd")
+    # run_benchmark(custom_config, args)
 
 
 if __name__ == '__main__':

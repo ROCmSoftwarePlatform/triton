@@ -26,6 +26,8 @@ import pytest
 import sys
 import torch
 
+import time
+
 import triton
 import triton.language as tl
 
@@ -333,19 +335,19 @@ def is_rdna():
 
 def get_cdna_autotune_configs():
     return [
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
+        #               num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
                       num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
-        # Fall-back config.
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False}, num_stages=1,
+        #               num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
+        #               num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
+        #               num_warps=4),
+        # # Fall-back config.
+        # triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
+        #               num_warps=4),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
@@ -1171,7 +1173,12 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     o = torch.empty_like(q)
 
     # triton implementation
+    torch.cuda.synchronize()
+    start_t = time.time()
     tri_out, _ = attention(q, k, v, o, input_metadata)
+    
+    torch.cuda.synchronize()
+    print(f"Time for forward: {time.time()-start_t} s")
 
     # Transpose here if layout is bshd so we have same reference code for all layouts
     if layout == 'bshd':
@@ -1588,8 +1595,8 @@ def main():
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
 
-    run_benchmark(custom_config, args)
-    # test_op_fwd(4, 48, 24, 1024, 1024, 64, True, False, "bshd")
+    # run_benchmark(custom_config, args)
+    test_op_fwd(4, 48, 24, 1024, 1024, 64, True, False, "bshd")
 
 
 if __name__ == '__main__':

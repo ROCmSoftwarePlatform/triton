@@ -139,8 +139,9 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
         off_z = tile_id // (num_tiles_per_sample) # at which batch sample are
         off_h = tile_id % (num_tiles_per_sample) // num_tiles_per_head # at which head are we inside the sample
         qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
-
         start_m = tile_id % (num_tiles_per_sample) % num_tiles_per_head # at which tile are we inside the head
+
+        # do the q tile computation...
 
         # block pointers
         Q_block_ptr = tl.make_block_ptr(
