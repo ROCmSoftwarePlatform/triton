@@ -60,10 +60,19 @@ def grid_model(
     verbose: bool = False,
 ) -> int:
 
-    # Fixed overhead alpha (a), fixed-size cost incurred by each work-group.
+    # Fixed overhead alpha (a), fixed-size cost incurred by
+    # each work-group, e.g. the grid launch latency, the initial
+    # compulsary cache misses, the cost of writing the final output tile
+    # to C.
     a = 5.04 + 8.30
+    # Beta (b) incorporates conditional costs of outputting temporary partial
+    # sums for scenarios where the number of output tiles does not quantize
+    # perfectly across the number of processors.
     b = 5.47
+    # c represents instruction and stall workload of each MAC-iteration.
     c = 4.17
+    # Delta (d) is the cost of reading and accumulating the partial sums from
+    # other work-groups covering the same tile.
     d = 18.59
 
     min_grid_runtime = (None, float("inf"))
