@@ -414,23 +414,32 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
              BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
              ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr):
     
-    num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M) #the number of work units (tiles) of a single head
+    # TODO: How to enable L2 cache hits? 
+    # Would think that a workgroup looping over contiguous tasks (inside the same head) would be able to cache the keys and values.
+
+    num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M) # the number of work units (tiles) of a single head
     num_tiles_per_sample = num_tiles_per_head * HQ # times the number of heads
     num_tiles_total = num_tiles_per_sample * ZQ # times the number of samples
-    # num_tiles_per_SMS = num_tiles_total // NUM_SMS
+    
+    num_tiles_per_WG = num_tiles_total // NUM_WG
 
-    start_pid = tl.program_id(0)
-    tile_id = start_pid - NUM_WG
+    num_tiles_per_WG_remain = num_tiles_total % NUM_WG
+
+    pid = tl.program_id(0)
+    if pid < num_tiles_per_WG_remain:
+        num_tiles_per_WG += 1
+        tile_id = pid * num_tiles_per_WG # one workgroup handles num_tiles_per_WG contiguous tiles
+    else:
+        tile_id = num_tiles_per_WG_remain * (num_tiles_per_WG + 1) + (pid - num_tiles_per_WG_remain) * num_tiles_per_WG
+
+    # tile_id = min(pid, num_tiles_per_WG_remainder) * num_tiles_per_WG + (num_tiles_per_WG -1) * 
+    # tile_id = pid * num_tiles_per_WG # one workgroup handles num_tiles_per_WG contiguous tiles
     
-    
-    while tile_id + NUM_WG < num_tiles_total:
-        
-        tile_id += NUM_WG # tile id will range (0...total number of tiles)
-        # off_hz = tile_id // (num_tiles_per_head) # at which head are we
+    # iter = 0
+    # while (tile_id < num_tiles_total) and (iter < num_tiles_per_WG):
+    for _ in range(0, num_tiles_per_WG):
         off_z = tile_id // num_tiles_per_sample # at which batch sample are we
         off_h_q = tile_id % num_tiles_per_sample // num_tiles_per_head # at which head are we inside the sample
-        # off_h = tile_id % (num_tiles_per_sample) // num_tiles_per_head # at which head are we inside the sample
-        # qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
         start_m = tile_id % num_tiles_per_sample % num_tiles_per_head # at which tile are we inside the head
 
         offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -657,6 +666,10 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
             if PADDED_HEAD:
                 o_ptrs_mask = o_ptrs_mask & (offs_d[None, :] < ACTUAL_BLOCK_DMODEL)
             tl.store(o_ptrs, acc.to(Out.dtype.element_ty), mask=o_ptrs_mask)
+        
+        # increment loop variables
+        # iter += 1
+        tile_id += 1 
 
 
 @triton.jit
@@ -1481,23 +1494,23 @@ def test_op_bwd(Z, H, N_CTX, D_HEAD, qseqlen_not_equal_kseqlen, causal, torch_sd
 def nonvarlen_benchmark_configs():
     configs = [
         (16, 16, 16, 1024, 1024),
-        (8, 16, 16, 2048, 2048),
-        (4, 16, 16, 4096, 4096),
-        (2, 16, 16, 8192, 8192),
-        (1, 16, 16, 16384, 16384),
-        (2, 48, 48, 1024, 1024),
-        (2, 48, 48, 2048, 1024),
-        (2, 48, 48, 4096, 8192),
-        (2, 48, 48, 8192, 4096),
-        (2, 48, 48, 16384, 8192),
-        (8, 16, 16, 1989, 15344),
-        (4, 16, 16, 4097, 163),
-        (2, 16, 16, 8122, 2159),
-        (1, 16, 16, 16281, 7),
-        (2, 48, 48, 1021, 1020),
-        (2, 48, 48, 2001, 2048),
-        (2, 48, 48, 3996, 9639),
-        (2, 48, 48, 8181, 1021),
+        # (8, 16, 16, 2048, 2048),
+        # (4, 16, 16, 4096, 4096),
+        # (2, 16, 16, 8192, 8192),
+        # (1, 16, 16, 16384, 16384),
+        # (2, 48, 48, 1024, 1024),
+        # (2, 48, 48, 2048, 1024),
+        # (2, 48, 48, 4096, 8192),
+        # (2, 48, 48, 8192, 4096),
+        # (2, 48, 48, 16384, 8192),
+        # (8, 16, 16, 1989, 15344),
+        # (4, 16, 16, 4097, 163),
+        # (2, 16, 16, 8122, 2159),
+        # (1, 16, 16, 16281, 7),
+        # (2, 48, 48, 1021, 1020),
+        # (2, 48, 48, 2001, 2048),
+        # (2, 48, 48, 3996, 9639),
+        # (2, 48, 48, 8181, 1021),
     ]
     return configs
 
@@ -1651,8 +1664,8 @@ def main():
 
     print("Running benchmark...")
     run_benchmark(custom_config, args)
-    print("Running single forward with timing...")
-    test_op_fwd(16,16,16,1024,1024,128,True, False, "bhsd")
+    #print("Running single forward with timing...")
+    #test_op_fwd(16,16,16,1024,1024,128,True, False, "bhsd")
 
 
 if __name__ == '__main__':
