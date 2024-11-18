@@ -28,6 +28,7 @@ import torch
 
 import triton
 import triton.language as tl
+import time as time
 
 
 class MetaData():
@@ -347,7 +348,22 @@ def get_cdna_autotune_configs():
                       num_warps=4),
         # Fall-back config.
         triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
+                      num_warps=8),
+                      triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=8),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=8),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=8),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=8),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=8),
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=8),
+        # Fall-back config.
+        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=8),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
@@ -392,15 +408,11 @@ autotune_configs, autotune_keys = get_autotune_configs()
 def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh, stride_qm, stride_qk, stride_kz,
              stride_kh, stride_kn, stride_kk, stride_vz, stride_vh, stride_vk, stride_vn, stride_oz, stride_oh,
              stride_om, stride_on, stride_bz, stride_bh, stride_bm, stride_bn, stride_az, stride_ah, cu_seqlens_q,
-             cu_seqlens_k, dropout_p, philox_seed, philox_offset_base, encoded_softmax, alibi_slopes, NUM_SMS, ZQ: tl.constexpr, HQ: tl.constexpr,
+             cu_seqlens_k, dropout_p, philox_seed, philox_offset_base, encoded_softmax, alibi_slopes, NUM_WG, ZQ: tl.constexpr, HQ: tl.constexpr,
              HK: tl.constexpr, ACTUAL_BLOCK_DMODEL: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr,
              MAX_SEQLENS_K: tl.constexpr, VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
              BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
              ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr):
-    
-    #start_m = tl.program_id(0) # 0...
-    #off_h_q = tl.program_id(1) # 0...n_heads_q
-    #off_z = tl.program_id(2)
     
     num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M) #the number of work units (tiles) of a single head
     num_tiles_per_sample = num_tiles_per_head * HQ # times the number of heads
@@ -408,12 +420,12 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
     # num_tiles_per_SMS = num_tiles_total // NUM_SMS
 
     start_pid = tl.program_id(0)
-    tile_id = start_pid - NUM_SMS
+    tile_id = start_pid - NUM_WG
     
     
-    while tile_id + NUM_SMS < num_tiles_total:
+    while tile_id + NUM_WG < num_tiles_total:
         
-        tile_id += NUM_SMS # tile id will range (0...total number of tiles)
+        tile_id += NUM_WG # tile id will range (0...total number of tiles)
         # off_hz = tile_id // (num_tiles_per_head) # at which head are we
         off_z = tile_id // num_tiles_per_sample # at which batch sample are we
         off_h_q = tile_id % num_tiles_per_sample // num_tiles_per_head # at which head are we inside the sample
@@ -984,8 +996,12 @@ class _attention(torch.autograd.Function):
         padded_d_model = max(padded_d_model, 16)
 
         # grid = lambda META: (triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']), nheads_q, batch)
-        NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
-        grid = lambda _: (NUM_SMS, ) # launch as many triton programs as we have CUs
+        NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count 
+
+        NUM_WG = NUM_CU*8 # number of workgroups to be launched (TODO: could also be a integer multiple?)
+        
+        grid = lambda _: (NUM_WG,)
+
 
         # encoded_softmax is used to validate dropout behavior vs the PyTorch SDPA math backend reference.  We zero this out
         # to give a consistent starting point and then populate it with the output of softmax with the sign bit set according
@@ -1017,7 +1033,7 @@ class _attention(torch.autograd.Function):
         attn_fwd[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
                        *bias_strides, *alibi_strides, metadata.cu_seqlens_q, metadata.cu_seqlens_k,
                        dropout_p=metadata.dropout_p, philox_seed=philox_seed, philox_offset_base=philox_offset,
-                       encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes, NUM_SMS=NUM_SMS, ZQ=batch, HQ=nheads_q, HK=nheads_k,
+                       encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes, NUM_WG=NUM_WG, ZQ=batch, HQ=nheads_q, HK=nheads_k,
                        ACTUAL_BLOCK_DMODEL=head_size, MAX_SEQLENS_Q=metadata.max_seqlens_q,
                        MAX_SEQLENS_K=metadata.max_seqlens_k, IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
                        BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
@@ -1206,7 +1222,17 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     o = torch.empty_like(q)
 
     # triton implementation
+
+    # allow autotuning to first find the best
     tri_out, _ = attention(q, k, v, o, input_metadata)
+
+    # measure runtime with best config
+    torch.cuda.synchronize()
+    start_t = time.time()
+    tri_out, _ = attention(q, k, v, o, input_metadata)
+    
+    torch.cuda.synchronize()
+    print(f"Time for forward: {time.time()-start_t} s")
 
     # Transpose here if layout is bshd so we have same reference code for all layouts
     if layout == 'bshd':
@@ -1623,8 +1649,10 @@ def main():
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
 
-    test_op_fwd(4, 48, 24, 1024, 1024, 64, True, False, "bhsd")
-    # run_benchmark(custom_config, args)
+    print("Running benchmark...")
+    run_benchmark(custom_config, args)
+    print("Running single forward with timing...")
+    test_op_fwd(16,16,16,1024,1024,128,True, False, "bhsd")
 
 
 if __name__ == '__main__':
