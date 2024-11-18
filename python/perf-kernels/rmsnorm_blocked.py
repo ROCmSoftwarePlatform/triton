@@ -85,13 +85,12 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
         rms_norm = x * norm_factor * g
         tl.store(output_ptrs, rms_norm, mask=mask)
 
-def triton_rmsnorm(x, g, epsilon=1e-6):
+def triton_rmsnorm(x, y, g, epsilon=1e-6):
     n_rows, n_cols = x.shape
     BLOCK_SIZE = 65536
 #    BLOCK_SIZE = 32768
 #    BLOCK_SIZE = 16384
 
-    y = torch.empty_like(x, device=x.device)
 
     grid = (n_rows,)
     kk=rms_kernel[grid](
@@ -123,8 +122,9 @@ def torch_rmsnorm(x, g):
 def test_rmsnorm(M, N):
     torch.manual_seed(0)
     x = torch.randn(M, N, device='cuda')
+    y = torch.zeros_like(x, device=x.device)
     g = torch.ones((1, N), device='cuda')
-    y_triton = triton_rmsnorm(x, g)
+    y_triton = triton_rmsnorm(x, y, g)
 
     y_torch = torch_rmsnorm(x, g)
 
@@ -173,13 +173,14 @@ def run_benchmark(args):
     @triton.testing.perf_report(config)
     def benchmark(M, N, provider):
         x = torch.randn(M, N, device='cuda', dtype=dtype)
+        y = torch.zeros_like(x, device=x.device)
         stream = torch.cuda.Stream()
         torch.cuda.set_stream(stream)
         g = torch.ones((1, N), device='cuda')
         if provider == 'torch':
             ms = triton.testing.do_bench(lambda: torch_rmsnorm(x, g))
         if provider == 'triton':
-            ms = triton.testing.do_bench(lambda: triton_rmsnorm(x, g))
+            ms = triton.testing.do_bench(lambda: triton_rmsnorm(x, y, g))
         gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
         return gbps(ms)
 
@@ -211,6 +212,7 @@ def main():
     args = parse_args()
     if args.no_benchmark:
         x = torch.randn(args.M_start, args.N_start, device='cuda')
+        y = torch.zeros_like(x, device=x.device)
         g = torch.ones((1, args.N_start), device='cuda')
         triton_rmsnorm(x, g)
     else:
