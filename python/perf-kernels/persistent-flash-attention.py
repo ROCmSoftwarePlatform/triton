@@ -334,15 +334,19 @@ def is_rdna():
 
 def get_cdna_autotune_configs():
     return [
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 1}, num_stages=1,
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
                       num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
                       num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 4}, num_stages=1,
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
+                      num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
+                      num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
                       num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 4}, num_stages=1,
                       num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 8}, num_stages=1,
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 4}, num_stages=1,
                       num_warps=4),
         triton.Config({'BLOCK_M': 256, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
                       num_warps=4),
@@ -413,6 +417,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
     num_tiles_per_WG_remain = num_tiles_total % NUM_WG
 
     pid = tl.program_id(0)
+
     if pid < num_tiles_per_WG_remain:
         num_tiles_per_WG += 1
         tile_id = pid * num_tiles_per_WG 
@@ -992,9 +997,12 @@ class _attention(torch.autograd.Function):
         # kernel is padded - there is no padding in memory for any dims.
         padded_d_model = max(padded_d_model, 16)
 
+        # naive
         # grid = lambda META: (triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']), nheads_q, batch)
+        # total_num_tiles: triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']) * nheads_q * batch
+        
         NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count 
-        grid = lambda META: (NUM_CU * META['GRID_CU_MULTIP'],)
+        grid = lambda META: (min(NUM_CU * META['GRID_CU_MULTIP'], triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']) * nheads_q * batch) ,)
 
 
         # encoded_softmax is used to validate dropout behavior vs the PyTorch SDPA math backend reference.  We zero this out
@@ -1476,23 +1484,23 @@ def test_op_bwd(Z, H, N_CTX, D_HEAD, qseqlen_not_equal_kseqlen, causal, torch_sd
 def nonvarlen_benchmark_configs():
     configs = [
         (16, 16, 16, 1024, 1024),
-        # (8, 16, 16, 2048, 2048),
-        # (4, 16, 16, 4096, 4096),
-        # (2, 16, 16, 8192, 8192),
-        # (1, 16, 16, 16384, 16384),
-        # (2, 48, 48, 1024, 1024),
-        # (2, 48, 48, 2048, 1024),
-        # (2, 48, 48, 4096, 8192),
-        # (2, 48, 48, 8192, 4096),
-        # (2, 48, 48, 16384, 8192),
-        # (8, 16, 16, 1989, 15344),
-        # (4, 16, 16, 4097, 163),
-        # (2, 16, 16, 8122, 2159),
-        # (1, 16, 16, 16281, 7),
-        # (2, 48, 48, 1021, 1020),
-        # (2, 48, 48, 2001, 2048),
-        # (2, 48, 48, 3996, 9639),
-        # (2, 48, 48, 8181, 1021),
+        (8, 16, 16, 2048, 2048),
+        (4, 16, 16, 4096, 4096),
+        (2, 16, 16, 8192, 8192),
+        (1, 16, 16, 16384, 16384),
+        (2, 48, 48, 1024, 1024),
+        (2, 48, 48, 2048, 1024),
+        (2, 48, 48, 4096, 8192),
+        (2, 48, 48, 8192, 4096),
+        (2, 48, 48, 16384, 8192),
+        (8, 16, 16, 1989, 15344),
+        (4, 16, 16, 4097, 163),
+        (2, 16, 16, 8122, 2159),
+        (1, 16, 16, 16281, 7),
+        (2, 48, 48, 1021, 1020),
+        (2, 48, 48, 2001, 2048),
+        (2, 48, 48, 3996, 9639),
+        (2, 48, 48, 8181, 1021),
     ]
     return configs
 
@@ -1646,8 +1654,8 @@ def main():
 
     print("Running benchmark...")
     run_benchmark(custom_config, args)
-    #print("Running single forward with timing...")
-    #test_op_fwd(16,16,16,1024,1024,128,True, False, "bhsd")
+    print("Running single forward with timing...")
+    test_op_fwd(16,16,16,1024,1024,128,True, False, "bhsd")
 
 
 if __name__ == '__main__':

@@ -1,0 +1,1 @@
+python: can't open file '/home/jukorhon/rocm/triton/rocm/triton/python/perf-kernels/persistent-flash-attention.py': [Errno 2] No such file or directory
