@@ -1175,6 +1175,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     # triton implementation
 
     # allow autotuning to first find the best
+    print("autotuning...")
     tri_out, _ = attention(q, k, v, o, input_metadata)
 
     # measure runtime with best config
@@ -1183,7 +1184,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     tri_out, _ = attention(q, k, v, o, input_metadata)
     
     torch.cuda.synchronize()
-    print(f"Time for forward: {time.time()-start_t} s")
+    print(f"Time for forward with the best config: {time.time()-start_t} s")
 
     # Transpose here if layout is bshd so we have same reference code for all layouts
     if layout == 'bshd':
@@ -1432,23 +1433,23 @@ def test_op_bwd(Z, H, N_CTX, D_HEAD, qseqlen_not_equal_kseqlen, causal, torch_sd
 def nonvarlen_benchmark_configs():
     configs = [
         (16, 16, 16, 1024, 1024),
-        (8, 16, 16, 2048, 2048),
-        (4, 16, 16, 4096, 4096),
-        (2, 16, 16, 8192, 8192),
-        (1, 16, 16, 16384, 16384),
-        (2, 48, 48, 1024, 1024),
-        (2, 48, 48, 2048, 1024),
-        (2, 48, 48, 4096, 8192),
-        (2, 48, 48, 8192, 4096),
-        (2, 48, 48, 16384, 8192),
-        (8, 16, 16, 1989, 15344),
-        (4, 16, 16, 4097, 163),
-        (2, 16, 16, 8122, 2159),
-        (1, 16, 16, 16281, 7),
-        (2, 48, 48, 1021, 1020),
-        (2, 48, 48, 2001, 2048),
-        (2, 48, 48, 3996, 9639),
-        (2, 48, 48, 8181, 1021),
+        # (8, 16, 16, 2048, 2048),
+        # (4, 16, 16, 4096, 4096),
+        # (2, 16, 16, 8192, 8192),
+        # (1, 16, 16, 16384, 16384),
+        # (2, 48, 48, 1024, 1024),
+        # (2, 48, 48, 2048, 1024),
+        # (2, 48, 48, 4096, 8192),
+        # (2, 48, 48, 8192, 4096),
+        # (2, 48, 48, 16384, 8192),
+        # (8, 16, 16, 1989, 15344),
+        # (4, 16, 16, 4097, 163),
+        # (2, 16, 16, 8122, 2159),
+        # (1, 16, 16, 16281, 7),
+        # (2, 48, 48, 1021, 1020),
+        # (2, 48, 48, 2001, 2048),
+        # (2, 48, 48, 3996, 9639),
+        # (2, 48, 48, 8181, 1021),
     ]
     return configs
 
