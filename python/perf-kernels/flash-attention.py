@@ -335,19 +335,19 @@ def is_rdna():
 
 def get_cdna_autotune_configs():
     return [
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
+        #               num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
+        #               num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False}, num_stages=1,
+        #               num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
+        #               num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
                       num_warps=4),
-        # Fall-back config.
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
+        # # Fall-back config.
+        # triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
+        #               num_warps=4),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
@@ -1175,8 +1175,8 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     # triton implementation
 
     # allow autotuning to first find the best
-    print("autotuning...")
-    tri_out, _ = attention(q, k, v, o, input_metadata)
+    # print("autotuning...")
+    # tri_out, _ = attention(q, k, v, o, input_metadata)
 
     # measure runtime with best config
     torch.cuda.synchronize()
@@ -1433,23 +1433,23 @@ def test_op_bwd(Z, H, N_CTX, D_HEAD, qseqlen_not_equal_kseqlen, causal, torch_sd
 def nonvarlen_benchmark_configs():
     configs = [
         (16, 16, 16, 1024, 1024),
-        # (8, 16, 16, 2048, 2048),
-        # (4, 16, 16, 4096, 4096),
-        # (2, 16, 16, 8192, 8192),
-        # (1, 16, 16, 16384, 16384),
-        # (2, 48, 48, 1024, 1024),
-        # (2, 48, 48, 2048, 1024),
-        # (2, 48, 48, 4096, 8192),
-        # (2, 48, 48, 8192, 4096),
-        # (2, 48, 48, 16384, 8192),
-        # (8, 16, 16, 1989, 15344),
-        # (4, 16, 16, 4097, 163),
-        # (2, 16, 16, 8122, 2159),
-        # (1, 16, 16, 16281, 7),
-        # (2, 48, 48, 1021, 1020),
-        # (2, 48, 48, 2001, 2048),
-        # (2, 48, 48, 3996, 9639),
-        # (2, 48, 48, 8181, 1021),
+        (8, 16, 16, 2048, 2048),
+        (4, 16, 16, 4096, 4096),
+        (2, 16, 16, 8192, 8192),
+        (1, 16, 16, 16384, 16384),
+        (2, 48, 48, 1024, 1024),
+        (2, 48, 48, 2048, 1024),
+        (2, 48, 48, 4096, 8192),
+        (2, 48, 48, 8192, 4096),
+        (2, 48, 48, 16384, 8192),
+        (8, 16, 16, 1989, 15344),
+        (4, 16, 16, 4097, 163),
+        (2, 16, 16, 8122, 2159),
+        (1, 16, 16, 16281, 7),
+        (2, 48, 48, 1021, 1020),
+        (2, 48, 48, 2001, 2048),
+        (2, 48, 48, 3996, 9639),
+        (2, 48, 48, 8181, 1021),
     ]
     return configs
 
@@ -1602,8 +1602,8 @@ def main():
            "Only fp16, bf16 and f32 types currently supported."
 
 
-    print("Running benchmark...")
-    run_benchmark(custom_config, args)
+    # print("Running benchmark...")
+    # run_benchmark(custom_config, args)
     print("Running single forward with timing...")
     test_op_fwd(16,16,16,1024,1024,128,True, False, "bhsd")
     

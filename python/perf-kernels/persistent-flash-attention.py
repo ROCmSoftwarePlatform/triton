@@ -334,25 +334,25 @@ def is_rdna():
 
 def get_cdna_autotune_configs():
     return [
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
+        #               num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
+        #               num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
+        #               num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
+        #               num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
                       num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 4}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 4}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
-        # Fall-back config.
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 1}, num_stages=1,
-                      num_warps=8),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 4}, num_stages=1,
+        #               num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 4}, num_stages=1,
+        #               num_warps=4),
+        # triton.Config({'BLOCK_M': 256, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
+        #               num_warps=4),
+        # # Fall-back config.
+        # triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 1}, num_stages=1,
+        #                num_warps=8),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
@@ -404,11 +404,16 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
              ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr, GRID_CU_MULTIP: tl.constexpr):
     
 
-    NUM_WG = NUM_CU * GRID_CU_MULTIP # How many workgroups did we launch? Is a integer multiplier of the number of CUs (NUM_CU)
-    # TODO: How to enable L2 cache hits? 
-    # Would think that a workgroup looping over contiguous tasks (inside the same head) would be able to cache the keys and values.
+    """
+    This implements the persistent kernel optimization to flash attention. With persistent kernels, we launch NUM_WG = NUM_CU * GRID_CU_MULTIP number of workgroups,
+    and each workgroup loops over num_tiles_total // NUM_WG number of tiles. This is meant to reduce the launch overhead that we would otherwise incure when launching
+    a workgroup per each tile as is done with the standard flash attention (flash-attention.py).
+    """
 
-    num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M) # the number of work units (tiles) of a single head
+    NUM_WG = NUM_CU * GRID_CU_MULTIP # How many workgroups did we launch? Is a integer multiplier of the number of CUs (NUM_CU)
+    # TODO: How to promote L2 caching? Would think that a workgroup looping over contiguous tasks (inside the same head) would promote to cache the keys and values into L2.
+
+    num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M) # the number of tiles of a single head
     num_tiles_per_sample = num_tiles_per_head * HQ # times the number of heads
     num_tiles_total = num_tiles_per_sample * ZQ # times the number of samples
     
@@ -1226,8 +1231,8 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     # triton implementation
 
     # allow autotuning to first find the best
-    print("autotuning...")
-    tri_out, _ = attention(q, k, v, o, input_metadata)
+    # print("autotuning...")
+    # tri_out, _ = attention(q, k, v, o, input_metadata)
 
     # measure runtime with best config
     torch.cuda.synchronize()
@@ -1652,8 +1657,8 @@ def main():
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
 
-    print("Running benchmark...")
-    run_benchmark(custom_config, args)
+    # print("Running benchmark...")
+    # run_benchmark(custom_config, args)
     print("Running single forward with timing...")
     test_op_fwd(16,16,16,1024,1024,128,True, False, "bhsd")
 
