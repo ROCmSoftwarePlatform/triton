@@ -28,12 +28,14 @@ import triton.language as tl
 import triton.tools.experimental_descriptor
 import triton.profiler as proton
 
-if torch.cuda.is_available():
-    from triton._C.libtriton import nvidia
-    cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
-    cublas = nvidia.cublas.CublasLt(cublas_workspace)
-else:
-    cublas = None
+
+cublas = None
+# if torch.cuda.is_available():
+#     from triton._C.libtriton import nvidia
+#     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
+#     cublas = nvidia.cublas.CublasLt(cublas_workspace)
+# else:
+#     cublas = None
 
 
 def is_cuda():
@@ -113,16 +115,23 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
     tl.store(c_ptrs, c, mask=c_mask)
 
 
+#
+# {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
+#             num_warps=4, num_stages=2),
+
 def matmul(a, b):
-    configs = {
-        torch.float8_e4m3fn: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
-            "num_warps": 8
-        }, torch.float16: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
-            "num_warps": 8
-        }
-    }
+    configs = {torch.float16: {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 1, 'num_stages': 2, "num_warps": 4}}
+    
+    
+    # {
+    #     torch.float8_e4m3fn: {
+    #         "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
+    #         "num_warps": 8
+    #     }, torch.float16: {
+    #         "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
+    #         "num_warps": 8
+    #     }
+    # }
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -225,15 +234,17 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
 
 
 def matmul_persistent(a, b):
-    configs = {
-        torch.float8_e4m3fn: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
-            "num_warps": 8
-        }, torch.float16: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
-            "num_warps": 8
-        }
-    }
+    # configs = {
+    #     torch.float8_e4m3fn: {
+    #         "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
+    #         "num_warps": 8
+    #     }, torch.float16: {
+    #         "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
+    #         "num_warps": 8
+    #     }
+    # }
+
+    configs = {torch.float16: {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 1, 'num_stages': 2, "num_warps": 4}}
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -583,10 +594,14 @@ def validate(M, N, K, dtype, tiles_per_update):
     b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
     b = b.T.contiguous()
 
+
     torch_result = torch_matmul(a, b) if dtype == torch.float16 else None
     cublas_result = cublas_matmul(a, b) if cublas is not None else None
     naive_result = matmul(a, b.T)
+
     persistent_result = matmul_persistent(a, b.T)
+
+
     tma_persistent_result = matmul_tma_persistent(a, b) if supports_tma() else None
     device_tma_persistent_result = matmul_device_tma_persistent(a, b, tiles_per_update) if supports_tma() else None
 
