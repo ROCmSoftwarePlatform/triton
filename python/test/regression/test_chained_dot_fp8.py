@@ -6,7 +6,6 @@ another dot op as an input.
 
 import math
 import pytest
-import sys
 import torch
 
 import triton
