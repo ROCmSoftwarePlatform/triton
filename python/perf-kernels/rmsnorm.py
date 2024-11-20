@@ -27,15 +27,18 @@ def get_cuda_autotune_config():
 
 def get_hip_autotune_config():
     return [
-        triton.Config({'waves_per_eu': 1}, num_warps=4, num_stages=1),
-        triton.Config({'waves_per_eu': 1}, num_warps=8, num_stages=1),
-        triton.Config({'waves_per_eu': 1}, num_warps=16, num_stages=1),
-        triton.Config({'waves_per_eu': 2}, num_warps=4, num_stages=1),
-        triton.Config({'waves_per_eu': 2}, num_warps=8, num_stages=1),
-        triton.Config({'waves_per_eu': 2}, num_warps=16, num_stages=1),
-        triton.Config({'waves_per_eu': 4}, num_warps=4, num_stages=1),
-        triton.Config({'waves_per_eu': 4}, num_warps=8, num_stages=1),
-        triton.Config({'waves_per_eu': 4}, num_warps=16, num_stages=1),
+        triton.Config({'waves_per_eu': 0}, num_warps=4, num_stages=2),
+        triton.Config({'waves_per_eu': 0}, num_warps=8, num_stages=2),
+        triton.Config({'waves_per_eu': 0}, num_warps=16, num_stages=2),
+        triton.Config({'waves_per_eu': 1}, num_warps=4, num_stages=2),
+        triton.Config({'waves_per_eu': 1}, num_warps=8, num_stages=2),
+        triton.Config({'waves_per_eu': 1}, num_warps=16, num_stages=2),
+        triton.Config({'waves_per_eu': 2}, num_warps=4, num_stages=2),
+        triton.Config({'waves_per_eu': 2}, num_warps=8, num_stages=2),
+        triton.Config({'waves_per_eu': 2}, num_warps=16, num_stages=2),
+        triton.Config({'waves_per_eu': 4}, num_warps=4, num_stages=2),
+        triton.Config({'waves_per_eu': 4}, num_warps=8, num_stages=2),
+        triton.Config({'waves_per_eu': 4}, num_warps=16, num_stages=2),
     ]
 
 
@@ -75,15 +78,12 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
         tl.store(output_ptrs, rms_norm, mask=mask)
 
 
-def triton_rmsnorm(x, y, g, epsilon=1e-6):
-    n_rows, n_cols = x.shape
-    BLOCK_SIZE = triton.next_power_of_2(n_cols)
+def triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, epsilon=1e-6):
+    BLOCK_SIZE = blk_size
 
     NUM_PRGMS = n_rows
     grid = lambda meta: (NUM_PRGMS, )
-#    extra_kargs = {"waves_per_eu": 0, "num_warps": 8, "num_stages": 2}
     rms_kernel[grid](y, x, g, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, BLOCK_SIZE, NUM_PRGMS)
-#    rms_kernel[grid](y, x, g, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, BLOCK_SIZE, NUM_PRGMS, num_warps = 8, num_stages = 1, waves_per_eu = 0)
 
     return y
 
@@ -161,13 +161,15 @@ def run_benchmark(args):
     def benchmark(M, N, provider):
         x = torch.randn(M, N, device='cuda', dtype=dtype)
         y = torch.zeros_like(x, device='cuda')
+        n_rows, n_cols = x.shape
+        blk_size = triton.next_power_of_2(n_cols)
         stream = torch.cuda.Stream()
         torch.cuda.set_stream(stream)
         g = torch.ones((1, N), device='cuda')
         if provider == 'torch':
             ms = triton.testing.do_bench(lambda: torch_rmsnorm(x, g))
         if provider == 'triton':
-            ms = triton.testing.do_bench(lambda: triton_rmsnorm(x, y, g))
+            ms = triton.testing.do_bench(lambda: triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size))
         gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
         return gbps(ms)
 
