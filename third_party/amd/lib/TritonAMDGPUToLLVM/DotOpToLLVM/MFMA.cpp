@@ -38,6 +38,47 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 
 using ValueTable = std::map<std::array<int, 3>, Value>;
 
+// Bitmask that encodes instruction types for LLVM AMD scheduling hints.
+enum InstructionKindMask {
+  NONE =        0x0000,
+  ALL_ALU =     0x0001,
+  VALU =        0x0002,
+  SALU =        0x0004,
+  MFMA =        0x0008,
+  ALL_VMEM =    0x0010,
+  VMEM_READ =   0x0020,
+  VMEM_WRITE =  0x0040,
+  ALL_DS =      0x0080,
+  DS_READ =     0x0100,
+  DS_WRITE =    0x0200,
+  TRANSCEND =   0x0400
+};
+
+void createSchedBarrier(PatternRewriter &rewriter, Location loc,
+                        int32_t maskValue) {
+  const char *intrinsicName = "llvm.amdgcn.sched.barrier";
+  Value mask =
+      LLVM::createConstantI32(loc, rewriter, static_cast<int32_t>(maskValue));
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, TypeRange{},
+                                  ValueRange{mask});
+}
+
+void createSchedGroupBarrier(PatternRewriter &rewriter, Location loc,
+                             int32_t maskValue, int sizeValue,
+                             int groupIdValue) {
+  const char *intrinsicName = "llvm.amdgcn.sched.group.barrier";
+
+  Value mask =
+      LLVM::createConstantI32(loc, rewriter, static_cast<int32_t>(maskValue));
+  Value size =
+      LLVM::createConstantI32(loc, rewriter, static_cast<int32_t>(sizeValue));
+  Value groupId = LLVM::createConstantI32(loc, rewriter,
+                                          static_cast<int32_t>(groupIdValue));
+
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, TypeRange{},
+                                  ValueRange{mask, size, groupId});
+};
+
 struct DotOpMFMAConversionHelper {
   AMDMfmaEncodingAttr mfmaLayout;
 
@@ -162,6 +203,90 @@ struct DotOpMFMAConversionHelper {
     return processSubBlocks(numSubBlocks, acc, false, true);
   }
 
+  /*
+  This class helps with re-ordering mfmas into tiles to improve data-locality
+  and therefore register allocation in the backend.
+  The effect of tiling should be fewer registers used for A,B operands
+  between the ds_reads and mfmas.
+  However, this is not a robust solution since
+  (1) pre-RA scheduling is bidirectional so the ds_reads can be issued
+      from the top-down in a conflicting order from the mfmas' order bottom-up,
+  (2) the ds_reads aren't ordered to match the tiles which impacts (1),
+  (3) the pre-RA scheduler can still move the ds_reads too early
+      or too late relative to their respective mfmas.
+  */
+  struct DotTiling {
+    const int numRepM;
+    const int numRepN;
+    // The tile with fewer reps should be inner loop (=true) to minimize register lifetimes.
+    const int preferMoreOuterTiles;
+    const int tileSizeM;
+    const int tileSizeN;
+    const int numTilesM;
+    const int numTilesN;
+    const int moreTilesN;
+    bool outerTileN;
+    int tileSizeOuter;
+    int tileSizeInner;
+    int numTilesOuter;
+    int numTilesInner;
+
+    explicit DotTiling(int inputNumRepM, int inputNumRepN,
+                       bool inputPreferMoreOuterTiles = true)
+        : numRepM(inputNumRepM),
+          numRepN(inputNumRepN),
+          preferMoreOuterTiles(inputPreferMoreOuterTiles),
+#if 1
+          // 2x2 tile
+          tileSizeM((numRepM % 2 == 0) ? 2 : 1),
+          tileSizeN((numRepN % 2 == 0) ? 2 : 1),
+#else
+          // half x half
+          tileSizeM((numRepM % 2 == 0 && numRepM >= 2) ? numRepM/2 : 1),
+          tileSizeN((numRepN % 2 == 0 && numRepN >= 2) ? numRepN/2 : 1),
+#endif
+          numTilesM(numRepM / tileSizeM),
+          numTilesN(numRepN / tileSizeN),
+          moreTilesN(numTilesN > numTilesM),
+          outerTileN(preferMoreOuterTiles == moreTilesN) {
+      // Num mfmas must evenly divide into tiles.
+      assert(numTilesM * tileSizeM == numRepM);
+      assert(numTilesN * tileSizeN == numRepN);
+      // Assign M and N to be outer vs inner tile loop.
+      if (outerTileN) {
+        // N is tile of outer loop.
+        tileSizeOuter = tileSizeN;
+        tileSizeInner = tileSizeM;
+        numTilesOuter = numTilesN;
+        numTilesInner = numTilesM;
+      } else {
+        // M is tile of outer loop.
+        tileSizeOuter = tileSizeM;
+        tileSizeInner = tileSizeN;
+        numTilesOuter = numTilesM;
+        numTilesInner = numTilesN;
+      }
+    }
+    int getTileSizeM() const { return tileSizeM; }
+    int getTileSizeN() const { return tileSizeN; }
+    int getNumTilesOuter() const { return numTilesOuter; }
+    int getNumTilesInner() const { return numTilesInner; }
+    int getTileStartM(int tileOuterIdx, int tileInnerIdx) const {
+      if (outerTileN) {
+        return tileInnerIdx * tileSizeInner; // M is inner tile loop.
+      } else {
+        return tileOuterIdx * tileSizeOuter; // M is outer tile loop.
+      }
+    }
+    int getTileStartN(int tileOuterIdx, int tileInnerIdx) const {
+      if (outerTileN) {
+        return tileOuterIdx * tileSizeOuter; // N is outer tile loop.
+      } else {
+        return tileInnerIdx * tileSizeInner; // N is inner tile loop.
+      }
+    }
+  }; // DotTiling
+
   // Conduct the Dot conversion.
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
     auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
@@ -227,36 +352,89 @@ struct DotOpMFMAConversionHelper {
     auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
 
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
-    for (int b = 0; b < numRepB; ++b) {
-      for (int m = 0; m < numRepM; ++m) {
-        for (int n = 0; n < numRepN; ++n) {
-          Value acc = undef(vecTy);
-          for (unsigned v = 0; v < elemsPerVec; ++v) {
-            acc = insert_element(
-                vecTy, acc,
-                fc[b * numRepM * numRepN * elemsPerVec +
-                   m * numRepN * elemsPerVec + n * elemsPerVec + v],
-                i32_val(v));
-          }
-          acc = zeroAuxiliarBlocks(subBlocks, acc);
-          for (int k = 0; k < numRepK; k++) {
-            for (int kPack = 0; kPack < kWidth / kBase; ++kPack)
-              acc =
-                  mfmaLayout.getIsTransposed()
-                      ? generateMFMAOp(mfmaInsnName, operandB[kPack][{b, n, k}],
-                                       operandA[kPack][{b, m, k}], acc)
-                      : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
-                                       operandB[kPack][{b, n, k}], acc);
-          }
-          acc = reduceSubBlocks(subBlocks, acc);
-          for (unsigned v = 0; v < elemsPerVec; ++v) {
-            fc[b * numRepM * numRepN * elemsPerVec + m * numRepN * elemsPerVec +
-               n * elemsPerVec + v] =
-                extract_element(dstElemTy, acc, i32_val(v));
-          }
-        }
+
+    const DotTiling dotTiling(numRepM, numRepN);
+    const int tileSizeM = dotTiling.getTileSizeM();
+    const int tileSizeN = dotTiling.getTileSizeN();
+    for (int k = 0; k < numRepK; k++) {
+      for (int tileOuterIdx = 0; tileOuterIdx < dotTiling.getNumTilesOuter(); ++tileOuterIdx) {
+        for (int tileInnerIdx = 0; tileInnerIdx < dotTiling.getNumTilesInner(); ++tileInnerIdx) {
+          const int tileStartM = dotTiling.getTileStartM(tileOuterIdx, tileInnerIdx);
+          const int tileStartN = dotTiling.getTileStartN(tileOuterIdx, tileInnerIdx);
+
+          for (int b = 0; b < numRepB; ++b) {
+            for (int m = tileStartM; m < tileStartM + tileSizeM; ++m) {
+              for (int n = tileStartN; n < tileStartN + tileSizeN; ++n) {
+                Value acc = undef(vecTy);
+                for (unsigned v = 0; v < elemsPerVec; ++v) {
+                  acc = insert_element(
+                      vecTy, acc,
+                      fc[b * numRepM * numRepN * elemsPerVec +
+                        m * numRepN * elemsPerVec + n * elemsPerVec + v],
+                      i32_val(v));
+                }
+                acc = zeroAuxiliarBlocks(subBlocks, acc);
+                for (int kPack = 0; kPack < kWidth / kBase; ++kPack) {
+                  acc =
+                      mfmaLayout.getIsTransposed()
+                          ? generateMFMAOp(mfmaInsnName, operandB[kPack][{b, n, k}],
+                                           operandA[kPack][{b, m, k}], acc)
+                          : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
+                                           operandB[kPack][{b, n, k}], acc);
+                  if (triton::tools::getBoolEnv("TRITON_MFMA_TILE_ENABLE_SCHED_BARRIERS")) {
+                    // Use sched.barrier to enforce the ordering of mfmas.
+                    // However, there is a bug in llvm's sched.barrier solver,
+                    // so these barriers may lead to incorrect code; requires
+                    // https://github.com/llvm/llvm-project/pull/112781 to fix.
+                    // Mask every instruction type except for MFMA to only
+                    // enforce the relative order of mfmas.
+                    int32_t mfmaMask = InstructionKindMask::VALU
+                        | InstructionKindMask::SALU
+                        | InstructionKindMask::ALL_VMEM
+                        | InstructionKindMask::VMEM_READ
+                        | InstructionKindMask::VMEM_WRITE
+                        | InstructionKindMask::ALL_DS
+                        | InstructionKindMask::DS_READ
+                        | InstructionKindMask::DS_WRITE
+                        | InstructionKindMask::TRANSCEND;
+                    createSchedBarrier(rewriter, loc, mfmaMask);
+                  }
+                } // kPack
+                acc = reduceSubBlocks(subBlocks, acc);
+                for (unsigned v = 0; v < elemsPerVec; ++v) {
+                  fc[b * numRepM * numRepN * elemsPerVec + m * numRepN * elemsPerVec +
+                    n * elemsPerVec + v] =
+                      extract_element(dstElemTy, acc, i32_val(v));
+                }
+              } // n
+            } // m
+          } // b
+        } // inner tile
+      } // outer tile
+    } // k
+
+    /*
+    Sched.Group.Barriers
+    This is temporary code to avoid global_loads and ds_write latencies from being significant issues,
+    so that the ds_read and mfmas can be more clearly analyzed. These work for TN 256x256x64 and nW=4, 8.
+    */
+    int group_id = 0;
+    int nW = 8; // num waves / workgroup.
+    if (false) {
+      // global_load early.
+      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::VMEM_READ, 4*(8/nW), group_id);
+      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA,     96*(8/nW), group_id);
+    }
+    // ds_writes late and interleaved.
+    if (false) {
+      group_id++;
+      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA,     112*(8/nW), group_id);
+      for (int w = 0; w < 8*(8/nW); ++w) {
+        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA,     1, group_id);
+        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::DS_WRITE, 1, group_id);
       }
     }
+
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(fc.size(), dstElemTy));
