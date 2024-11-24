@@ -2,9 +2,9 @@ import torch
 import triton
 import random
 
-#from streamk_kernel import streamk_gemm
+from streamk_kernel import streamk_gemm
 #from streamk_kernel_atomic import streamk_gemm
-from persistent_gemm import streamk_gemm
+#from persistent_gemm import streamk_gemm
 
 torch.manual_seed(123)
 random.seed(123)
@@ -138,7 +138,7 @@ perf = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
 
 ## test for tiles that is not multipe of 304 tiles
 #m, n, k = 4096, 4096, 8192  # some problem size to test
-#m, n, k = 8192, 8192, 8192  # some problem size to test
+m, n, k = 8192, 8192, 8192  # some problem size to test
 #m, n, k = 512, 512, 512  # some problem size to test
 
 ## memory bound sizes
@@ -151,7 +151,7 @@ perf = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
 #m, n, k = 5632, 6656, 7936
 
 ## test when k is not multiple of 16
-m, n, k = 4864, 4096, 4300
+#m, n, k = 4864, 4096, 4300
 
 A = torch.randn(m, k, device="cuda", dtype=torch.float16)
 B = torch.randn(n, k, device="cuda", dtype=torch.float16).T
