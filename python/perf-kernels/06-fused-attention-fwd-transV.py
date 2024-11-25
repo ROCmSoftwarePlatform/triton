@@ -206,7 +206,7 @@ class _attention(torch.autograd.Function):
             num_warps=num_warps,
             num_stages=num_stages,
             pre_load_v=pre_load_v,
-            slice_k_tile=slice_k_tile,
+            #slice_k_tile=slice_k_tile,
             kpack=kpack,
         )
 
@@ -257,21 +257,21 @@ HAS_FLASH = FLASH_VER is not None
 
 # vary seq length for fixed head and batch=4
 configs = []
-for dtype in ['fp16', 'bf16', 'fp8']:
+for dtype in ['bf16']:
     for D_HEAD in [128]:
         for causal in [False]:
             configs.append(
                 triton.testing.Benchmark(
                     x_names=['BATCH', 'H', 'N_CTX'], x_vals=[
-                        (16, 16, 1024),
-                        (8, 16, 2048),
-                        (4, 16, 4096),
-                        (2, 16, 8192),
-                        (1, 16, 16384),
-                        (4, 48, 1024),
-                        (4, 48, 2048),
-                        (4, 48, 4096),
-                        (4, 48, 8192),
+                        #(16, 16, 1024),
+                        #(8, 16, 2048),
+                        #(4, 16, 4096),
+                        #(2, 16, 8192),
+                        #(1, 16, 16384),
+                        #(4, 48, 1024),
+                        #(4, 48, 2048),
+                        #(4, 48, 4096),
+                        #(4, 48, 8192),
                         (4, 48, 16384),
                     ], line_arg='provider', line_vals=['triton'], line_names=['Triton'],
                     #styles=[('red', '-'), ('blue', '-')],
