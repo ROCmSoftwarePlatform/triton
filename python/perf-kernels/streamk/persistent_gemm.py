@@ -37,8 +37,14 @@ def streamk_gemm(
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     total_tiles = num_pid_m * num_pid_n
 
-    acc_dtype = tl.float32 if C.type.element_ty != tl.int8 else tl.int32
+    tl.assume(stride_am > 0)
+    tl.assume(stride_ak > 0)
+    tl.assume(stride_bn > 0)
+    tl.assume(stride_bk > 0)
+    tl.assume(stride_cm > 0)
+    tl.assume(stride_cn > 0)
 
+    acc_dtype = tl.float32 if C.type.element_ty != tl.int8 else tl.int32
     for tile_id in range(pid, total_tiles, NUM_SMS):
         num_pid_in_group = GROUP_SIZE_M * num_pid_n
         group_id = tile_id // num_pid_in_group
@@ -54,6 +60,8 @@ def streamk_gemm(
         rn = tl.max_contiguous(tl.multiple_of(rn, BLOCK_SIZE_N), BLOCK_SIZE_N)
         A_BASE = A + rm[:, None] * stride_am + rk[None, :] * stride_ak
         B_BASE = B + rk[:, None] * stride_bk + rn[None, :] * stride_bn
+        tl.assume(pid_m > 0)
+        tl.assume(pid_n > 0)
 
         loop_k = tl.cdiv(K, BLOCK_SIZE_K)
         if not EVEN_K:

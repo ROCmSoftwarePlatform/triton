@@ -30,7 +30,6 @@ name_to_tl_types = {
     'bf8': tl.float8e5b16,
 }
 
-
 def run_bash_command_wrapper(commandstring, capture=True):
     try:
         run_bash_command(commandstring, capture)
