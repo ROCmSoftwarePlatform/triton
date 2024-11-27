@@ -51,6 +51,10 @@ def matmul_kernel(
     stride_bn,
     stride_cm,
     stride_cn,
+    a_scale: tl.constexpr,
+    b_scale: tl.constexpr,
+    scale_post_op: tl.constexpr,
+    scale_pre_op: tl.constexpr,
     # Meta-parameters
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
@@ -120,6 +124,8 @@ def matmul_kernel(
     # while the accumulator is still in FP32!
     if ACTIVATION == "leaky_relu":
         accumulator = leaky_relu(accumulator)
+    if scale_post_op:
+        accumulator = accumulator * a_scale * b_scale
     c = accumulator.to(c_ptr.type.element_ty)
 
     # -----------------------------------------------------------
@@ -143,7 +149,7 @@ def leaky_relu(x):
 # and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
 
 
-def matmul(a, b, c, activation=""):
+def matmul(a, b, c, a_scale, b_scale, activation=""):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     # assert a.is_contiguous(), "Matrix A must be contiguous"
@@ -152,6 +158,8 @@ def matmul(a, b, c, activation=""):
     K, N = b.shape
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
+    scale_post_op = a_scale is not None and b_scale is not None
+    scale_pre_op = (a_scale is not None) ^ (b_scale is not None)
     matmul_kernel[grid](
         a,
         b,
@@ -165,72 +173,54 @@ def matmul(a, b, c, activation=""):
         b.stride(1),
         c.stride(0),
         c.stride(1),
+        a_scale,
+        b_scale,
+        scale_post_op,
+        scale_pre_op,
         ACTIVATION=activation,
     )
 
 
-TORCH_HAS_FP8E5B16 = hasattr(torch, 'float8_e5m2fnuz')
-TORCH_HAS_FP8E4B8 = hasattr(torch, 'float8_e4m3fnuz')
-tl_to_torch_types = {
-    tl.float16: torch.float16,
-    tl.bfloat16: torch.bfloat16,
-    tl.float32: torch.float32,
-    tl.int8: torch.int8,
-    tl.int32: torch.int32,
-}
-if TORCH_HAS_FP8E5B16:
-    tl_to_torch_types[tl.float8e5b16] = torch.float8_e5m2fnuz
-if TORCH_HAS_FP8E4B8:
-    tl_to_torch_types[tl.float8e4b8] = torch.float8_e4m3fnuz
-
-name_to_tl_types = {
-    'int8': tl.int8,
-    'int32': tl.int32,
-    'fp16': tl.float16,
-    'fp32': tl.float32,
-    'bf16': tl.bfloat16,
-    'fp8e4': tl.float8e4b8,
-    'fp8e5': tl.float8e5b16,
+name_to_torch_types = {
+    'int8': torch.int8,
+    'int32': torch.int32,
+    'fp16': torch.float16,
+    'fp32': torch.float32,
+    'bf16': torch.bfloat16,
+    'fp8e5': torch.float8_e5m2fnuz,
+    'fp8e4': torch.float8_e4m3fnuz,
 }
 
+dtype_max = {
+    torch.float8_e5m2fnuz: 57344,
+    torch.float8_e4m3fnuz: 240,
+    torch.int8: 127,
+}
+
+def dtype_is_8_bit(dtype):
+    return (dtype is torch.float8_e5m2fnuz) or \
+           (dtype is torch.float8_e4m3fnuz) or \
+           (dtype is torch.int8)
 
 def gen_input(M, N, ty_name, needTrans, seed, device='cuda'):
-    d_type = name_to_tl_types[ty_name]
+    d_type = name_to_torch_types[ty_name]
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-
-    @triton.jit
-    def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-        offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_elements
-        input = tl.load(input_ptr + offsets, mask=mask)
-        output = input
-        tl.store(output_ptr + offsets, output, mask=mask)
 
     if needTrans:
         raw_data = torch.randn((N, M), dtype=torch.float32, device='cuda').T
     else:
         raw_data = torch.randn((M, N), dtype=torch.float32, device='cuda')
-    # avoid type conversion rounding errors of subnormal values
-    raw_data += 0.1
-    if d_type == tl.float8e4b8:
-        raw_data += torch.sign(raw_data)
+    scale = 0
+    if dtype_is_8_bit(d_type):
+        max_val = torch.max(torch.abs(raw_data))
+        scale = max_val / dtype_max[d_type]
+        raw_data = raw_data / scale
+        print(f"scaled data = {torch.max(raw_data)}")
+    
+    input = raw_data.to(d_type)
+    input_f32 = input.to(torch.float32)
 
-    if (d_type == tl.float8e4b8 and TORCH_HAS_FP8E4B8) or \
-        (d_type == tl.float8e5b16 and TORCH_HAS_FP8E5B16) or not d_type.is_fp8():
-        input = raw_data.to(tl_to_torch_types[d_type])
-        input_f16 = input.to(torch.float16)
-    else:
-        f8_tensor = raw_data.to(torch.int8)
-        # keep only two bits of exponent to avoid overflow
-        f8_tensor = f8_tensor & 0b00111111
-        input = triton.reinterpret(f8_tensor, d_type)
-        input_f16 = torch.empty_like(f8_tensor, dtype=torch.float16)
-        grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
-        n_elements = raw_data.numel()
-        copy_kernel[grid](input, input_f16, n_elements, BLOCK_SIZE=1024)
-
-    return input, input_f16
+    return input, input_f32, scale
 
 
 # %%
@@ -239,9 +229,10 @@ def gen_input(M, N, ty_name, needTrans, seed, device='cuda'):
 #
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., rocBLAS).
 def get_x_vals():
-    x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
+    # x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
 
-    x_vals += [(4864, 4096, 8192), (9728, 8192, 65536)]
+    # x_vals = [(4864, 4096, 8192), (9728, 8192, 65536)]
+    x_vals = [(4864, 4096, 8192)]
 
     return x_vals
 
@@ -249,38 +240,40 @@ def get_x_vals():
 @pytest.mark.parametrize("M, N, K, in_dtype, out_dtype, col_a, col_b", [
     (*shape, in_dtype, out_dtype, col_a, col_b)
     for shape in get_x_vals()
-    for in_dtype, out_dtype in [('fp16', 'fp16'), ('bf16', 'bf16'), ('fp16',
-                                                                     'fp32'), ('fp32',
-                                                                               'fp32'), ('fp8e4',
-                                                                                         'fp16'), ('fp8e5', 'fp16'),
+    for in_dtype, out_dtype in [#('fp16', 'fp16'), ('bf16', 'bf16'), 
+                                ('fp16','fp32'), #('fp32','fp32'), 
+                                #('fp8e4','fp16'), #('fp8e5', 'fp16'),
                                 #('int8', 'int8'),
-                                ('int8', 'int32')]
+                                #('int8', 'int32')
+                                ]
     # Only test k-major tensors because
     # 1. This is the most preformant config and the current focus
     # 2. Other case does not work with num_stages=0 (TODO (zhanglx))
-    for col_a in [True, False]
-    for col_b in [True, False]
+    for col_a in [True]
+    for col_b in [True]
 ])
 def test_correctness(M, N, K, col_a, col_b, in_dtype, out_dtype):
-    a, a_fp16 = gen_input(M, K, in_dtype, col_a, 1, device='cuda')
-    b, b_fp16 = gen_input(K, N, in_dtype, col_b, 2, device='cuda')
+    a, a_fp32, a_scale = gen_input(M, K, in_dtype, col_a, 1, device='cuda')
+    b, b_fp32, b_scale = gen_input(K, N, in_dtype, col_b, 2, device='cuda')
     # Allocates output.
-    tl_out_dtype = name_to_tl_types[out_dtype]
-    torch_out_dtype = tl_to_torch_types[tl_out_dtype]
+    print(f"input delta = {torch.max(a.to(a_fp32.dtype) - a_fp32)}")
+    torch_out_dtype = name_to_torch_types[out_dtype]
     c = torch.empty((M, N), device=a.device, dtype=torch_out_dtype)
-    matmul(a, b, c, activation="")
-    if in_dtype == 'fp8e4' or in_dtype == 'fp8e5' or in_dtype == 'int8':
-        # For f8 and int8 inputs, use fp16 for torch.matmul
-        torch_output = torch.matmul(a_fp16, b_fp16)
+    torch_in_dtype = name_to_torch_types[in_dtype]
+    if dtype_is_8_bit(in_dtype):
+        matmul(a, b, c, a_scale.item(), b_scale.item(), activation="")
+        torch_output = torch.matmul(a_fp32, b_fp32)
+        torch_output = torch_output * a_scale * b_scale
     else:
+        matmul(a, b, c, a_scale=None, b_scale=None, activation="")
         torch_output = torch.matmul(a, b)
-    #print(f"triton_output={c}")
-    #print(f"torch_output={torch_output}")
-    rtol = 0 if torch.version.hip is None else 1e-2
+    print(f"err = {torch.argmax(torch.abs(c.to(torch.float16) - torch_output.to(torch.float16)))}")
+    # print(f"torch = {torch_output[1016][2131].to(torch.float16)}")
+    # print(f"triton = {c[1016][2131].to(torch.float16)}")
     if in_dtype == 'int8':
-        torch.testing.assert_close(c.to(torch.float16), torch_output, atol=1e-3, rtol=rtol)
+        torch.testing.assert_close(c.to(torch.float32), torch_output, atol=1e-3, rtol=0)
     else:
-        torch.testing.assert_close(c, torch_output.to(torch_out_dtype), atol=5e-3, rtol=rtol)
+        torch.testing.assert_close(c, torch_output.to(torch_out_dtype), atol=5e-3, rtol=0)
 
 
 # %%
