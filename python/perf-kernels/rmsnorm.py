@@ -109,8 +109,10 @@ def test_rmsnorm(M, N):
     torch.manual_seed(0)
     x = torch.randn(M, N, device='cuda')
     y = torch.zeros_like(x, device='cuda')
+    n_rows, n_cols = x.shape
+    blk_size = triton.next_power_of_2(n_cols)
     g = torch.ones((1, N), device='cuda')
-    y_triton = triton_rmsnorm(x, y, g)
+    y_triton = triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size)
 
     y_torch = torch_rmsnorm(x, g)
 
