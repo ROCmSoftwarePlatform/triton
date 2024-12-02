@@ -2,6 +2,7 @@ import argparse
 import torch
 import sys
 import pytest
+from itertools import product
 
 import triton
 import triton.language as tl
@@ -25,18 +26,7 @@ def get_cuda_autotune_config():
 
 def get_hip_autotune_config():
     return [
-        triton.Config({'waves_per_eu': 0}, num_warps=4, num_stages=2),
-        triton.Config({'waves_per_eu': 0}, num_warps=8, num_stages=2),
-        triton.Config({'waves_per_eu': 0}, num_warps=16, num_stages=2),
-        triton.Config({'waves_per_eu': 1}, num_warps=4, num_stages=2),
-        triton.Config({'waves_per_eu': 1}, num_warps=8, num_stages=2),
-        triton.Config({'waves_per_eu': 1}, num_warps=16, num_stages=2),
-        triton.Config({'waves_per_eu': 2}, num_warps=4, num_stages=2),
-        triton.Config({'waves_per_eu': 2}, num_warps=8, num_stages=2),
-        triton.Config({'waves_per_eu': 2}, num_warps=16, num_stages=2),
-        triton.Config({'waves_per_eu': 4}, num_warps=4, num_stages=2),
-        triton.Config({'waves_per_eu': 4}, num_warps=8, num_stages=2),
-        triton.Config({'waves_per_eu': 4}, num_warps=16, num_stages=2),
+        triton.Config({'waves_per_eu': we}, num_warps=nw, num_stages=2) for (we, nw) in product([0, 1, 2, 4], [8, 16])
     ]
 
 
@@ -171,6 +161,9 @@ def run_benchmark(args):
             ms = triton.testing.do_bench(lambda: torch_rmsnorm(x, g))
         if provider == 'triton':
             ms = triton.testing.do_bench(lambda: triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size))
+            global verbose
+            if verbose:
+                print(f'SIZE: {N} Best tuning config: ({rms_kernel.best_config})')
         gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
         return gbps(ms)
 
@@ -194,12 +187,14 @@ def parse_args():
 
     parser.add_argument('-d', "--dtype", default="fp16")
     parser.add_argument('-nb', "--no_benchmark", default=False, type=bool)
+    parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
 
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    global verbose
     if args.no_benchmark:
         x = torch.randn(args.M_start, args.N_start, device='cuda')
         y = torch.zeros_like(x, device='cuda')
@@ -208,6 +203,7 @@ def main():
         g = torch.ones((1, args.N_start), device='cuda')
         triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size)
     else:
+        verbose = args.v
         run_benchmark(args)
 
 
