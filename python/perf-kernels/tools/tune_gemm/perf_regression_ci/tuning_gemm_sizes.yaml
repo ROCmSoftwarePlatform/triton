@@ -1,20 +1,17 @@
 # If new gemm sizes/configs are added please provide a fallback tuned config in fallback_configs.yaml.
 # The fallback configs will be used in case the weekly tuning has not been run
 #
-# M // BLOCK_M * N // BLOCK_N % 304 == 0
-## 1 workgroup / CU
 - {'M': 4864, 'N': 4096, 'K': 4096, 'rowMajorA': 'T', 'rowMajorB': 'N'}
 - {'M': 4864, 'N': 4096, 'K': 4160, 'rowMajorA': 'T', 'rowMajorB': 'N'}
 - {'M': 4864, 'N': 4096, 'K': 4224, 'rowMajorA': 'T', 'rowMajorB': 'N'}
 - {'M': 4864, 'N': 4096, 'K': 4288, 'rowMajorA': 'T', 'rowMajorB': 'N'}
-## 1 workgroup / CU masked loadK
+
 - {'M': 4864, 'N': 4096, 'K': 4097, 'rowMajorA': 'T', 'rowMajorB': 'N'}
 - {'M': 4864, 'N': 4096, 'K': 4098, 'rowMajorA': 'T', 'rowMajorB': 'N'}
 - {'M': 4864, 'N': 4096, 'K': 4100, 'rowMajorA': 'T', 'rowMajorB': 'N'}
 - {'M': 4864, 'N': 4096, 'K': 4104, 'rowMajorA': 'T', 'rowMajorB': 'N'}
 - {'M': 4864, 'N': 4096, 'K': 4112, 'rowMajorA': 'T', 'rowMajorB': 'N'}
 
-## 2 workgroups / CU
 - {'M': 4864, 'N': 8192, 'K': 4096, 'rowMajorA': 'T', 'rowMajorB': 'N'}
 - {'M': 4864, 'N': 8192, 'K': 4160, 'rowMajorA': 'T', 'rowMajorB': 'N'}
 - {'M': 4864, 'N': 8192, 'K': 8192, 'rowMajorA': 'T', 'rowMajorB': 'N'}
@@ -75,9 +72,10 @@
 - {'M': 2048, 'N': 5120, 'K': 512, 'rowMajorA': 'T', 'rowMajorB': 'N'}
 - {'M': 2048, 'N': 5120, 'K': 512, 'rowMajorA': 'T', 'rowMajorB': 'T'}
 
-- {'M': 20196, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'N'}
-- {'M': 20196, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'T'}
-- {'M': 171792, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'N'}
-- {'M': 171792, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'T'}
-- {'M': 173318, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'N'}
-- {'M': 173318, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+# Disabled configs because they cause a crash during tuning
+# - {'M': 20196, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+# - {'M': 20196, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+# - {'M': 171792, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+# - {'M': 171792, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+# - {'M': 173318, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+# - {'M': 173318, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'T'}
