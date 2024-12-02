@@ -203,8 +203,10 @@ def main():
     if args.no_benchmark:
         x = torch.randn(args.M_start, args.N_start, device='cuda')
         y = torch.zeros_like(x, device='cuda')
+        n_rows, n_cols = x.shape
+        blk_size = triton.next_power_of_2(n_cols)
         g = torch.ones((1, args.N_start), device='cuda')
-        triton_rmsnorm(x, y, g)
+        triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size)
     else:
         run_benchmark(args)
 
