@@ -147,10 +147,10 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
     builder.setInsertionPoint(user);
     Value newVal;
     if (auto subview = dyn_cast<triton::gpu::MemDescSubviewOp>(user)) {
-      triton::MemDescType oldType = subview.getType();
+      triton::gpu::MemDescType oldType = subview.getType();
       bool isMutable =
-          cast<triton::MemDescType>(val.getType()).getMutableMemory();
-      Type newDstType = triton::MemDescType::get(
+          cast<triton::gpu::MemDescType>(val.getType()).getMutableMemory();
+      Type newDstType = triton::gpu::MemDescType::get(
           oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
           oldType.getMemorySpace(), isMutable);
       newVal = builder.create<triton::gpu::MemDescSubviewOp>(
@@ -188,9 +188,8 @@ std::pair<int, int> mlir::triton::getStageCluster(Operation *op) {
   return std::make_pair(stage, clusterId);
 }
 
-void mlir::triton::setStageCluster(scf::ForOp &forOp, Operation *op, int stage,
-                                   int cluster) {
-  auto ctx = forOp.getContext();
+void mlir::triton::setStageCluster(Operation *op, int stage, int cluster) {
+  auto ctx = op->getContext();
   op->setAttr(mlir::triton::kLoopStageAttrName,
               IntegerAttr::get(IntegerType::get(ctx, 32), stage));
   op->setAttr(mlir::triton::kLoopClusterAttrName,
