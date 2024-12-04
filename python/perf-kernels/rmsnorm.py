@@ -129,9 +129,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
 def triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, epsilon=1e-6):
     BLOCK_SIZE = blk_size
     # Use blocked approach if BLOCK_SIZE > 65536
-    USE_BLOCKED = n_cols > 31743
-    if USE_BLOCKED:
-        BLOCK_SIZE = 65536
+    USE_BLOCKED = n_cols > BLOCK_SIZE
 
     NUM_PRGMS = n_rows
     grid = lambda meta: (NUM_PRGMS, )
@@ -166,7 +164,8 @@ def test_rmsnorm(M, N):
     x = torch.randn(M, N, device='cuda')
     y = torch.zeros_like(x, device='cuda')
     n_rows, n_cols = x.shape
-    blk_size = triton.next_power_of_2(n_cols)
+    MAX_FUSED_SIZE = 65536 // x.element_size()
+    blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
     g = torch.ones((1, N), device='cuda')
     y_triton = triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size)
 
@@ -219,7 +218,8 @@ def run_benchmark(args):
         x = torch.randn(M, N, device='cuda', dtype=dtype)
         y = torch.zeros_like(x, device='cuda')
         n_rows, n_cols = x.shape
-        blk_size = triton.next_power_of_2(n_cols)
+        MAX_FUSED_SIZE = 65536 // x.element_size()
+        blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
         stream = torch.cuda.Stream()
         torch.cuda.set_stream(stream)
         g = torch.ones((1, N), device='cuda')
@@ -265,7 +265,8 @@ def main():
         x = torch.randn(args.M_start, args.N_start, device='cuda')
         y = torch.zeros_like(x, device='cuda')
         n_rows, n_cols = x.shape
-        blk_size = triton.next_power_of_2(n_cols)
+        MAX_FUSED_SIZE = 65536 // x.element_size()
+        blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
         g = torch.ones((1, args.N_start), device='cuda')
         triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size)
     else:
