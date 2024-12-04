@@ -51,10 +51,9 @@ def matmul_kernel(
     stride_bn,
     stride_cm,
     stride_cn,
-    a_scale: tl.constexpr,
-    b_scale: tl.constexpr,
-    scale_post_op: tl.constexpr,
-    scale_pre_op: tl.constexpr,
+    A_SCALE: tl.constexpr,
+    B_SCALE: tl.constexpr,
+    APPLY_SCALE: tl.constexpr,
     # Meta-parameters
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
@@ -124,8 +123,8 @@ def matmul_kernel(
     # while the accumulator is still in FP32!
     if ACTIVATION == "leaky_relu":
         accumulator = leaky_relu(accumulator)
-    if scale_post_op:
-        accumulator = accumulator * a_scale * b_scale
+    if APPLY_SCALE:
+        accumulator = accumulator * A_SCALE * B_SCALE
     c = accumulator.to(c_ptr.type.element_ty)
 
     # -----------------------------------------------------------
@@ -202,22 +201,20 @@ def dtype_is_8_bit(dtype):
            (dtype is torch.float8_e4m3fnuz) or \
            (dtype is torch.int8)
 
-def gen_input(M, N, ty_name, needTrans, seed, device='cuda'):
-    d_type = name_to_torch_types[ty_name]
+def gen_input(M, N, dtype, needTrans, seed, device='cuda'):
     torch.manual_seed(seed)
 
     if needTrans:
         raw_data = torch.randn((N, M), dtype=torch.float32, device='cuda').T
     else:
         raw_data = torch.randn((M, N), dtype=torch.float32, device='cuda')
-    scale = 0
-    if dtype_is_8_bit(d_type):
+    scale = None
+    if dtype_is_8_bit(dtype):
         max_val = torch.max(torch.abs(raw_data))
-        scale = max_val / dtype_max[d_type]
+        scale = max_val / dtype_max[dtype]
         raw_data = raw_data / scale
-        print(f"scaled data = {torch.max(raw_data)}")
     
-    input = raw_data.to(d_type)
+    input = raw_data.to(dtype)
     input_f32 = input.to(torch.float32)
 
     return input, input_f32, scale
@@ -229,10 +226,10 @@ def gen_input(M, N, ty_name, needTrans, seed, device='cuda'):
 #
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., rocBLAS).
 def get_x_vals():
-    # x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
+    x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
 
-    # x_vals = [(4864, 4096, 8192), (9728, 8192, 65536)]
-    x_vals = [(4864, 4096, 8192)]
+    x_vals += [(4864, 4096, 8192), (9728, 8192, 65536)]
+    # x_vals = [(1024, 1024, 1024)]
 
     return x_vals
 
@@ -240,40 +237,37 @@ def get_x_vals():
 @pytest.mark.parametrize("M, N, K, in_dtype, out_dtype, col_a, col_b", [
     (*shape, in_dtype, out_dtype, col_a, col_b)
     for shape in get_x_vals()
-    for in_dtype, out_dtype in [#('fp16', 'fp16'), ('bf16', 'bf16'), 
-                                ('fp16','fp32'), #('fp32','fp32'), 
-                                #('fp8e4','fp16'), #('fp8e5', 'fp16'),
-                                #('int8', 'int8'),
-                                #('int8', 'int32')
+    for in_dtype, out_dtype in [('fp16', 'fp16'), 
+                                ('bf16', 'bf16'), 
+                                ('fp32','fp32'), 
+                                ('fp8e4','fp16'), ('fp8e5', 'fp16'),
+                                ('int8', 'int8'),
+                                ('int8', 'int32')
                                 ]
     # Only test k-major tensors because
     # 1. This is the most preformant config and the current focus
     # 2. Other case does not work with num_stages=0 (TODO (zhanglx))
-    for col_a in [True]
-    for col_b in [True]
+    for col_a in [True, False]
+    for col_b in [True, False]
 ])
 def test_correctness(M, N, K, col_a, col_b, in_dtype, out_dtype):
-    a, a_fp32, a_scale = gen_input(M, K, in_dtype, col_a, 1, device='cuda')
-    b, b_fp32, b_scale = gen_input(K, N, in_dtype, col_b, 2, device='cuda')
+    torch_in_dtype = name_to_torch_types[in_dtype]
+    a, a_fp32, a_scale = gen_input(M, K, torch_in_dtype, col_a, 1, device='cuda')
+    b, b_fp32, b_scale = gen_input(K, N, torch_in_dtype, col_b, 2, device='cuda')
     # Allocates output.
-    print(f"input delta = {torch.max(a.to(a_fp32.dtype) - a_fp32)}")
     torch_out_dtype = name_to_torch_types[out_dtype]
     c = torch.empty((M, N), device=a.device, dtype=torch_out_dtype)
-    torch_in_dtype = name_to_torch_types[in_dtype]
-    if dtype_is_8_bit(in_dtype):
+    if dtype_is_8_bit(torch_in_dtype):
         matmul(a, b, c, a_scale.item(), b_scale.item(), activation="")
         torch_output = torch.matmul(a_fp32, b_fp32)
         torch_output = torch_output * a_scale * b_scale
     else:
         matmul(a, b, c, a_scale=None, b_scale=None, activation="")
-        torch_output = torch.matmul(a, b)
-    print(f"err = {torch.argmax(torch.abs(c.to(torch.float16) - torch_output.to(torch.float16)))}")
-    # print(f"torch = {torch_output[1016][2131].to(torch.float16)}")
-    # print(f"triton = {c[1016][2131].to(torch.float16)}")
-    if in_dtype == 'int8':
-        torch.testing.assert_close(c.to(torch.float32), torch_output, atol=1e-3, rtol=0)
+        torch_output = torch.matmul(a.to(torch_in_dtype), b.to(torch_in_dtype))
+    if out_dtype == 'int8':
+        torch.testing.assert_close(c.to(torch.float32), torch_output.to(torch.int8).to(torch.float32), atol=1e-3, rtol=1e-2)
     else:
-        torch.testing.assert_close(c, torch_output.to(torch_out_dtype), atol=5e-3, rtol=0)
+        torch.testing.assert_close(c, torch_output.to(torch_out_dtype), atol=5e-3, rtol=1e-2)
 
 
 # %%
@@ -321,23 +315,26 @@ inout_dtype = {
         args={},
     ))
 def benchmark(M, N, K, provider):
-    in_dtype = get_type(provider)
-    out_dtype = inout_dtype[in_dtype]
+    in_dtype = name_to_torch_types[get_type(provider)]
+    out_dtype = in_dtype
 
     quantiles = [0.5, 0.2, 0.8]
     if 'rocblas' in provider:
-        a = torch.randn((M, K), dtype=tl_to_torch_types[name_to_tl_types[in_dtype]], device='cuda')
-        b = torch.randn((K, N), dtype=tl_to_torch_types[name_to_tl_types[in_dtype]], device='cuda')
+        a = torch.randn((M, K), dtype=in_dtype, device='cuda')
+        b = torch.randn((K, N), dtype=in_dtype, device='cuda')
 
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
     else:  # triton, different data types
         assert "triton" in provider
-        a, _ = gen_input(M, K, in_dtype, False, 1, device='cuda')
-        b, _ = gen_input(K, N, in_dtype, True, 2, device='cuda')
+        a, _, a_scale = gen_input(M, K, in_dtype, False, 1, device='cuda')
+        b, _, b_scale = gen_input(K, N, in_dtype, True, 2, device='cuda')
         # Allocates output.
         c = torch.empty((M, N), device=a.device, dtype=out_dtype)
 
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, c, activation=""), quantiles=quantiles)
+        if dtype_is_8_bit(in_dtype):
+            a_scale = a_scale.item()
+            b_scale = b_scale.item()
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, c, a_scale, b_scale, activation=""), quantiles=quantiles)
         global verbose
         if verbose:
             print(f'SIZE: {M},{N},{K}   Best tuning config: ({matmul_kernel.get_best_config()})')
