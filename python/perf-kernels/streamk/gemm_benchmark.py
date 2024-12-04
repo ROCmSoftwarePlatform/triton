@@ -7,9 +7,15 @@ import numpy as np
 from utils.solution_selection import tunedtree, tunedarr, solution_params
 from utils.gemm_wrapper import matmul
 
+if torch.cuda.is_available():
+    current_device_index = torch.cuda.current_device()
+    current_device = torch.cuda.get_device_properties(current_device_index)
+    sm = current_device.multi_processor_count
+else:
+    sm = 304
+
 
 def selection_test():
-    sm = 304
     #    max_m, max_n, max_k = 8193, 8193, 8193
     #    A_max = torch.randn(max_m, max_k, device="cuda", dtype=torch.float16)
     #    B_max = torch.randn(max_n, max_k, device="cuda", dtype=torch.float16)
@@ -35,9 +41,11 @@ def selection_test():
             for n in range(128, 8193, 250):
                 for k in range(128, 8193, 250):
                     print(m, n, k)
+                    # To do: need find a way to reduce allocation for A and B, the commented out code
+                    # has segfault issue atm.
                     # Point A and B to the appropriate slices of A_max and B_max
-                    #                    A.set_(A_max.storage(), 0, (m, k))
-                    #                    B.set_(B_max.storage(), 0, (n, k)).T
+                    # A.set_(A_max.storage(), 0, (m, k))
+                    # B.set_(B_max.storage(), 0, (n, k)).T
                     A = torch.randn(m, k, device="cuda", dtype=torch.float16)
                     B = torch.randn(n, k, device="cuda", dtype=torch.float16).T
 

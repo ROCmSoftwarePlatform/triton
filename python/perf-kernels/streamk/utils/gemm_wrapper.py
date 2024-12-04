@@ -20,10 +20,7 @@ class matmul(torch.autograd.Function):
     def _call(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, bias: torch.Tensor, P: torch.Tensor,
               locks: torch.Tensor, total_programs_streamk: int, BLK_M: int, BLK_N: int, BLK_K: int, gsize_m: int,
               two_tiles: bool, num_stages: int, num_warps: int, waves_per_eu: int, mfmaInstrSize: int, kpack: int):
-        #    def _call(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, P: torch.Tensor, locks: torch.Tensor, total_programs_streamk: int, BLK_M: int, BLK_N: int, BLK_K: int, gsize_m: int, two_tiles: bool, num_stages: int, num_warps: int, waves_per_eu: int,  mfmaInstrSize: int, kpack: int):
 
-        #        assert a.is_contiguous() and b.is_contiguous(), "non-contiguous inputs are not supported"
-        # checks constraints
         assert a.shape[1] == b.shape[0], "incompatible dimensions"
         M, K = a.shape
         _, N = b.shape
@@ -38,8 +35,8 @@ class matmul(torch.autograd.Function):
             # last wave may occupy less than total_programs_streamk SMs
             total_tiles_streamk = total_tiles % total_programs_streamk
             # for two-tile Stream-K + data-parallel from original paper
-            #            if two_tiles and total_tiles - total_tiles_streamk > total_programs_streamk:
-            #                total_tiles_streamk += total_programs_streamk
+            # if two_tiles and total_tiles - total_tiles_streamk > total_programs_streamk:
+            #     total_tiles_streamk += total_programs_streamk
             # remaining tiles are computed using classical blocking
             total_blocking_tiles = total_tiles - total_tiles_streamk
             total_iters_streamk = total_tiles_streamk * iters_per_tile
@@ -71,8 +68,9 @@ class matmul(torch.autograd.Function):
         grids = min(total_programs_streamk, total_tiles)
         total_programs_streamk = min(total_programs_streamk, total_tiles)
         stride_bias = bias.stride(0) if use_bias else 0
-        #  P=P*0.0
-        #  locks=locks*0
+        # MI300X settings, MI250 set num_xcds = 1
+        num_xcds = 8
+
         kk = streamk_gemm[(grids, )](
             a,
             b,
@@ -95,7 +93,8 @@ class matmul(torch.autograd.Function):
             BLOCK_SIZE_K=BLK_K,
             GROUP_SIZE_M=gsize_m,
             NUM_SMS=total_programs_streamk,
-            #            STREAMK_TILES=total_tiles_streamk,
+            STREAMK_TILES=total_tiles_streamk,
+            NUM_XCDS=num_xcds,
             BIAS=use_bias,
             EVEN_K=even_k,
             num_stages=num_stages,
@@ -107,16 +106,7 @@ class matmul(torch.autograd.Function):
         if matmul._debug:
             print(f"{kk.n_regs} registers used, {kk.n_spills} spills")
 
-    #     print(kk.asm['ttgir'])
-    #     print(kk.asm['amdgcn'])
-
         return c
-
-
-#    @staticmethod
-#    def forward(ctx, a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, P: torch.Tensor, locks: torch.Tensor, grid: int, BLK_M = 128, BLK_N = 128, BLK_K = 32, gsize_m = 1, two_tiles = True, num_stages = 3, num_warps = 4,  waves_per_eu = 2, mfmaInstrSize = 16, kpack = 1):
-#        matmul._call(a = a, b = b, c = c, P=P, locks=locks, total_programs_streamk = grid, BLK_M = BLK_M, BLK_N = BLK_N, BLK_K = BLK_K, gsize_m = gsize_m, two_tiles = two_tiles, num_warps = num_warps, num_stages = num_stages,  waves_per_eu = waves_per_eu, mfmaInstrSize = mfmaInstrSize, kpack = kpack)
-#        return c
 
     @staticmethod
     def forward(ctx, a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, bias: torch.Tensor, P: torch.Tensor,
