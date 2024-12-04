@@ -263,6 +263,9 @@ class constexpr:
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
+    def bit_length(self):
+        return constexpr(self.value.bit_length())
+
 
 CONSTEXPR_0 = constexpr(0)
 
