@@ -246,6 +246,18 @@ void Pingponger::getDotPingponged() {
   if (gLoadOps.size() != 2 || lLoadOps.size() != 2 || dotOps.size() != 1)
     return;
 
+
+  // Only apply the optimization when tile size is large enough
+  // 1. nonKDim >= 128
+  // 2. kDim >= 64
+  auto ldAOp = cast<triton::LoadOp>(gLoadOps[0]);
+  auto tileAShape = cast<RankedTensorType>(ldAOp.getType()).getShape();
+  auto ldBOp = cast<triton::LoadOp>(gLoadOps[1]);
+  auto tileBShape = cast<RankedTensorType>(ldBOp.getType()).getShape();
+  if (!(tileAShape[0] >= 128 && tileAShape[1] >= 64 && tileBShape[1] >= 128))
+    return;
+
+
   if (numWarps == 4) { // pingpong between warps from different blocks
     transformOneWarp(builder, loc);
   } else if (numWarps == 8) { // pingpong between warps from the same block
