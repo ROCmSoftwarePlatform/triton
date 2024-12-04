@@ -129,7 +129,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
 def triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, epsilon=1e-6):
     BLOCK_SIZE = blk_size
     # Use blocked approach if BLOCK_SIZE > 65536
-    USE_BLOCKED = BLOCK_SIZE > 31743
+    USE_BLOCKED = n_cols > 31743
     if USE_BLOCKED:
         BLOCK_SIZE = 65536
 
