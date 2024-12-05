@@ -51,15 +51,14 @@ def matmul_kernel(
     stride_bn,
     stride_cm,
     stride_cn,
-    A_SCALE: tl.constexpr,
-    B_SCALE: tl.constexpr,
-    APPLY_SCALE: tl.constexpr,
+    scale,
     # Meta-parameters
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     EVEN_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
+    APPLY_SCALE: tl.constexpr,
     ACTIVATION: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
@@ -124,7 +123,7 @@ def matmul_kernel(
     if ACTIVATION == "leaky_relu":
         accumulator = leaky_relu(accumulator)
     if APPLY_SCALE:
-        accumulator = accumulator * A_SCALE * B_SCALE
+        accumulator = accumulator * scale
     c = accumulator.to(c_ptr.type.element_ty)
 
     # -----------------------------------------------------------
@@ -157,8 +156,8 @@ def matmul(a, b, c, a_scale, b_scale, activation=""):
     K, N = b.shape
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-    scale_post_op = a_scale is not None and b_scale is not None
-    scale_pre_op = (a_scale is not None) ^ (b_scale is not None)
+    apply_scale = a_scale is not None and b_scale is not None
+    scale = a_scale * b_scale if apply_scale else None
     matmul_kernel[grid](
         a,
         b,
@@ -172,10 +171,8 @@ def matmul(a, b, c, a_scale, b_scale, activation=""):
         b.stride(1),
         c.stride(0),
         c.stride(1),
-        a_scale,
-        b_scale,
-        scale_post_op,
-        scale_pre_op,
+        scale,
+        APPLY_SCALE=apply_scale,
         ACTIVATION=activation,
     )
 
@@ -337,7 +334,7 @@ def benchmark(M, N, K, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, c, a_scale, b_scale, activation=""), quantiles=quantiles)
         global verbose
         if verbose:
-            print(f'SIZE: {M},{N},{K}   Best tuning config: ({matmul_kernel.get_best_config()})')
+            print(f'SIZE: {M},{N},{K}   Best tuning config: ({matmul_kernel.best_config()})')
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
