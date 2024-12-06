@@ -89,41 +89,40 @@ def apply_normalization(input_ptr, output_ptr, g_ptr, input_row_stride, output_r
 @triton.jit
 def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride, n_rows, n_cols, epsilon,
                BLOCK_SIZE: tl.constexpr, USE_BLOCKED: tl.constexpr, NUM_PRGMS: tl.constexpr):
-    row_start = tl.program_id(0)  # Each program instance handles one row
+    row_idx = tl.program_id(0)  # Each program instance handles one row
     col_offsets = tl.arange(0, BLOCK_SIZE)
 
     if USE_BLOCKED:
         # Blocked Approach: Accumulate sum of squares and normalize in chunks
-        sum_squares = accumulate_sum_squares(input_ptr, input_row_stride, n_cols, BLOCK_SIZE, row_start)
+        sum_squares = accumulate_sum_squares(input_ptr, input_row_stride, n_cols, BLOCK_SIZE, row_idx)
         mean_square = sum_squares / n_cols
         norm_factor = tl.rsqrt(mean_square + epsilon)
 
         # Apply normalization
         apply_normalization(input_ptr, output_ptr, g_ptr, input_row_stride, output_row_stride, n_cols, norm_factor,
-                            BLOCK_SIZE, row_start)
+                            BLOCK_SIZE, row_idx)
 
     else:
         mask = col_offsets < n_cols
         tl.assume(input_row_stride >= 0)
         tl.assume(output_row_stride >= 0)
-        for row_idx in tl.range(row_start, n_rows, NUM_PRGMS):
-            row_start_ptr = input_ptr + row_idx * input_row_stride
-            input_ptrs = row_start_ptr + col_offsets
-            input_ptrs = tl.multiple_of(input_ptrs, (16, ))
-            row = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg")
-            g = tl.load(g_ptr + col_offsets, mask=mask, other=0.0)
-            row_norm = row * row
-            row_norm = tl.sum(row_norm, axis=-1)
-            row_norm = row_norm / n_cols
-            row_norm = row_norm + epsilon
-            row_norm = tl.rsqrt(row_norm)
-            rms_norm = row * row_norm
-            rms_norm = rms_norm * g
+        row_start_ptr = input_ptr + row_idx * input_row_stride
+        input_ptrs = row_start_ptr + col_offsets
+        input_ptrs = tl.multiple_of(input_ptrs, (16, ))
+        row = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg")
+        g = tl.load(g_ptr + col_offsets, mask=mask, other=0.0)
+        row_norm = row * row
+        row_norm = tl.sum(row_norm, axis=-1)
+        row_norm = row_norm / n_cols
+        row_norm = row_norm + epsilon
+        row_norm = tl.rsqrt(row_norm)
+        rms_norm = row * row_norm
+        rms_norm = rms_norm * g
 
-            output_row_start_ptr = output_ptr + row_idx * output_row_stride
-            output_ptrs = output_row_start_ptr + col_offsets
-            output_ptrs = tl.multiple_of(output_ptrs, (16, ))
-            tl.store(output_ptrs, rms_norm, mask=mask)
+        output_row_start_ptr = output_ptr + row_idx * output_row_stride
+        output_ptrs = output_row_start_ptr + col_offsets
+        output_ptrs = tl.multiple_of(output_ptrs, (16, ))
+        tl.store(output_ptrs, rms_norm, mask=mask)
 
 
 def triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, epsilon=1e-6):
