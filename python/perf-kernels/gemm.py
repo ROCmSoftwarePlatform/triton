@@ -14,6 +14,12 @@ import re
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
             num_warps=8, num_stages=2),
         triton.Config(
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'waves_per_eu': 2, 'kpack': 2, 'matrix_instr_nonkdim': 16},
+            num_warps=8, num_stages=2),
+        triton.Config(
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0, 'kpack': 1},
+            num_warps=8, num_stages=2),
+        triton.Config(
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
             num_warps=8, num_stages=2),
         triton.Config(
@@ -225,8 +231,7 @@ def gen_input(M, N, dtype, needTrans, seed, device='cuda'):
 def get_x_vals():
     x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
 
-    x_vals += [(4864, 4096, 8192), (9728, 8192, 65536)]
-    # x_vals = [(1024, 1024, 1024)]
+    x_vals += [(4864, 4096, 8192), (9728, 8192, 65536), (4864, 8192, 4160)]
 
     return x_vals
 
