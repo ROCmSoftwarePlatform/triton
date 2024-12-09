@@ -16,12 +16,9 @@ def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
-if torch.cuda.is_available():
-    current_device_index = torch.cuda.current_device()
-    current_device = torch.cuda.get_device_properties(current_device_index)
-    NUM_SMS = current_device.multi_processor_count
-else:
-    NUM_SMS = 304
+current_device_index = torch.cuda.current_device()
+current_device = torch.cuda.get_device_properties(current_device_index)
+NUM_SMS = current_device.multi_processor_count
 
 
 def get_cuda_autotune_config():
@@ -34,8 +31,7 @@ def get_cuda_autotune_config():
 
 def get_hip_autotune_config():
     return [
-        # triton.Config({'waves_per_eu': we}, num_warps=nw, num_stages=2) for (we, nw) in product([0, 1, 2, 4], [8, 16])
-        triton.Config({'waves_per_eu': we}, num_warps=nw, num_stages=2) for (we, nw) in product([0], [8])
+        triton.Config({'waves_per_eu': we}, num_warps=nw, num_stages=2) for (we, nw) in product([0, 1, 2, 4], [8, 16])
     ]
 
 
@@ -92,7 +88,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
                 g_ptrs = g_ptr + cols
                 output_ptrs = row_output_ptr + cols
                 input_ptrs = tl.multiple_of(input_ptrs, (16, ))
-                output_ptrs = tl.multiple_of(output_ptrs, (16, ))
+                #                output_ptrs = tl.multiple_of(output_ptrs, (16, ))
                 x = tl.load(input_ptrs)
                 g = tl.load(g_ptrs)
                 rms_norm = x * norm_factor * g
