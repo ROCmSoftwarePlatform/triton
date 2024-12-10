@@ -46,7 +46,7 @@ def get_autotune_config():
 @triton.jit
 def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride, n_rows, n_cols, epsilon,
                BLOCK_SIZE: tl.constexpr, USE_BLOCKED: tl.constexpr, NUM_PRGMS: tl.constexpr):
-    row_start = tl.program_id(0)  # Each program instance handles one row
+    row_start = tl.program_id(0)
     col_offsets = tl.arange(0, BLOCK_SIZE)
     tl.assume(input_row_stride >= 0)
     tl.assume(output_row_stride >= 0)
@@ -59,7 +59,8 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
             row_output_ptr = output_ptr + row_idx * output_row_stride
 
             # Accumulate sum of squares
-            n_cols_blks = n_cols // BLOCK_SIZE
+            #  n_cols_blks = n_cols // BLOCK_SIZE
+            n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
             sum_squares = tl.zeros([1], dtype=tl.float32)
             for blk_idx in range(n_cols_blks):
                 cols = blk_idx * BLOCK_SIZE + col_offsets
@@ -88,7 +89,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
                 g_ptrs = g_ptr + cols
                 output_ptrs = row_output_ptr + cols
                 input_ptrs = tl.multiple_of(input_ptrs, (16, ))
-                #                output_ptrs = tl.multiple_of(output_ptrs, (16, ))
+                output_ptrs = tl.multiple_of(output_ptrs, (16, ))
                 x = tl.load(input_ptrs)
                 g = tl.load(g_ptrs)
                 rms_norm = x * norm_factor * g
