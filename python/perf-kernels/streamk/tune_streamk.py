@@ -15,6 +15,7 @@ from streamk_kernel import streamk_gemm
 from datetime import datetime
 import multiprocessing
 import pandas as pd
+import itertools
 
 from utils.file_generator import (
     gen_configStr,
@@ -63,22 +64,17 @@ def get_full_tuning_space():
     kpack_range = [1, 2]
     num_sms_range = [304]
 
-    for block_m in block_mn_range:
-        for block_n in block_mn_range:
-            for block_k in block_k_range:
-                for num_warps in num_warps_range:
-                    for group_m in group_m_range:
-                        for num_sms in num_sms_range:
-                            for num_stages in num_stage_range:
-                                for waves_per_eu in waves_per_eu_range:
-                                    for matrix_instr_nonkdim in matrix_instr_nonkdim_range:
-                                        for kpack in kpack_range:
-                                            configs.append({
-                                                'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K':
-                                                block_k, 'GROUP_SIZE_M': group_m, 'NUM_SMS': num_sms, 'num_warps':
-                                                num_warps, 'num_stages': num_stages, 'waves_per_eu': waves_per_eu,
-                                                'matrix_instr_nonkdim': matrix_instr_nonkdim, 'kpack': kpack
-                                            })
+    space = itertools.product(block_mn_range, block_mn_range, block_k_range, num_warps_range, group_m_range,
+                              num_sms_range, num_stage_range, waves_per_eu_range, matrix_instr_nonkdim_range,
+                              kpack_range)
+
+    for instance in space:
+        block_m, block_n, block_k, num_warps, group_m, num_sms, num_stages, waves_per_eu, matrix_instr_nonkdim, kpack = instance
+        configs.append({
+            'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': block_k, 'GROUP_SIZE_M': group_m,
+            'NUM_SMS': num_sms, 'num_warps': num_warps, 'num_stages': num_stages, 'waves_per_eu': waves_per_eu,
+            'matrix_instr_nonkdim': matrix_instr_nonkdim, 'kpack': kpack
+        })
 
     return configs
 
@@ -139,8 +135,14 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
             continue
         # out of shared memory resource
         # TODO (zhanglx): This does not consider the LDS usage in the epilogue
-        LDS = BLOCK_SIZE_K * BLOCK_SIZE_M * elemBytes_a + BLOCK_SIZE_K * BLOCK_SIZE_N * elemBytes_b
-        LDS = LDS if not num_stages else LDS * (num_stages - 1)
+        LDSA = BLOCK_SIZE_K * BLOCK_SIZE_M * elemBytes_a
+        LDSB = BLOCK_SIZE_K * BLOCK_SIZE_N * elemBytes_b
+        if num_stages <= 1:
+            # No pipeline, buffer A and buffer B can re-use each other
+            LDS = max(LDSA, LDSB)
+        else:
+            # Pipeline, we need (num_stages - 1) buffers for both A and B at the same time
+            LDS = (LDSA + LDSB) * (num_stages - 1)
         if LDS > 65536:
             continue
         # Skip small block sizes and num_warps for large gemm
@@ -387,14 +389,17 @@ def matmul(a, b, c, bias, P, locks, num_sms, block_m, block_n, block_k, group_m,
 
     stride_bias = bias.stride(0) if use_bias else 0
     EVEN_K = K % block_k == 0
+    m_tiles = triton.cdiv(M, block_m)
+    n_tiles = triton.cdiv(N, block_n)
+    streamk_tiles = m_tiles * n_tiles % num_sms
     # change num_xcds = 1 if using MI250
     num_xcds = 8
     streamk_gemm[
         grid,
     ](a, b, c, bias, P, locks, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1),
       stride_bias=stride_bias, BLOCK_SIZE_M=block_m, BLOCK_SIZE_N=block_n, BLOCK_SIZE_K=block_k, GROUP_SIZE_M=group_m,
-      NUM_SMS=num_sms, NUM_XCDS=num_xcds, num_warps=num_warps, num_stages=num_stages, waves_per_eu=waves_per_eu,
-      matrix_instr_nonkdim=mfmaInstrSize, kpack=kpack, BIAS=use_bias, EVEN_K=EVEN_K)
+      NUM_SMS=num_sms, STREAMK_TILES=streamk_tiles, NUM_XCDS=num_xcds, num_warps=num_warps, num_stages=num_stages,
+      waves_per_eu=waves_per_eu, matrix_instr_nonkdim=mfmaInstrSize, kpack=kpack, BIAS=use_bias, EVEN_K=EVEN_K)
     return c
 
 
