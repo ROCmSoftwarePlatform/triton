@@ -13,11 +13,15 @@ import re
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
             num_warps=8, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'waves_per_eu': 2, 'kpack': 2, 'matrix_instr_nonkdim': 16},
-            num_warps=8, num_stages=2),
+            {
+                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'waves_per_eu': 2,
+                'kpack': 2, 'matrix_instr_nonkdim': 16
+            }, num_warps=8, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0, 'kpack': 1},
-            num_warps=8, num_stages=2),
+            {
+                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0,
+                'kpack': 1
+            }, num_warps=8, num_stages=2),
         triton.Config(
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
             num_warps=8, num_stages=2),
@@ -159,6 +163,7 @@ def matmul(a, b, c, a_scale, b_scale, activation=""):
         ACTIVATION=activation,
     )
 
+
 name_to_torch_types = {
     'int8': torch.int8,
     'int32': torch.int32,
@@ -175,10 +180,12 @@ dtype_max = {
     torch.int8: 127,
 }
 
+
 def dtype_is_8_bit(dtype):
     return (dtype is torch.float8_e5m2fnuz) or \
            (dtype is torch.float8_e4m3fnuz) or \
            (dtype is torch.int8)
+
 
 def gen_input(M, N, dtype, needTrans, seed, device='cuda'):
     torch.manual_seed(seed)
@@ -192,7 +199,7 @@ def gen_input(M, N, dtype, needTrans, seed, device='cuda'):
         max_val = torch.max(torch.abs(raw_data))
         scale = max_val / dtype_max[dtype]
         raw_data = raw_data / scale
-    
+
     input = raw_data.to(dtype)
     input_f32 = input.to(torch.float32)
 
@@ -208,21 +215,15 @@ def get_x_vals():
 
 
 # Unit tests
-@pytest.mark.parametrize("M, N, K, in_dtype, out_dtype, col_a, col_b", [
-    (*shape, in_dtype, out_dtype, col_a, col_b)
-    for shape in get_x_vals()
-    for in_dtype, out_dtype in [('fp16', 'fp16'),
-                                ('bf16', 'bf16'),
-                                ('fp32','fp32'),
-                                ('fp8e4','fp16'),
-                                ('fp8e5', 'fp16'),
-                                ('int8', 'int8'),
-                                ('int8', 'int32')
-                                ]
-    # Defines if a matrix is row or column major.
-    for col_a in [True, False]
-    for col_b in [True, False]
-])
+@pytest.mark.parametrize(
+    "M, N, K, in_dtype, out_dtype, col_a, col_b",
+    [(*shape, in_dtype, out_dtype, col_a, col_b)
+     for shape in get_x_vals()
+     for in_dtype, out_dtype in [('fp16', 'fp16'), ('bf16', 'bf16'), ('fp32', 'fp32'), (
+         'fp8e4', 'fp16'), ('fp8e5', 'fp16'), ('int8', 'int8'), ('int8', 'int32')]
+     # Defines if a matrix is row or column major.
+     for col_a in [True, False]
+     for col_b in [True, False]])
 def test_correctness(M, N, K, col_a, col_b, in_dtype, out_dtype):
     torch_in_dtype = name_to_torch_types[in_dtype]
     a, a_fp32, a_scale = gen_input(M, K, torch_in_dtype, col_a, 1, device='cuda')
@@ -241,7 +242,8 @@ def test_correctness(M, N, K, col_a, col_b, in_dtype, out_dtype):
         matmul(a, b, c, a_scale=None, b_scale=None, activation="")
         torch_output = torch.matmul(a.to(torch_in_dtype), b.to(torch_in_dtype))
     if out_dtype == 'int8':
-        torch.testing.assert_close(c.to(torch.float32), torch_output.to(torch.int8).to(torch.float32), atol=1e-3, rtol=1e-2)
+        torch.testing.assert_close(c.to(torch.float32),
+                                   torch_output.to(torch.int8).to(torch.float32), atol=1e-3, rtol=1e-2)
     else:
         torch.testing.assert_close(c, torch_output.to(torch_out_dtype), atol=5e-3, rtol=1e-2)
 
@@ -287,7 +289,8 @@ def benchmark(M, N, K, provider):
         if dtype_is_8_bit(in_dtype):
             a_scale = a_scale.item()
             b_scale = b_scale.item()
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, c, a_scale, b_scale, activation=""), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, c, a_scale, b_scale, activation=""),
+                                                     quantiles=quantiles)
         global verbose
         if verbose:
             print(f'SIZE: {M},{N},{K}   Best tuning config: ({matmul_kernel.best_config()})')
