@@ -1,7 +1,7 @@
 import triton
 import torch
 import triton.language as tl
-
+import pytest
 def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
@@ -120,6 +120,7 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor,
                             expert_ids: torch.Tensor, top_k: int) -> None:
     grid = lambda META: (triton.cdiv(sorted_token_ids.shape[0], META[
         'BLOCK_SIZE_M']) * triton.cdiv(b.shape[1], META['BLOCK_SIZE_N']), )
+
     M, K = a.shape
     K, N = b.shape
     moe_gemm_kernel[grid](
@@ -136,3 +137,60 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor,
         M, N, K
     )
 
+
+def input_helper(M: int, K: int, N: int, top_k: int, E: int):
+    """
+    Parameters:
+    - M: number of tokens after sorting and routing (this may be total tokens * top_k if each token is duplicated for each expert)
+    - K: input feature dimension
+    - N: output feature dimension
+    - top_k: number of experts per token
+    - E: number of experts
+
+    Returns:
+    (a, b, c, topk_weights, sorted_token_ids, expert_ids, top_k)
+    ready to be passed into moe_gemm.
+    """
+
+    a = torch.randn((M, K), dtype=torch.float32, device='cuda')
+    b = torch.randn((K, N), dtype=torch.float32, device='cuda')
+    c = torch.zeros((M, N), dtype=torch.float32, device='cuda')
+
+    topk_weights = torch.rand((M,), dtype=torch.float32, device='cuda')
+
+    sorted_token_ids = torch.randperm(M, device='cuda', dtype=torch.int64)
+
+    expert_ids = torch.randint(low=0, high=E, size=(M,), device='cuda', dtype=torch.int64)
+
+    return a, b, c, topk_weights, sorted_token_ids, expert_ids, top_k
+
+@pytest.mark.parametrize(
+    "M,K,N,top_k,E",
+    [
+        (128, 64, 256, 2, 4),
+        (64, 32, 128, 1, 2),
+        (256, 128, 512, 2, 8)
+    ]
+)
+def test_correctness(M: int, K: int, N: int, top_k: int, E: int):
+    a, b, c, topk_weights, sorted_token_ids, expert_ids, top_k = input_helper(M, K, N, top_k, E)
+
+    tri_out = moe_gemm(a, b, c, topk_weights, sorted_token_ids, expert_ids, top_k)
+
+    K_original = a.shape[1]
+    assert b.shape[0] == E * K_original, "b's first dimension must be E*K_original."
+
+    ref_out = torch.empty_like(c)
+    for i in range(M):
+        A_index = (sorted_token_ids[i].item() // top_k)
+        expert_id = expert_ids[i].item()
+        A_i = a[A_index]
+        B_e = b[expert_id*K_original:(expert_id+1)*K_original, :]
+
+        # Compute the expert-transformed token
+        # (K_original,) @ (K_original, N) → (N,)
+        out_i = (A_i @ B_e) * topk_weights[i]
+        ref_out[i, :] = out_i
+
+    # Validate correctness
+    torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=1e-2)
