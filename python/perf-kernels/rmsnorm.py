@@ -59,7 +59,6 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
             row_output_ptr = output_ptr + row_idx * output_row_stride
 
             # Accumulate sum of squares
-            #  n_cols_blks = n_cols // BLOCK_SIZE
             n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
             sum_squares = tl.zeros([1], dtype=tl.float32)
             for blk_idx in range(n_cols_blks):
@@ -70,8 +69,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
                 sum_squares += tl.sum(x * x, axis=0)
 
             # Handle remainder
-            remainder_start = n_cols_blks * BLOCK_SIZE
-            cols = remainder_start + col_offsets
+            cols = n_cols_blks * BLOCK_SIZE + col_offsets
             mask = cols < n_cols
             input_ptrs = row_input_ptr + cols
             input_ptrs = tl.multiple_of(input_ptrs, (16, ))
@@ -86,24 +84,23 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
             for blk_idx in range(n_cols_blks):
                 cols = blk_idx * BLOCK_SIZE + col_offsets
                 input_ptrs = row_input_ptr + cols
-                g_ptrs = g_ptr + cols
-                output_ptrs = row_output_ptr + cols
                 input_ptrs = tl.multiple_of(input_ptrs, (16, ))
-                output_ptrs = tl.multiple_of(output_ptrs, (16, ))
                 x = tl.load(input_ptrs)
+                g_ptrs = g_ptr + cols
                 g = tl.load(g_ptrs)
                 rms_norm = x * norm_factor * g
+                output_ptrs = row_output_ptr + cols
                 tl.store(output_ptrs, rms_norm)
 
             # Handle remainder
-            cols = remainder_start + col_offsets
+            cols = n_cols_blks * BLOCK_SIZE + col_offsets
             mask = cols < n_cols
             input_ptrs = row_input_ptr + cols
-            g_ptrs = g_ptr + cols
-            output_ptrs = row_output_ptr + cols
             x = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg")
+            g_ptrs = g_ptr + cols
             g = tl.load(g_ptrs, mask=mask, other=0.0)
             rms_norm = x * norm_factor * g
+            output_ptrs = row_output_ptr + cols
             tl.store(output_ptrs, rms_norm, mask=mask)
 
     else:
