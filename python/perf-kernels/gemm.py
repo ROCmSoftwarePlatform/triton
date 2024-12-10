@@ -143,8 +143,6 @@ def matmul(a, b, c, a_scale, b_scale, activation=""):
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
     apply_scale = a_scale is not None and b_scale is not None
     scale = a_scale * b_scale if apply_scale else None
-    if a.dtype == torch.int8 or a.dtype == torch.int32:
-        scale = int(scale)
     matmul_kernel[grid](
         a,
         b,
