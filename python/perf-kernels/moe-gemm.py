@@ -17,54 +17,27 @@ def is_rdna():
     return is_hip() and triton.runtime.driver.active.get_current_target().arch in ("gfx1030", "gfx1100", "gfx1101",
                                                                                    "gfx1102", "gfx1200", "gfx1201")
 
-
-def get_cdna_autotune_configs():
-    return [
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
-        # Fall-back config.
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
-    ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
-
-
-def get_rdna_autotune_configs():
-    return [
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=2),
-        # Fall-back config.
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=2),
-    ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
-
-
-def get_autotune_configs():
-    if is_rdna():
-        return get_rdna_autotune_configs()
-    elif is_cdna():
-        return get_cdna_autotune_configs()
-    else:
-        raise ValueError("Unknown Device Type")
-
-
+@triton.autotune(
+    configs=[
+        triton.Config(
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
+            num_warps=8, num_stages=2),
+        triton.Config(
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
+            num_warps=8, num_stages=2),
+        triton.Config(
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2},
+            num_warps=4, num_stages=2),
+        triton.Config(
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
+            num_warps=8, num_stages=2),
+        triton.Config(
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 32, 'waves_per_eu': 2},
+            num_warps=4, num_stages=2),
+    ],
+    key=['M', 'N', 'K'],
+    use_cuda_graph=True,
+)
 @triton.jit
 def moe_gemm_kernel(
     A,
@@ -73,8 +46,8 @@ def moe_gemm_kernel(
     stride_am,
     stride_ak,
     stride_be,
-    stride_bk,
     stride_bn,
+    stride_bk,
     stride_cm,
     stride_cn,
     top_k: tl.constexpr,
@@ -159,16 +132,17 @@ def moe_gemm_kernel(
     c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
     tl.store(out_ptrs, accumulator, mask=c_mask)
 
-
+# TODO pad M?
+# TODO why grid is 2-dim
 def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, topk_weights: torch.Tensor,
              sorted_token_ids: torch.Tensor, expert_ids: torch.Tensor, top_k: int) -> None:
     M = sorted_token_ids.shape[0]
     _, N, K = b.shape
-    grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(
-        N, META['BLOCK_SIZE_N']), )
+    grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
 
-    moe_gemm_kernel[grid](a, b, c, a.stride(0), a.stride(0), b.stride(0), b.stride(0), c.stride(0), c.stride(0), top_k,
+    moe_gemm_kernel[grid](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2), c.stride(0), c.stride(1), top_k,
                           topk_weights, sorted_token_ids, expert_ids, M, N, K)
+    return c
 
 
 def input_helper(M: int, K: int, N: int, top_k: int, E: int):
@@ -204,18 +178,16 @@ def test_correctness(M: int, K: int, N: int, top_k: int, E: int):
 
     tri_out = moe_gemm(a, b, c, topk_weights, sorted_token_ids, expert_ids, top_k)
 
-    K_original = a.shape[1]
-
     ref_out = torch.empty_like(c)
     for i in range(M):
         A_index = (sorted_token_ids[i].item() // top_k)
         expert_id = expert_ids[i].item()
-        A_i = a[A_index]
-        B_e = b[expert_id, :, :]
+        A_i = a[A_index] # (K,)
+        B_e = b[expert_id, :, :] # (N, K)
 
         # Compute the expert-transformed token
         # (K_original,) @ (K_original, N) → (N,)
-        out_i = (A_i @ B_e) * topk_weights[i]
+        out_i = (B_e @ A_i) * topk_weights[i]
         ref_out[i, :] = out_i
 
     # Validate correctness
