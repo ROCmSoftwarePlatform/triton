@@ -100,7 +100,7 @@ class StreamPipeliner {
 public:
   StreamPipeliner(scf::ForOp _forOp, int _numStages, bool _prefetch)
       : forOp(_forOp), prefetch(_prefetch), numStages(_numStages + prefetch),
-        schedule(numStages),
+        mustGuardEpilogue(false), schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
     options.supportDynamicLoops = true;
     options.peelEpilogue = true;
@@ -154,6 +154,8 @@ private:
   // User settings
   bool prefetch;
   int numStages;
+
+  bool mustGuardEpilogue;
 
   // Scheduling clusters
   tt::CoarseSchedule schedule;
@@ -627,12 +629,17 @@ void StreamPipeliner::scheduleRemainingToLastStage() {
   // Assign the rest of the ops to the last stage.
   // Take care of the ordering of the ops - uses cannot be scheduled to the
   // cluster before the definition.
+  int count = 0;
   DenseMap<Operation *, tt::CoarseSchedule::Cluster> opToCluster;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (schedule.count(&op) == 0) {
       auto schedType = isa<gpu::BarrierOp>(op) ? SCHED_COMPUTE : SCHED_TAIL;
       opToCluster[&op] = config[schedType].cluster;
+      count++;
     }
+  }
+  if (count != 0) {
+    mustGuardEpilogue = true;
   }
   SmallVector<Operation *> queue;
   for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp)) {
@@ -779,6 +786,7 @@ LogicalResult StreamPipeliner::preprocessLoopAndBuildSchedule() {
       schedule.createFinalSchedule(forOp);
 
   // Fill out the pipeline options.
+  options.guardEpilogue = mustGuardEpilogue;
   options.getScheduleFn =
       [coarseSchedule](scf::ForOp,
                        std::vector<std::pair<Operation *, unsigned>> &s) {
@@ -799,6 +807,8 @@ LogicalResult StreamPipeliner::pipelineLoop() {
     return failure();
   LDBG("Loop before sending to expander:\n" << *forOp);
 
+  auto *block = forOp->getBlock();
+  Location loc = forOp.getLoc();
   IRRewriter rewriter(forOp->getContext());
   rewriter.setInsertionPoint(forOp);
   return tt::pipelineForLoop(rewriter, forOp, options);
