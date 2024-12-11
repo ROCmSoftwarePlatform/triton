@@ -16,9 +16,11 @@ def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
-current_device_index = torch.cuda.current_device()
-current_device = torch.cuda.get_device_properties(current_device_index)
-NUM_SMS = current_device.multi_processor_count
+def get_num_sms():
+    current_device_index = torch.cuda.current_device()
+    current_device = torch.cuda.get_device_properties(current_device_index)
+    num_sms = current_device.multi_processor_count
+    return num_sms
 
 
 def get_cuda_autotune_config():
@@ -31,7 +33,9 @@ def get_cuda_autotune_config():
 
 def get_hip_autotune_config():
     return [
-        triton.Config({'waves_per_eu': we}, num_warps=nw, num_stages=2) for (we, nw) in product([0, 1, 2, 4], [8, 16])
+        triton.Config({'waves_per_eu': we}, num_warps=nw, num_stages=2)
+        for (we, nw) in product([0, 1, 2, 4], [4, 8, 16])
+        # triton.Config({'waves_per_eu': 0}, num_warps=8, num_stages=2),
     ]
 
 
@@ -54,12 +58,12 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
     if USE_BLOCKED:
 
         # Persistent loop for rows
+        n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
         for row_idx in tl.range(row_start, n_rows, NUM_PRGMS):
             row_input_ptr = input_ptr + row_idx * input_row_stride
             row_output_ptr = output_ptr + row_idx * output_row_stride
 
             # Accumulate sum of squares
-            n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
             sum_squares = tl.zeros([1], dtype=tl.float32)
             for blk_idx in range(n_cols_blks):
                 cols = blk_idx * BLOCK_SIZE + col_offsets
@@ -125,13 +129,9 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
             tl.store(output_ptrs, rms_norm, mask=mask)
 
 
-def triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, epsilon=1e-6):
-    BLOCK_SIZE = blk_size
-    # Use blocked approach if BLOCK_SIZE larger than 65536 // x.element_size()
-    USE_BLOCKED = n_cols > BLOCK_SIZE
-    NUM_PRGMS = min(n_rows, NUM_SMS)
+def triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS, epsilon=1e-6):
     grid = lambda meta: (NUM_PRGMS, )
-    rms_kernel[grid](y, x, g, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, BLOCK_SIZE, USE_BLOCKED, NUM_PRGMS)
+    rms_kernel[grid](y, x, g, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, blk_size, USE_BLOCKED, NUM_PRGMS)
 
     return y
 
@@ -164,8 +164,10 @@ def test_rmsnorm(M, N):
     n_rows, n_cols = x.shape
     MAX_FUSED_SIZE = 65536 // x.element_size()
     blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
+    USE_BLOCKED = n_cols > blk_size
+    NUM_PRGMS = min(n_rows, get_num_sms())
     g = torch.ones((1, N), device='cuda')
-    y_triton = triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size)
+    y_triton = triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS)
 
     y_torch = torch_rmsnorm(x, g)
 
@@ -218,13 +220,16 @@ def run_benchmark(args):
         n_rows, n_cols = x.shape
         MAX_FUSED_SIZE = 65536 // x.element_size()
         blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
+        USE_BLOCKED = n_cols > blk_size
+        NUM_PRGMS = min(n_rows, get_num_sms())
         stream = torch.cuda.Stream()
         torch.cuda.set_stream(stream)
         g = torch.ones((1, N), device='cuda')
         if provider == 'torch':
             ms = triton.testing.do_bench(lambda: torch_rmsnorm(x, g))
         if provider == 'triton':
-            ms = triton.testing.do_bench(lambda: triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size))
+            ms = triton.testing.do_bench(
+                lambda: triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS))
             global verbose
             if verbose:
                 print(f'SIZE: {N} Best tuning config: ({rms_kernel.best_config})')
@@ -265,8 +270,10 @@ def main():
         n_rows, n_cols = x.shape
         MAX_FUSED_SIZE = 65536 // x.element_size()
         blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
+        USE_BLOCKED = n_cols > blk_size
+        NUM_PRGMS = min(n_rows, get_num_sms())
         g = torch.ones((1, args.N_start), device='cuda')
-        triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size)
+        triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS)
     else:
         verbose = args.v
         run_benchmark(args)
