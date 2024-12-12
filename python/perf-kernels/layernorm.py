@@ -7,47 +7,18 @@ import triton
 import triton.language as tl
 
 
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
-
-
-def get_cuda_autotune_config():
-    return [
-        triton.Config({}, num_warps=4, num_stages=1),
-        triton.Config({}, num_warps=8, num_stages=1),
-        triton.Config({}, num_warps=16, num_stages=1),
-    ]
-
-
-def get_hip_autotune_config():
-    return [
-        triton.Config({'waves_per_eu': 1}, num_warps=4, num_stages=1),
-        triton.Config({'waves_per_eu': 1}, num_warps=8, num_stages=1),
-        triton.Config({'waves_per_eu': 1}, num_warps=16, num_stages=1),
-        triton.Config({'waves_per_eu': 2}, num_warps=4, num_stages=1),
-        triton.Config({'waves_per_eu': 2}, num_warps=8, num_stages=1),
-        triton.Config({'waves_per_eu': 2}, num_warps=16, num_stages=1),
-        triton.Config({'waves_per_eu': 4}, num_warps=4, num_stages=1),
-        triton.Config({'waves_per_eu': 4}, num_warps=8, num_stages=1),
-        triton.Config({'waves_per_eu': 4}, num_warps=16, num_stages=1),
-    ]
-
-
 def get_autotune_config():
-    if is_cuda():
-        return get_cuda_autotune_config()
-    else:
-        return get_hip_autotune_config()
-
+    return [
+        triton.Config({'waves_per_eu': 1}, num_warps=1),
+        triton.Config({'waves_per_eu': 2}, num_warps=1),
+        triton.Config({'waves_per_eu': 2}, num_warps=4),
+        triton.Config({'waves_per_eu': 2}, num_warps=8),
+    ]
 
 @triton.autotune(configs=get_autotune_config(), key=['n_rows', 'n_cols'], use_cuda_graph=True)
 @triton.jit
-def layernorm_kernel(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride, n_rows, n_cols, eps,
-                     BLOCK_SIZE: tl.constexpr):
+def layernorm_kernel_blocked_impl(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride, n_rows, n_cols, eps,
+                     BLOCK_SIZE: tl.constexpr, num_stages: tl.constexpr):
 
     #program id
     row = tl.program_id(0)
@@ -112,17 +83,38 @@ def layernorm_kernel(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride, n_r
     tl.store(y_ptr_start + col_offsets, y_block, mask=mask)
 
 
-def layernorm(x, w, b, eps=1e-5):
+@triton.autotune(configs=get_autotune_config(), key=['n_rows', 'n_cols'], use_cuda_graph=True)
+@triton.jit
+def layernorm_kernel_impl(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride, n_rows, eps, N_COLS: tl.constexpr):
+
+    #program id
+    row = tl.program_id(0)
+    x_ptr_start = x_ptr + (row * x_row_stride)
+    y_ptr_start = y_ptr + (row * y_row_stride)
+    col_offs = tl.arange(0, N_COLS)
+
+    #calculate mean
+    x_ptrs = x_ptr_start + col_offs
+    x_block = tl.load(x_ptrs, cache_modifier=".cg").to(tl.float32)  #Unmasked loads
+    mean = tl.sum(x_block, axis=0) / N_COLS
+    _x_block = x_block - mean
+    var = tl.sum(_x_block * _x_block, axis=0) / N_COLS
+    rstd = tl.rsqrt(var + eps)
+
+    w_block = tl.load(w_ptr + col_offs)
+    b_block = tl.load(b_ptr + col_offs)
+    y_block = (x_block - mean) * rstd
+    y_block = y_block * w_block + b_block
+    tl.store(y_ptr_start + col_offs, y_block)
+
+def layernorm(x, y, w, b, eps=1e-5):
     n_rows, n_cols = x.shape
 
-    MAX_FUSED_SIZE = 65536 // x.element_size()
-    BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
-    y = torch.empty_like(x)
-
-    num_programs = n_rows
-
-    grid = lambda meta: (num_programs, )
-    layernorm_kernel[grid](x, y, w, b, x.stride(0), y.stride(0), n_rows, n_cols, eps, BLOCK_SIZE)
+    grid = lambda meta: (n_rows, )
+    if n_cols <= 8192:
+        layernorm_kernel_impl[grid](x, y, w, b, x.stride(0), y.stride(0), n_rows, eps, N_COLS=n_cols)
+    else:
+        layernorm_kernel_blocked_impl[grid](x, y, w, b, x.stride(0), y.stride(0), n_rows, n_cols, eps, BLOCK_SIZE=4096, num_stages=2)
 
     return y
 
@@ -138,10 +130,11 @@ def run_layernorm(M, N):
     print(f"Running Layernorm on shape ({M},{N})")
     torch.manual_seed(0)
     x = torch.randn(M, N, device='cuda')
+    y = torch.empty_like(x)
     w_shape = (N, )
     w = torch.rand(w_shape, device='cuda')
     b = torch.rand(w_shape, device='cuda')
-    y_triton = layernorm(x, w, b)
+    y_triton = layernorm(x, y, w, b)
 
     return y_triton
 
@@ -152,10 +145,11 @@ def run_layernorm(M, N):
 def test_layernorm(M, N, eps=1e-5):
     torch.manual_seed(0)
     x = torch.randn(M, N, device='cuda')
+    y = torch.empty_like(x)
     w_shape = (N, )
     w = torch.rand(w_shape, device='cuda')
     b = torch.rand(w_shape, device='cuda')
-    y_triton = layernorm(x, w, b, eps)
+    y_triton = layernorm(x, y, w, b, eps)
     y_torch = torch.nn.functional.layer_norm(x, w_shape, w, b, eps)
 
     assert torch.allclose(y_triton, y_torch, rtol=1e-05, atol=1e-06)
@@ -167,7 +161,10 @@ arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': tor
 
 def run_benchmark(args):
     config = []
-    if (args.M_benchmark):
+    sweep_m = args.M_step != 0
+    sweep_n = args.N_step != 0
+    x_vals_list = []
+    if (sweep_m):
         val = args.M_start
         x_vals_list = []
         while val <= args.M_end:
@@ -177,12 +174,17 @@ def run_benchmark(args):
         plot_name = str("layernorm-performance_" + args.dtype + "_N" + str(args.N_start) + "_M" + str(args.M_start) +
                         "-" + str(args.M_end) + "-" + str(args.M_step))
         x_names = ['M']
-    else:
+    elif (sweep_n):
         x_vals_list = [i for i in range(args.N_start, args.N_end, args.N_step)]
         mn_args = {'M': args.M_start}
         plot_name = str("layernorm-performance_" + args.dtype + "_M" + str(args.M_start) + "_N" + str(args.N_start) +
                         "-" + str(args.N_end) + "-" + str(args.N_step))
         x_names = ['N']
+    else:
+        x_vals_list.append(args.N_start)
+        x_names = ['N']
+        mn_args={'M': args.M_start}
+        plot_name = str("layernorm-performance" + "_M" + str(args.M_start) + "_N" + str(args.N_start))
     dtype = arg_to_torch_dtype[args.dtype]
 
     print(plot_name)
@@ -205,6 +207,7 @@ def run_benchmark(args):
     @triton.testing.perf_report(config)
     def benchmark(M, N, provider):
         x = torch.randn(M, N, device='cuda', dtype=dtype)
+        y = torch.empty_like(x)
         w_shape = (N, )
         w = torch.rand(w_shape, device='cuda', dtype=dtype)
         b = torch.rand(w_shape, device='cuda', dtype=dtype)
@@ -213,7 +216,7 @@ def run_benchmark(args):
         if provider == 'torch':
             ms = triton.testing.do_bench(lambda: torch_layernorm(x, w, b))
         if provider == 'triton':
-            ms = triton.testing.do_bench(lambda: layernorm(x, w, b))
+            ms = triton.testing.do_bench(lambda: layernorm(x, y, w, b))
         gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
         return gbps(ms)
 
@@ -227,13 +230,12 @@ def parse_args():
     )
 
     parser.add_argument('-M', "--M_start", default="1", type=int)
-    parser.add_argument('-Ms', "--M_step", default="2", type=int)
-    parser.add_argument('-Me', "--M_end", default="512", type=int)
-    parser.add_argument('-Mb', "--M_benchmark", default=False, type=bool)
+    parser.add_argument('-Ms', "--M_step", default="0", type=int)
+    parser.add_argument('-Me', "--M_end", default="0", type=int)
 
-    parser.add_argument('-N', "--N_start", default="1024", type=int)
-    parser.add_argument('-Ns', "--N_step", default="2048", type=int)
-    parser.add_argument('-Ne', "--N_end", default="65536", type=int)
+    parser.add_argument('-N', "--N_start", default="65536", type=int)
+    parser.add_argument('-Ns', "--N_step", default="0", type=int)
+    parser.add_argument('-Ne', "--N_end", default="0", type=int)
 
     parser.add_argument('-d', "--dtype", default="fp16")
     parser.add_argument('-nb', "--no_benchmark", default=False, type=bool)
