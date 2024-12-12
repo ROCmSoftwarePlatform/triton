@@ -92,8 +92,11 @@ def layernorm_kernel_blocked_impl(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_ro
 @triton.jit
 def layernorm_kernel_impl(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride, n_rows, eps, N_COLS: tl.constexpr):
 
+    tl.assume(x_row_stride > 0)
+    tl.assume(y_row_stride > 0)
     #program id
     row = tl.program_id(0)
+    tl.assume(row > 0)
     x_ptr_start = x_ptr + (row * x_row_stride)
     y_ptr_start = y_ptr + (row * y_row_stride)
     col_offs = tl.arange(0, N_COLS)
