@@ -9,12 +9,12 @@ import triton.language as tl
 
 def get_autotune_config():
     return [
-        # # triton.Config({'waves_per_eu': 1}, num_warps=1),
-        # # triton.Config({'waves_per_eu': 2}, num_warps=1),
-        # # triton.Config({'waves_per_eu': 2}, num_warps=2),
-        # # triton.Config({'waves_per_eu': 1}, num_warps=4),
-        # triton.Config({'waves_per_eu': 2}, num_warps=4),
-        # # triton.Config({'waves_per_eu': 2}, num_warps=8),
+        triton.Config({'waves_per_eu': 1}, num_warps=1),
+        triton.Config({'waves_per_eu': 2}, num_warps=1),
+        triton.Config({'waves_per_eu': 2}, num_warps=2),
+        triton.Config({'waves_per_eu': 1}, num_warps=4),
+        triton.Config({'waves_per_eu': 2}, num_warps=4),
+        triton.Config({'waves_per_eu': 2}, num_warps=8),
     ]
 
 @triton.autotune(configs=get_autotune_config(), key=['n_rows', 'n_cols'], use_cuda_graph=True)
