@@ -264,7 +264,7 @@ def run_bash_command(commandstring):
     return proc.stdout.splitlines()
 
 
-def parse_args():
+def parse_args(print_help=False):
     parser = argparse.ArgumentParser(
         prog="tune a specific gemm size",
         allow_abbrev=False,
@@ -275,12 +275,16 @@ def parse_args():
     parser.add_argument("-k", type=int, default=0)
     parser.add_argument("-dtype", type=str, default='fp16', help="Input data type, default is fp16")
     parser.add_argument("--specify_type", action='store_true', default=False, help="Whether user specify data type, default false")
-    parser.add_argument("--specify_size", action='store_true', default=False, help="Whether user specify input matrix size, default false")
+    parser.add_argument("--specify_size", action='store_true', default=True, help="Whether user specify input matrix size, default false")
     parser.add_argument("--compare", action='store_true', default=False, help="Whether check result correctness")
     parser.add_argument("--gemm_size_file", type=str, default="", help='yaml file to indicate matrix size')
     parser.add_argument("--rocprof", action='store_true', default=False, help='Use rocprof to measure kernel time, default uses do_bench()!')
     parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
     args = parser.parse_args()
+
+    if print_help:
+        parser.print_help()
+        return None
 
     return args
 
@@ -301,15 +305,7 @@ def main():
     verbose = args.v
 
     mnks = []
-    if args.specify_size:
-        M = args.m
-        N = args.n
-        K = args.k
-        if M == 0 or N == 0 or K == 0:
-            print(f"Input matrix size: (M {M}, N {N}, K {K}) contains dim size 0!")
-            sys.exit(1)
-        mnks = [(M, N, K)]
-    elif args.gemm_size_file:
+    if args.gemm_size_file:
         matrix_size_file = args.gemm_size_file
         if matrix_size_file == "" or not os.path.isfile(matrix_size_file):
             print(f"Matrix size file: {matrix_size_file} does not exist!")
@@ -323,8 +319,17 @@ def main():
             N = sizes['N']
             K = sizes['K']
             mnks.append((M, N, K))
+    elif args.specify_size:
+        M = args.m
+        N = args.n
+        K = args.k
+        if M == 0 or N == 0 or K == 0:
+            print(f"Input matrix size: (M {M}, N {N}, K {K}) contains dim size 0!")
+            sys.exit(1)
+        mnks = [(M, N, K)]
     else:
-
+        parse_args(True)
+        sys.exit(1)
 
     for (m, n, k) in mnks:
         min_ms = run_speed(m, n, k, dtype, use_rocprof, 'triton')
