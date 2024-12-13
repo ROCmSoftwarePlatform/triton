@@ -115,7 +115,7 @@ private:
   LogicalResult scheduleLoads(DenseSet<Operation *> &rootUsers);
   void scheduleDependencies();
   void scheduleDistanceOneDependencies();
-  void scheduleRemainingToLastStage();
+  LogicalResult scheduleRemainingToLastStage();
 
   LogicalResult preprocessLoopAndBuildSchedule();
 
@@ -621,7 +621,7 @@ void StreamPipeliner::scheduleDistanceOneDependencies() {
   }
 }
 
-void StreamPipeliner::scheduleRemainingToLastStage() {
+LogicalResult StreamPipeliner::scheduleRemainingToLastStage() {
   int lastStage = numStages - 1;
   // Assign the rest of the ops to the last stage.
   // Take care of the ordering of the ops - uses cannot be scheduled to the
@@ -656,6 +656,7 @@ void StreamPipeliner::scheduleRemainingToLastStage() {
   for (auto [op, cluster] : opToCluster) {
     schedule.insert(op, lastStage, cluster);
   }
+  return success();
 }
 
 // Create an allocation that can hold distance number of loadOp shapes.
@@ -764,7 +765,8 @@ LogicalResult StreamPipeliner::preprocessLoopAndBuildSchedule() {
     schedule.dump();
   });
 
-  scheduleRemainingToLastStage();
+  if (failed(scheduleRemainingToLastStage()))
+    return failure();
   LLVM_DEBUG({
     LDBG("Final coarse schedule:");
     schedule.dump();
