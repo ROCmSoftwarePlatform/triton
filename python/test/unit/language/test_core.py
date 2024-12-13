@@ -28,6 +28,7 @@ from triton._internal_testing import (
     is_cuda,
     is_interpreter,
     is_hip,
+    is_hip_mi200,
     get_arch,
     torch_float8_dtypes,
     torch_dtypes,
@@ -137,6 +138,17 @@ class MmaLayout:
 
     def __str__(self):
         return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}}}>"
+
+
+class DotOperandLayout:
+
+    def __init__(self, parent, op_idx, k_width):
+        self.parent = parent
+        self.op_idx = op_idx
+        self.k_width = k_width
+
+    def __str__(self):
+        return f"#{GPU_DIALECT}.dot_op<{{parent={self.parent}, opIdx={self.op_idx}, kWidth={self.k_width}}}>"
 
 
 class BlockedLayout:
@@ -1720,6 +1732,7 @@ def test_store_constant(dtype_str, num_ctas, device):
 
     assert torch.all(output == ref)
 
+<<<<<<< HEAD
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
@@ -3326,25 +3339,30 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
 
 
-@pytest.mark.parametrize("M, N, K, col_a, col_b, type_a, type_b, num_warps",
-                         [(M, N, K, col_a, col_b, type_a, type_b, 4)
+@pytest.mark.parametrize("M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack",
+                         [(M, N, K, col_a, col_b, type_a, type_b, 4, mma, kpack)
                           for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
                           for col_a, col_b in itertools.product([True, False], repeat=2)
                           for type_a in ["e2m1", "e4m3", "e5m2"]
-                          for type_b in ["e4m3", "e5m2"]])
-def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
-    if not is_cuda():
-        pytest.skip("scaled_dot only supported on CUDA")
-    else:
+                          for type_b in ["e4m3", "e5m2", "bf16"]
+                          for mma in ([32, 16] if is_hip() else [16])
+                          for kpack in ([1, 2] if is_hip() else [1])])
+def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack, device):
+    if is_cuda():
         cc = torch.cuda.get_device_capability()
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
+    if is_hip():
+        if (type_a not in ["e2m1", "e5m2"]) or (type_b not in ["e2m1", "e5m2", "bf16"]):
+            pytest.skip(f"scaled_dot({type_a}, {type_b}) not yet implemented for HIP")
+        if mma == 16 and K == 64:
+            pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
     @triton.jit
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, out,
                          BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, type_a: tl.constexpr,
                          type_b: tl.constexpr):
-        tl.static_assert(type_b == "e4m3" or type_b == "e5m2", "type_b must be fp8")
+        tl.static_assert((type_b == "e4m3" or type_b == "e5m2") or type_b == "bf16", "type_b must be fp8 or bf16")
         IS_FP8: tl.constexpr = type_a == "e4m3" or type_a == "e5m2"
         DIV_FACTOR: tl.constexpr = 1 if IS_FP8 else 2
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR
@@ -3435,7 +3453,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
 
     def dot_scale_ref(x, scale, y, type_x, type_y):
         e_bits, m_bits = {"e2m1": (2, 1), "e4m3": (4, 3), "e5m2": (5, 2)}[type_x]
-        type_fp8_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}[type_y]
+        type_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2, "bf16": torch.bfloat16}[type_y]
 
         comp_dtype = torch.bfloat16
 
@@ -3448,7 +3466,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
         mxfp_to_bf16_kernel[grid](x, scale, x_upcast, scale.numel(), e_bits, m_bits, BLOCK_SIZE, num_warps=num_warps)
         assert x_upcast.isfinite().all()
 
-        y_upcast = y.view(type_fp8_y).to(comp_dtype)
+        y_upcast = y.view(type_y).to(comp_dtype)
 
         class AccumulateInFp32:
 
@@ -3460,28 +3478,30 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
                 torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = self.prev_value
 
         with AccumulateInFp32():
-            return torch.matmul(x_upcast.to(comp_dtype), y_upcast.to(comp_dtype))
+            return torch.matmul(x_upcast, y_upcast)
 
     torch.manual_seed(0)
 
-    def create_uint8(shape, col_major=False, max_val=255):
+    def make_arg(shape, ty, col_major=False, max_val=255):
         if col_major:
             shape = shape[:-2] + (shape[-1], shape[-2])
-        ret = torch.randint(max_val + 1, shape, dtype=torch.uint8, device=device)
+        if ty == "bf16":
+            ret = torch.randn(shape, dtype=torch.bfloat16, device=device)
+            # Clamp to avoid relative error issues
+            ret.clamp_(-2**15, 2**15 - 1)
+        else:
+            ret = torch.randint(max_val + 1, shape, dtype=torch.uint8, device=device)
         if col_major:
             ret = ret.mT
         return ret
 
     DIV_FACTOR = 2 if type_a == "e2m1" else 1
-    x = create_uint8((M, K // DIV_FACTOR), col_major=col_a)
-    y = create_uint8((K, N), col_major=col_b)
+    x = make_arg((M, K // DIV_FACTOR), type_a, col_major=col_a)
+    y = make_arg((K, N), type_b, col_major=col_b)
 
     # sample scales that don't overflow as otherwise it's implementation defined (underflowing is alright)
-    # We substract a reasonably high number (64) so that the sum of all the mxfp elements does not overflow
-    m_bytes = int(type_a[1])
-    bias_type_a = 1 << (m_bytes - 1) - 1
-    max_exponent_type_a = (1 << m_bytes) - 1 - bias_type_a
-    scale_x = create_uint8((M, K // 32), max_val=255 - max_exponent_type_a - 64)
+    # Max scale= 2**15
+    scale_x = make_arg((M, K // 32), "e8m0", max_val=127 + 15)
 
     def make_finite(x, dtype):
         # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and
@@ -3497,22 +3517,31 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
     x = make_finite(x, type_a)
     y = make_finite(y, type_b)
 
+    kernel_kwargs = {"num_warps": num_warps}
+    if is_hip():
+        kernel_kwargs["kpack"] = kpack
+        kernel_kwargs["matrix_instr_nonkdim"] = mma
     z = x.new_empty((M, N), dtype=torch.bfloat16)
-    pgm = dot_scale_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), z, M, N, K, type_a, type_b,
-                                  num_warps=num_warps)
+    pgm = dot_scale_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), z, M, N, K, type_a, type_b, **kernel_kwargs)
 
     z_ref = dot_scale_ref(x, scale_x, y, type_a, type_b)
 
-    # generous rtol as we are sampling the whole range of floats
-    torch.testing.assert_close(z, z_ref, atol=1e-5, rtol=1e-2)
+    # Bigger tolerance for AMD MI200 devices.
+    # MI200 devices use reduced precision fp16 and bf16 and flush input and output denormal values
+    # to zero. Detailed info is at:
+    # https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+    atol = 2e-4 if is_hip_mi200() else 1e-5
+    rtol = 2e-2 if is_hip_mi200() else 1e-2
+    torch.testing.assert_close(z, z_ref, atol=atol, rtol=rtol)
 
     # make sure ld/st are vectorized
-    ptx = pgm.asm['ptx']
-    if (max(M, N) * K) // (num_warps * 32) >= 4:
-        assert 'ld.global.v4' in ptx
-    if M * N // (num_warps * 32) >= 4:
-        assert 'st.global.v4' in ptx
-    assert re.search(r'mma.sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.bf16.bf16', ptx)
+    if is_cuda():
+        ptx = pgm.asm['ptx']
+        if (max(M, N) * K) // (num_warps * 32) >= 4:
+            assert 'ld.global.v4' in ptx
+        if M * N // (num_warps * 32) >= 4:
+            assert 'st.global.v4' in ptx
+        assert re.search(r'mma.sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.bf16.bf16', ptx)
 
 
 @pytest.mark.interpreter
@@ -5173,6 +5202,14 @@ layouts = [
     BlockedLayout([4, 1], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([4, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [2, 2], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [2, 2], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=8),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=8),
+    DotOperandLayout(parent=MmaLayout([2, 0], [2, 2], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=8),
+    DotOperandLayout(parent=MmaLayout([2, 0], [2, 2], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=8),
     MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]),
 ]
 
@@ -5210,6 +5247,10 @@ def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     if str(src_layout) == str(dst_layout):
         pytest.skip()
+    if (isinstance(src_layout, DotOperandLayout)
+            and isinstance(interm_layout, SharedLayout)) or (isinstance(dst_layout, DotOperandLayout)
+                                                             and isinstance(interm_layout, SharedLayout)):
+        pytest.skip("DotOperandLayout <-> SharedLayout conversion is not completely supported")
     if is_hip():
         try:
             scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))

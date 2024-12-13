@@ -361,8 +361,8 @@ compared to 1*64 when the hasLeadingOffset is false.
           return get(context, vec, perPhase, maxPhase, order, CTALayout);
         }
 
-        // ---- begin Ampere ----
-        if (mmaEnc.isAmpere()) {
+        // ---- begin Ampere & Hopper ----
+        if (mmaEnc.isAmpere() || mmaEnc.isHopper()) {
           int perPhase = 128 / (shapePerCTA[order[0]] * 4 / dotOpEnc.getKWidth());
           perPhase = std::max<int>(perPhase, 1);
           std::vector<size_t> matShape = {8, 8, 4 * dotOpEnc.getKWidth()};
@@ -395,13 +395,6 @@ compared to 1*64 when the hasLeadingOffset is false.
           }
 
           llvm_unreachable("invalid operand index");
-        }
-
-        // ---- begin version 3 ----
-        if (mmaEnc.isHopper()) {
-          llvm_unreachable("SharedEncodingAttr builder when the MMAEncodingAttr"
-                           " is Hopper has not been implemented yet");
-          return $_get(context, 1, 1, 1, order, CTALayout, true);
         }
 
         // ---- not implemented ----
@@ -481,9 +474,16 @@ layout = [0  4  8  12]
          [3  7  11 15]
 
 For the Threads Per Warp and Values Per Thread level, the linear id distribution is variant for each sub-class encoding.
+
+If the layout does not completely cover the tensor, we tile it until we cover the entire tensor.
+We call each individual tile "rep".
   }];
 
   let methods = [
+    InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getRepOrder">,
+
     // Interface for the meta information about the multiple thread hierarchy.
     InterfaceMethod<"Get the shape of the CTAs per CGA.",
                     "SmallVector<unsigned>",
@@ -570,6 +570,7 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
   }];
 
   code extraDistributedDeclaration  = extraBaseClassDeclaration # [{
+    SmallVector<unsigned> getRepOrder() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
@@ -921,6 +922,7 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
+    SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
 
     SmallVector<unsigned> getContigPerThread() {
       auto rank = getWarpsPerCTA().size();
@@ -1029,6 +1031,7 @@ Row |       warp 0                warp 2
     SmallVector<int64_t> getElemsPerInstrForOperands() const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
                                           Type elemType, int kWidth, int opIdx) const;
+    SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     static SmallVector<unsigned> getMNKDimPerInstr();
 
     SmallVector<unsigned> getContigPerThread() {
@@ -1206,8 +1209,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     bool isAmpere() const;
     bool isHopper() const;
 
-    unsigned getElemsPerThreadOfOperand(int opIdx, ArrayRef<int64_t> shape) const;
-
     // Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
     std::tuple<bool, bool, bool, bool, int> decodeVoltaLayoutStates() const;
 
@@ -1224,8 +1225,9 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     SmallVector<int> getMMAv1Rep(int opIdx) const;
     SmallVector<int> getMMAv1ShapePerWarp(int opIdx) const;
     int getMMAv1Vec(int opIdx) const;
-    SmallVector<int64_t> getMMAv2RepForOperand(ArrayRef<int64_t> shape,
-                                               int bitwidth, int kWidth, int opIdx) const;
+    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> shape,
+                                          int bitwidth, int opIdx) const;
+    SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
 
     bool supportReduction() const {
       if (isAmpere() || isHopper()) {
@@ -1319,6 +1321,27 @@ The parent field is the layout of d.
 kWidth defines number of consecutive elements stored by one thread along k dimension.
 Some layouts do not use this parameter, either because they have a fixed number of
 elements along the K dim, or they use all elements of the tensor along the K dim.
+
+# WGMMA Notes
+We require kWidth to be provided for Hopper because the dtype at loading might be
+different from the dtype at WGMMA, due to casting. The kWidth is determined by the
+dtype at WGMMA.
+
+The encoded tensor consists of operand A for possibly multiple wgmma instructions.
+For each wgmma, each warp in a warp group feeds a single "warp matrix"
+Each warp matrix consists of 2x2 "quads".
+Each thread holds several elements in each quad. Right before a wgmma,
+the sum of bitwidth of
+the elements in each quad should add up to 32.
+
+These values are stored unrolled in `elements`.
+The ordering of dimensions is as follows by convention:
+batch (only 1 batch for Hopper currently)
+matM (m-index of the "warp matrix")
+matK (k-index of the "warp matrix")
+quadK (k-index of the "quad" in the core matrix)
+quadM (m-index of the "quad" in the core matrix)
+vecIdx (index of the element in the quad; this is always along the k-dim)
   }];
 
   let parameters = (
@@ -1329,16 +1352,16 @@ elements along the K dim, or they use all elements of the tensor along the K dim
   );
 
   let builders = [
-        // Specially for MMAV1(Volta)
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent,
                      "Type":$eltTy), [{
       NvidiaMmaEncodingAttr parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
-      if (!parentAttr || !parentAttr.isAmpere())
-        return $_get(context, opIdx, parent, 0);
+      if (!parentAttr || (!parentAttr.isAmpere() && !parentAttr.isHopper()))
+        return $_get(context, opIdx, parent, 0); // For MMAV1
+      // For MMAV2 and V3
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
-      unsigned MMAv2kWidth = 32 / bitwidth;
-      return $_get(context, opIdx, parent, MMAv2kWidth);
+      unsigned kWidth = 32 / bitwidth;
+      return $_get(context, opIdx, parent, kWidth);
     }]>
   ];
 

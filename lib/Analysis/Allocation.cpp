@@ -80,6 +80,9 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
   auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
   auto dstShapePerCTATile = getShapePerCTATile(dstLayout, dstTy.getShape());
 
+  assert(srcTy.getRank() == dstTy.getRank() &&
+         "src and dst must have the same rank");
+
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> repShape(rank);
   for (unsigned d = 0; d < rank; ++d) {
@@ -115,12 +118,8 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
 
   assert(!isMfmaToDotShortcut(srcTy, dstTy));
 
-  // FIXME This is NOT entirely correct
-  // This should be getElemOrder, but we don't have such a method
-  // TODO Implement getElemOrder and make sure it's consistent with
-  // getContigPerThread
-  auto inOrd = gpu::getThreadOrder(srcLayout);
-  auto outOrd = gpu::getThreadOrder(dstLayout);
+  auto inOrd = gpu::getOrder(srcLayout);
+  auto outOrd = gpu::getOrder(dstLayout);
   scratchConfig.order = outOrd;
 
   unsigned srcContigPerThread =
