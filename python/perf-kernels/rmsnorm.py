@@ -33,9 +33,7 @@ def get_cuda_autotune_config():
 
 def get_hip_autotune_config():
     return [
-        triton.Config({'waves_per_eu': we}, num_warps=nw, num_stages=2)
-        for (we, nw) in product([0, 1, 2, 4], [4, 8, 16])
-        # triton.Config({'waves_per_eu': 0}, num_warps=8, num_stages=2),
+        triton.Config({'waves_per_eu': we}, num_warps=nw) for (we, nw) in product([0, 1, 2, 4], [4, 8, 16])
     ]
 
 
@@ -58,14 +56,14 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
     if USE_BLOCKED:
 
         # Persistent loop for rows
-        n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
-        for row_idx in tl.range(row_start, n_rows, NUM_PRGMS):
+        for row_idx in tl.range(row_start, n_rows, NUM_PRGMS, num_stages=1):
             row_input_ptr = input_ptr + row_idx * input_row_stride
             row_output_ptr = output_ptr + row_idx * output_row_stride
 
             # Accumulate sum of squares
             sum_squares = tl.zeros([1], dtype=tl.float32)
-            for blk_idx in range(n_cols_blks):
+            n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
+            for blk_idx in range(n_cols_blks, num_stages=1):
                 cols = blk_idx * BLOCK_SIZE + col_offsets
                 input_ptrs = row_input_ptr + cols
                 input_ptrs = tl.multiple_of(input_ptrs, (16, ))
@@ -85,7 +83,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
             norm_factor = tl.rsqrt(mean_square + epsilon)
 
             # Normalize and write output
-            for blk_idx in range(n_cols_blks):
+            for blk_idx in range(n_cols_blks, num_stages=1):
                 cols = blk_idx * BLOCK_SIZE + col_offsets
                 input_ptrs = row_input_ptr + cols
                 input_ptrs = tl.multiple_of(input_ptrs, (16, ))
@@ -109,7 +107,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
 
     else:
         mask = col_offsets < n_cols
-        for row_idx in tl.range(row_start, n_rows, NUM_PRGMS):
+        for row_idx in tl.range(row_start, n_rows, NUM_PRGMS, num_stages=1):
             row_start_ptr = input_ptr + row_idx * input_row_stride
             input_ptrs = row_start_ptr + col_offsets
             input_ptrs = tl.multiple_of(input_ptrs, (16, ))
@@ -233,6 +231,7 @@ def run_benchmark(args):
             global verbose
             if verbose:
                 print(f'SIZE: {N} Best tuning config: ({rms_kernel.best_config})')
+                print(f'time: {ms}')
         gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
         return gbps(ms)
 
