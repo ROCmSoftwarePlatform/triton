@@ -39,6 +39,8 @@ def parse_args():
         "--config_str", type=str, default="", help=
         "can take from tune_gemm.py script output, looks like M16_N8_K128_BM64_BN64_BK64_GM1_SK2_nW2_nS0_EU0_kP2_mfma16"
     )
+    parser.add_argument("--sched", type=str, default='none',
+                        help="instruction scheduling variant (default: 'none')")
     args = parser.parse_args()
 
     return args
@@ -92,6 +94,7 @@ def main():
             "waves_per_eu": args.waves_per_eu,
             "kpack": args.kpack,
             "matrix_instr_nonkdim": args.matrix_instr_nonkdim,
+            "instruction_sched_variant": 'none',
         }
         # yapf: enable
     tune_gemm.test_correctness(config["M"], config["N"], config["K"], args.col_a, args.col_b, args.dtype_a,
