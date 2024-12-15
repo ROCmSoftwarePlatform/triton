@@ -63,6 +63,7 @@ def parse_config(cfg_str):
         "EU": "waves_per_eu",
         "kP": "kpack",
         "mfma": "matrix_instr_nonkdim",
+        "instruction_sched_variant": 'none',
     }
     # yapf: enable
     config = {}
