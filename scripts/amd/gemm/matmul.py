@@ -12,10 +12,12 @@ import yaml
 import os
 import subprocess
 
+from matmul_kernel import matmul_kernel, need_split_k, gen_input
 
 
 # global flag to indicate whether using the full tuing space
 tuning_full_space = False
+
 
 # pruned some unreasonable config
 def prune_configs(configs, named_args, **kwargs):
@@ -45,7 +47,7 @@ def prune_configs(configs, named_args, **kwargs):
     return pruned_configs
 
 
-def get_full_tuning_space(use_split_k):
+def get_full_tuning_configs(use_split_k):
     configs = []
     if not tuning_full_space:
         return configs
@@ -67,161 +69,56 @@ def get_full_tuning_space(use_split_k):
     return configs
 
 
-# `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
-#   - A list of `triton.Config` objects that define different configurations of
-#       meta-parameters (e.g., `BLOCK_M`) and compilation options (e.g., `num_warps`) to try
-#   - An auto-tuning *key* whose change in values will trigger evaluation of all the
-#       provided configs
-@triton.autotune(
-    configs= get_full_tuning_space(True) if tuning_full_space else [
+def get_default_tuning_configs():
+    configs= [
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 64, 'GROUP_M': 1, 'SPLIT_K': 1, 'matrix_instr_nonkdim': 16, 'waves_per_eu': 0}, num_stages=2, num_warps=8),
-        # triton.Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
-        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
-        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
-        # triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
-        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
-        # triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=2),
-        # triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=2),
-        # triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'BLOCK_K': 64, 'GROUP_M': 1, 'SPLIT_K': 8}, num_stages=2, num_warps=2),
-        # triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'BLOCK_K': 64, 'GROUP_M': 1, 'SPLIT_K': 10}, num_stages=2, num_warps=2),
-        # triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'BLOCK_K': 64, 'GROUP_M': 1, 'SPLIT_K': 8}, num_stages=2, num_warps=4),
-        # triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'BLOCK_K': 64, 'GROUP_M': 1, 'SPLIT_K': 10}, num_stages=2, num_warps=1),
-    ],
-    # key=['M', 'N', 'K', 'BLOCK_N', 'BLOCK_M', 'BLOCK_K'],
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'BLOCK_K': 64, 'GROUP_M': 1, 'SPLIT_K': 8}, num_stages=2, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'BLOCK_K': 64, 'GROUP_M': 1, 'SPLIT_K': 10}, num_stages=2, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'BLOCK_K': 64, 'GROUP_M': 1, 'SPLIT_K': 8}, num_stages=2, num_warps=4),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'BLOCK_K': 64, 'GROUP_M': 1, 'SPLIT_K': 10}, num_stages=2, num_warps=1),
+    ]
+
+    return configs
+
+kernel_heuristic = triton.heuristics({
+    'EVEN_K': lambda args: args['K'] % (args['BLOCK_K'] * args['SPLIT_K']) == 0,
+})(matmul_kernel)
+
+kernel = triton.autotune(
+    configs= get_full_tuning_configs(True) if tuning_full_space else get_default_tuning_configs(),
     key=['M', 'N', 'K'],
     prune_configs_by={
         'early_config_prune': prune_configs,
         'perf_model': None,
         "top_k": None
     },
-)
-@triton.heuristics({
-    'EVEN_K': lambda args: args['K'] % (args['BLOCK_K'] * args['SPLIT_K']) == 0,
-})
-@triton.jit
-def matmul_kernel_splitK(
-    # Pointers to matrices
-    a_ptr, b_ptr, c_ptr,
-    # Matrix dimensions
-    M, N, K,
-    # The stride variables represent how much to increase the ptr by when moving by 1
-    # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
-    # by to get the element one row down (A has M rows).
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    # Meta-parameters
-    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-    SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr,
-    GROUP_M: tl.constexpr,
-    ACTIVATION: tl.constexpr,
-):
-    """Kernel for computing the matmul C = A x B.
-    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
-    """
-    # -----------------------------------------------------------
-    # Map program ids `pid` to the block of C it should compute.
-    # This is done in a grouped ordering to promote L2 data reuse.
-    # See above `L2 Cache Optimizations` section for details.
-    pid = tl.program_id(axis=0)
-    pid_z = tl.program_id(1)
-    num_pid_m = tl.cdiv(M, BLOCK_M)
-    num_pid_n = tl.cdiv(N, BLOCK_N)
-    num_pid_in_group = GROUP_M * num_pid_n
-    group_id = pid // num_pid_in_group
-    first_pid_m = group_id * GROUP_M
-    GROUP_M = min(num_pid_m - first_pid_m, GROUP_M)
-    pid_m = first_pid_m + (pid % GROUP_M)
-    pid_n = (pid % num_pid_in_group) // GROUP_M
-
-    # ----------------------------------------------------------
-    # Create pointers for the first blocks of A and B.
-    # We will advance this pointer as we move in the K direction
-    # and accumulate
-    # `a_ptrs` is a block of [BLOCK_M, BLOCK_K] pointers
-    # `b_ptrs` is a block of [BLOCK_K, BLOCK_N] pointers
-    # See above `Pointer Arithmetics` section for details
-    if SPLIT_K == 1:
-        offs_k = tl.arange(0, BLOCK_K)
-    else:
-        offs_k = pid_z * BLOCK_K + tl.arange(0, BLOCK_K)
-    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M))
-    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N))
-    a_ptrs = a_ptr + offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
-    b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
-
-    # -----------------------------------------------------------
-    # Iterate to compute a block of the C matrix.
-    # We accumulate into a `[BLOCK_M, BLOCK_N]` block
-    # of fp32 values for higher accuracy.
-    # `accumulator` will be converted back to fp16 after the loop.
-    acc_dtype = tl.float32 if a_ptr.type.element_ty != tl.int8 else tl.int32
-    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
-    for k in range(0, tl.cdiv(K, BLOCK_K * SPLIT_K)):
-        # Load the next block of A and B, generate a mask by checking the K dimension.
-        # If it is out of bounds, set it to 0.
-        if EVEN_K:
-            a = tl.load(a_ptrs)
-            b = tl.load(b_ptrs)
-        else:
-            k_remaining = K - k * (BLOCK_K * SPLIT_K)
-            a = tl.load(a_ptrs, mask=offs_k[None, :] < k_remaining, other=0.0)
-            b = tl.load(b_ptrs, mask=offs_k[:, None] < k_remaining, other=0.0)
-        # We accumulate along the K dimension.
-        accumulator += tl.dot(a, b)
-        # Advance the ptrs to the next K block.
-        a_ptrs += BLOCK_K * SPLIT_K * stride_ak
-        b_ptrs += BLOCK_K * SPLIT_K * stride_bk
-    # You can fuse arbitrary activation functions here
-    # while the accumulator is still in FP32!
-    if ACTIVATION == "leaky_relu":
-        accumulator = leaky_relu(accumulator)
-    c = accumulator.to(tl.float16)
-
-    # -----------------------------------------------------------
-    # Write back the block of the output matrix C with masks.
-    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    if SPLIT_K == 1:
-        tl.store(c_ptrs, c, mask=c_mask)
-    else:
-        tl.atomic_add(c_ptrs, c, mask=c_mask)
+    use_cuda_graph=True,
+)(kernel_heuristic)
 
 
-# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`.
-@triton.jit
-def leaky_relu(x):
-    x = x + 1
-    return tl.where(x >= 0, x, 0.01 * x)
-
-
-def need_split_k(SIZE_M, SIZE_N, SIZE_K):
-    return (SIZE_M < 64 or SIZE_N < 64) and SIZE_K > 1024
-
-
-def matmul(a, b, c, activation=""):
+def matmul(a, b, c):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
-    # assert a.is_contiguous(), "Matrix A must be contiguous"
-    # assert b.is_contiguous(), "Matrix B must be contiguous"
     M, K = a.shape
     K, N = b.shape
     grid_splitK = lambda META: (
         triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
         META['SPLIT_K']
     )
-    matmul_kernel_splitK[grid_splitK](
+    kernel[grid_splitK](
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
-        ACTIVATION=activation
     )
-
-    return c
 
 
 def test_correctness(M, N, K, datatype = torch.float16):
@@ -241,15 +138,8 @@ def test_correctness(M, N, K, datatype = torch.float16):
 
 
 def run_speed(M, N, K, datatype, col_a, col_b, use_rocprof, provider):
-    if not col_a:
-        a = torch.randn((M, K), device='cuda', dtype=datatype)
-    else:
-        a = torch.randn((K, M), device='cuda', dtype=datatype).T
-
-    if not col_b:
-        b = torch.randn((K, N), device='cuda', dtype=datatype)
-    else:
-        b = torch.randn((N, K), device='cuda', dtype=datatype).T
+    a, a_f16 = gen_input(M, K, datatype, col_a, 1, 'cuda')
+    b, b_f16 = gen_input(K, N, datatype, col_b, 2, 'cuda')
 
     # Allocates output.
     c = torch.zeros((M, N), device=a.device, dtype=a.dtype)
@@ -293,17 +183,7 @@ def parse_args(print_help=False):
 
 def main():
     args = parse_args()
-    dtype = torch.float16
-    if args.specify_type:
-        if args.dtype == 'fp16':
-            dtype = torch.float16
-        elif args.dtype == 'fp32':
-            dtype = torch.float32
-        elif args.dtype == 'bf16':
-            dtype = torch.bfloat16
-        else:
-            print(f"Unsupported datatype {args.dtype}")
-            sys.exit(1)
+    dtype = args.dtype
     use_rocprof = args.rocprof
     verbose = args.v
     col_a = args.col_a
@@ -343,7 +223,7 @@ def main():
 
         if args.compare:
             test_correctness(m, n, k, dtype)
-        best_config = matmul_kernel_splitK.best_config
+        best_config = kernel.best_config
 
         if use_rocprof:
             dtype_str = 'fp16' if (not args.specify_type) else args.dtype 
