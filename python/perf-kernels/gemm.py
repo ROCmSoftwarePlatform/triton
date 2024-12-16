@@ -137,7 +137,6 @@ def leaky_relu(x):
 def matmul(a, b, c, a_scale, b_scale, activation=""):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions!!!"
-    assert a.dtype == b.dtype, "Mixed dtype GEMMs are not supported!!!"
     M, K = a.shape
     K, N = b.shape
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
@@ -156,7 +155,8 @@ def matmul(a, b, c, a_scale, b_scale, activation=""):
         b.stride(1),
         c.stride(0),
         c.stride(1),
-        scale,
+        a_scale,
+        b_scale,
         APPLY_SCALE=apply_scale,
         ACTIVATION=activation,
     )
@@ -239,6 +239,40 @@ def test_correctness(M, N, K, col_a, col_b, in_dtype, out_dtype):
     else:
         matmul(a, b, c, a_scale=None, b_scale=None, activation="")
         torch_output = torch.matmul(a.to(torch_in_dtype), b.to(torch_in_dtype))
+    if out_dtype == 'int8':
+        torch.testing.assert_close(c.to(torch.float32),
+                                   torch_output.to(torch.int8).to(torch.float32), atol=1e-3, rtol=1e-2)
+    else:
+        torch.testing.assert_close(c, torch_output.to(torch_out_dtype), atol=5e-3, rtol=1e-2)
+
+
+def get_mixed_dtypes():
+    dtypes_list = [('int8', 'bf16'), ('fp8e5', 'fp16'), ('fp8e4', 'fp16'), ('fp8e5', 'bf16')]
+    dtypes_list += [tuple(reversed(tpl)) for tpl in dtypes_list]
+
+
+# Unit tests for mixed input types
+@pytest.mark.parametrize(
+    "M, N, K, b_dtype, a_dtype, col_a, col_b",
+    [(*shape, a_dtype, b_dtype, col_a, col_b)
+     for shape in get_x_vals()
+     for a_dtype, b_dtype in get_mixed_dtypes()
+     # Defines if a matrix is row or column major.
+     for col_a in [True, False]
+     for col_b in [True, False]])
+def test_correctness_mixed_types(M, N, K, col_a, col_b, a_dtype, b_dtype):
+    a_torch_dtype = name_to_torch_types[a_dtype]
+    b_torch_dtype = name_to_torch_types[b_dtype]
+    a, a_fp32, a_scale = gen_input(M, K, a_torch_dtype, col_a, 1, device='cuda')
+    b, b_fp32, b_scale = gen_input(K, N, b_torch_dtype, col_b, 2, device='cuda')
+    a_dtype_is_8_bit = dtype_is_8_bit(a_torch_dtype)
+    # Assume output (and compute) dtype is same dtype as the higher precision format.
+    torch_out_dtype = b_torch_dtype if a_dtype_is_8_bit else a_torch_dtype
+    c = torch.empty((M, N), device=a.device, dtype=torch_out_dtype)
+    a_scale = a_scale.item() if a_dtype_is_8_bit else None
+    b_scale = b_scale.item() if not a_dtype_is_8_bit else None
+    matmul(a, b, c, a_scale=a_scale, b_scale=b_scale, activation="")
+    torch_output = torch.matmul(a.to(torch_out_dtype), b.to(torch_out_dtype))
     if out_dtype == 'int8':
         torch.testing.assert_close(c.to(torch.float32),
                                    torch_output.to(torch.int8).to(torch.float32), atol=1e-3, rtol=1e-2)
