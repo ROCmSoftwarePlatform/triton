@@ -32,9 +32,7 @@ def get_cuda_autotune_config():
 
 
 def get_hip_autotune_config():
-    return [
-        triton.Config({'waves_per_eu': we}, num_warps=nw) for (we, nw) in product([0, 1, 2, 4], [4, 8, 16])
-    ]
+    return [triton.Config({'waves_per_eu': we}, num_warps=nw) for (we, nw) in product([0, 1, 2, 4], [4, 8, 16])]
 
 
 def get_autotune_config():
