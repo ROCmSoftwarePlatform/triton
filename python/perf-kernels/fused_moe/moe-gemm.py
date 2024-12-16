@@ -2,10 +2,11 @@ import triton
 import torch
 import triton.language as tl
 import pytest
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 import os
 import json
 import functools
+
 
 @triton.jit
 def moe_gemm_kernel(
@@ -108,14 +109,9 @@ def moe_gemm_kernel(
     c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
     tl.store(out_ptrs, accumulator, mask=c_mask)
 
-def _moe_align_block_size(
-    topk_ids: torch.Tensor,
-    num_experts: int,
-    block_size: int,
-    sorted_token_ids: torch.Tensor,
-    expert_ids: torch.Tensor,
-    num_tokens_post_pad: torch.Tensor
-) -> None:
+
+def _moe_align_block_size(topk_ids: torch.Tensor, num_experts: int, block_size: int, sorted_token_ids: torch.Tensor,
+                          expert_ids: torch.Tensor, num_tokens_post_pad: torch.Tensor) -> None:
     """
     Rearrange token-expert assignments so that each expert's token IDs
     are grouped in multiples of `block_size`.
@@ -153,30 +149,27 @@ def _moe_align_block_size(
         tokens_for_expert = expert_to_tokens[e_id]
         num_tokens = len(tokens_for_expert)
 
+        n_blocks = ((num_tokens + block_size - 1) // block_size)
         # If not a multiple of block_size, pad up to the next multiple
-        padded_size = ((num_tokens + block_size - 1) // block_size) * block_size
+        padded_size = n_blocks * block_size
 
         # Reorder all actual tokens for expert e_id
         reordered_token_ids.extend(tokens_for_expert)
         # reordered_expert_ids.extend([e_id]*num_tokens)
-        reordered_expert_ids.append(e_id)
+        reordered_expert_ids.extend([e_id]*n_blocks)
 
         # Pad with dummy token_id = -1 (or any sentinel), if needed
         if padded_size > num_tokens:
             pad_count = padded_size - num_tokens
-            reordered_token_ids.extend([-1]*pad_count)
-            # reordered_expert_ids.extend([e_id]*pad_count)
+            reordered_token_ids.extend([-1] * pad_count)
 
     token_length = len(reordered_token_ids)
     expert_length = len(reordered_expert_ids)
     # 3) Write data back in-place into sorted_token_ids, expert_ids
     #    sorted_token_ids / expert_ids are expected to have shape >= [M*top_k]
-    sorted_token_ids[:token_length] = torch.tensor(reordered_token_ids,
-                                                  dtype=sorted_token_ids.dtype,
-                                                  device=sorted_token_ids.device)
-    expert_ids[:expert_length] = torch.tensor(reordered_expert_ids,
-                                             dtype=expert_ids.dtype,
-                                             device=expert_ids.device)
+    sorted_token_ids[:token_length] = torch.tensor(reordered_token_ids, dtype=sorted_token_ids.dtype,
+                                                   device=sorted_token_ids.device)
+    expert_ids[:expert_length] = torch.tensor(reordered_expert_ids, dtype=expert_ids.dtype, device=expert_ids.device)
 
     # Fill remainder with -1 if these arrays are bigger than total_length
     if token_length < sorted_token_ids.numel():
@@ -187,9 +180,9 @@ def _moe_align_block_size(
     # 4) Set num_tokens_post_pad to the new total length
     num_tokens_post_pad.fill_(token_length)
 
-def moe_align_block_size(
-        topk_ids: torch.Tensor, block_size: int,
-        num_experts: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+
+def moe_align_block_size(topk_ids: torch.Tensor, block_size: int,
+                         num_experts: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Aligns the token distribution across experts to be compatible with block size for matrix multiplication.
 
@@ -216,22 +209,15 @@ def moe_align_block_size(
         Tokens 12 are non-existent (padding) and are ignored in the subsequent matrix multiplication.
     - The padding ensures that the total number of tokens is now divisible by block_size for proper block matrix operations.
     """
-    sorted_ids = torch.empty(
-        (topk_ids.numel() + num_experts * (block_size - 1), ),
-        dtype=torch.int32,
-        device=topk_ids.device)
-    expert_ids = torch.empty((topk_ids.numel() + num_experts, ),
-                             dtype=torch.int32,
+    sorted_ids = torch.empty((topk_ids.numel() + num_experts * (block_size - 1), ), dtype=torch.int32,
                              device=topk_ids.device)
+    expert_ids = torch.empty((topk_ids.numel() + num_experts, ), dtype=torch.int32, device=topk_ids.device)
     sorted_ids.fill_(topk_ids.numel())
-    num_tokens_post_pad = torch.empty((1),
-                                      dtype=torch.int32,
-                                      device=topk_ids.device)
-    _moe_align_block_size(topk_ids, num_experts, block_size,
-                                          sorted_ids, expert_ids,
-                                          num_tokens_post_pad)
+    num_tokens_post_pad = torch.empty((1), dtype=torch.int32, device=topk_ids.device)
+    _moe_align_block_size(topk_ids, num_experts, block_size, sorted_ids, expert_ids, num_tokens_post_pad)
 
     return sorted_ids, expert_ids, num_tokens_post_pad
+
 
 def get_config_file_name(E: int, N: int, dtype: Optional[str]) -> str:
     device_name = torch.cuda.get_device_name(0).replace(" ", "_")
@@ -240,8 +226,7 @@ def get_config_file_name(E: int, N: int, dtype: Optional[str]) -> str:
 
 
 @functools.lru_cache
-def get_moe_configs(E: int, N: int,
-                    dtype: Optional[str]) -> Optional[Dict[int, Any]]:
+def get_moe_configs(E: int, N: int, dtype: Optional[str]) -> Optional[Dict[int, Any]]:
     """
     Return optimized configurations for the fused MoE kernel.
 
@@ -255,8 +240,7 @@ def get_moe_configs(E: int, N: int,
     # directory
     json_file_name = get_config_file_name(E, N, dtype)
 
-    config_file_path = os.path.join(
-        os.path.dirname(os.path.realpath(__file__)), "configs", json_file_name)
+    config_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "configs", json_file_name)
     if os.path.exists(config_file_path):
         with open(config_file_path) as f:
             # If a configuration has been found, return it
@@ -265,6 +249,7 @@ def get_moe_configs(E: int, N: int,
     # If no optimized configuration is available, we will use the default
     # configuration
     return None
+
 
 def get_default_config(
     M: int,
@@ -275,20 +260,10 @@ def get_default_config(
     dtype: Optional[str],
     is_marlin: bool,
 ) -> Dict[str, int]:
-    config = {
-        'BLOCK_SIZE_M': 64,
-        'BLOCK_SIZE_N': 64,
-        'BLOCK_SIZE_K': 32,
-        'GROUP_SIZE_M': 8
-    }
+    config = {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}
     # A heuristic: fused marlin works faster with this config for small M
     if M <= E or (is_marlin and M <= 32):
-        config = {
-            'BLOCK_SIZE_M': 16,
-            'BLOCK_SIZE_N': 32,
-            'BLOCK_SIZE_K': 64,
-            'GROUP_SIZE_M': 1
-        }
+        config = {'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1}
     return config
 
 
@@ -308,12 +283,11 @@ def try_get_optimal_moe_config(
         config = configs[min(configs.keys(), key=lambda x: abs(x - M))]
     else:
         # Else use the default config
-        config = get_default_config(M, E, N, K, top_k, dtype,
-                                        is_marlin)
+        config = get_default_config(M, E, N, K, top_k, dtype, is_marlin)
     return config
 
-def get_config_dtype_str(dtype: torch.dtype,
-                         use_int8_w8a16: Optional[bool] = False,
+
+def get_config_dtype_str(dtype: torch.dtype, use_int8_w8a16: Optional[bool] = False,
                          use_fp8_w8a8: Optional[bool] = False):
     if use_fp8_w8a8:
         return "fp8_w8a8"
@@ -326,7 +300,8 @@ def get_config_dtype_str(dtype: torch.dtype,
     return None
 
 
-def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, M :int ,top_k: int, topk_weights: torch.Tensor, topk_ids: torch.Tensor) -> None:
+def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, topk_weights: torch.Tensor,
+             topk_ids: torch.Tensor) -> None:
     config_dtype = None
     get_config_func = functools.partial(
         try_get_optimal_moe_config,
@@ -334,18 +309,27 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, M :int ,top_k: i
         topk_ids.shape[1],
         config_dtype,
     )
+    M, top_k = topk_ids.shape
+    E, _, _ = b.shape
 
     config = get_config_func(M)
 
     sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size(topk_ids, config['BLOCK_SIZE_M'], E)
+    print(config['BLOCK_SIZE_M'])
+    print(num_tokens_post_padded)
+    print(topk_ids)
+    print(sorted_token_ids)
+    print(expert_ids)
 
     EM = sorted_token_ids.shape[0]
     _, N, K = b.shape
-    grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
+    grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']))
 
-    moe_gemm_kernel[grid](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2), c.stride(0), c.stride(1), top_k,
-                          topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, EM, N, K, **config)
+    # moe_gemm_kernel[grid](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2), c.stride(0),
+    #                       c.stride(1), top_k, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, EM, N,
+    #                       K, **config)
     return c
+
 
 def input_helper(M: int, K: int, N: int, top_k: int, E: int):
     """
@@ -379,24 +363,22 @@ def input_helper(M: int, K: int, N: int, top_k: int, E: int):
     return a, b, c, topk_weights, topk_ids
 
 
-@pytest.mark.parametrize("M, K, N, top_k, E",
-                         [
-                            #  (128, 64, 256, 2, 4),
-                            #  (64, 32, 128, 1, 2),
-                             (256, 128, 512, 2, 8)
-                        ])
+@pytest.mark.parametrize("M, K, N, top_k, E", [
+    (128, 64, 256, 2, 4),
+    #  (64, 32, 128, 1, 2),
+    # (256, 128, 512, 2, 8)
+])
 def test_correctness(M: int, K: int, N: int, top_k: int, E: int):
     a, b, c, topk_weights, topk_ids = input_helper(M, K, N, top_k, E)
 
-    tri_out = moe_gemm(a, b, c, M, top_k, topk_weights, topk_ids)
+    tri_out = moe_gemm(a, b, c, topk_weights, topk_ids)
 
-    ref_out = torch.empty_like(c)
-
-    for token_id in range(M):
-        token = a[token_id, :]
-        for expert_id in topk_ids[token_id, :]:
-            expert = b[expert_id, :, :]
-            ref_out[token_id, :] += torch.einsum('k,nk->n', token, expert)
+    # ref_out = torch.empty_like(c)
+    # for token_id in range(M):
+    #     token = a[token_id, :]
+    #     for expert_id in topk_ids[token_id, :]:
+    #         expert = b[expert_id, :, :]
+    #         ref_out[token_id, :] += torch.einsum('k,nk->n', token, expert)
 
     # Validate correctness
-    torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=1e-2)
+    torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=1e-2)
