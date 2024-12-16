@@ -12,7 +12,7 @@ import yaml
 import os
 import subprocess
 
-from matmul_kernel import matmul_kernel, need_split_k, gen_input
+from matmul_kernel import matmul_kernel, gen_input
 
 
 # global flag to indicate whether using the full tuing space
@@ -233,8 +233,8 @@ def main():
             block_k = best_config.kwargs['BLOCK_K']
             group_m = best_config.kwargs['GROUP_M']
             split_k = best_config.kwargs['SPLIT_K']
-            num_warps = best_config['num_warps']
             num_warps = best_config.num_warps
+            num_stages = best_config.num_stages
             driver = 'rocprof_matmul.py'
             TRITON_DIR = os.getenv('TRITON_DIR')
             if TRITON_DIR is not None:
@@ -242,7 +242,12 @@ def main():
             run_cmd = f'python {driver} -m {m} -n {n} -k {k} \
                         -block_m {block_m} -block_n {block_n} -block_k {block_k} \
                         -group_m {group_m} -split_k {split_k} -num_warps {num_warps} \
-                        -dtype {dtype_str}'
+                        -num_stages {num_stages} -dtype {dtype_str}'
+            if col_a:
+                run_cmd = f'{run_cmd} -col_a'
+            if col_b:
+                run_cmd = f'{run_cmd} -col_b'
+
             prof_cmd = f'rocprof --stats {run_cmd}'
             run_bash_command(prof_cmd)
 
