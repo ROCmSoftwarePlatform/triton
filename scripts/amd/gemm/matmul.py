@@ -71,7 +71,7 @@ def get_full_tuning_configs(use_split_k):
 
 def get_default_tuning_configs():
     configs= [
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 64, 'GROUP_M': 1, 'SPLIT_K': 1, 'matrix_instr_nonkdim': 16, 'waves_per_eu': 0}, num_stages=2, num_warps=8),
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 64, 'GROUP_M': 8, 'SPLIT_K': 1, 'matrix_instr_nonkdim': 16, 'waves_per_eu': 0}, num_stages=2, num_warps=8),
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8, 'SPLIT_K': 1}, num_stages=2, num_warps=4),
@@ -121,11 +121,12 @@ def matmul(a, b, c):
     )
 
 
-def test_correctness(M, N, K, datatype = torch.float16):
-    torch.manual_seed(0)
-    a = torch.randn((M, K), device='cuda', dtype=datatype)
-    b = torch.randn((K, N), device='cuda', dtype=datatype)
-    triton_output = matmul(a, b)
+def test_correctness(M, N, K, datatype, col_a, col_b, device = 'cuda'):
+    a, a_f16 = gen_input(M, K, datatype, col_a, 1, device)
+    b, b_f16 = gen_input(K, N, datatype, col_b, 2, device)
+
+    triton_output = torch.zeros((M, N), dtype=a.dtype, device=a.device)
+    matmul(a, b, triton_output)
     torch_output = torch.matmul(a, b)
     print(f"triton_output={triton_output}")
     print(f"torch_output={torch_output}")
@@ -137,9 +138,9 @@ def test_correctness(M, N, K, datatype = torch.float16):
         print(f'❌ Triton and Torch differ for {size_str}')
 
 
-def run_speed(M, N, K, datatype, col_a, col_b, use_rocprof, provider):
-    a, a_f16 = gen_input(M, K, datatype, col_a, 1, 'cuda')
-    b, b_f16 = gen_input(K, N, datatype, col_b, 2, 'cuda')
+def run_speed(M, N, K, datatype, col_a, col_b, use_rocprof, provider, device = 'cuda'):
+    a, a_f16 = gen_input(M, K, datatype, col_a, 1, device)
+    b, b_f16 = gen_input(K, N, datatype, col_b, 2, device)
 
     # Allocates output.
     c = torch.zeros((M, N), device=a.device, dtype=a.dtype)
@@ -232,9 +233,9 @@ def main():
             block_k = best_config.kwargs['BLOCK_K']
             group_m = best_config.kwargs['GROUP_M']
             split_k = best_config.kwargs['SPLIT_K']
-            # num_warps = best_config['num_warps']
+            num_warps = best_config['num_warps']
             num_warps = best_config.num_warps
-            driver = 'rocprof_gemm.py'
+            driver = 'rocprof_matmul.py'
             TRITON_DIR = os.getenv('TRITON_DIR')
             if TRITON_DIR is not None:
                 driver = os.path.join(TRITON_DIR, 'scripts/amd/gemm', driver)
