@@ -24,10 +24,10 @@ def moe_gemm_kernel(
     topk_weights_ptr,
     sorted_token_ids_ptr,
     expert_ids_ptr,
-    num_tokens_post_padded_ptr,
     EM: tl.constexpr,
     N: tl.constexpr,
     K: tl.constexpr,
+    M: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
@@ -70,21 +70,17 @@ def moe_gemm_kernel(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    num_tokens_post_padded = tl.load(num_tokens_post_padded_ptr)
-    if pid_m * BLOCK_SIZE_M >= num_tokens_post_padded:
-        return
-
     offs_token_id = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_token = tl.load(sorted_token_ids_ptr + offs_token_id)
 
-    # Generate token_mask: True if token is valid, False otherwise
     # Here we assume that valid tokens are in the range [0, M).
-    token_mask = (offs_token >= 0) & (offs_token < EM)
+    token_mask = (offs_token >= 0) & (offs_token < M)
 
     off_experts = tl.load(expert_ids_ptr + pid_m)
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
     offs_k = tl.arange(0, BLOCK_SIZE_K)
-    a_ptrs = A + (offs_token[:, None] // top_k * stride_am + offs_k[None, :] * stride_ak)
+    # TODO why is there // top_k here???
+    a_ptrs = A + (offs_token[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = B + off_experts * stride_be + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
@@ -107,7 +103,9 @@ def moe_gemm_kernel(
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     out_ptrs = Out + stride_cm * offs_token[:, None] + stride_cn * offs_cn[None, :]
     c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
-    tl.store(out_ptrs, accumulator, mask=c_mask)
+    # TODO why it doesn't do accumulation over experts???
+    # tl.store(out_ptrs, accumulator, mask=c_mask)
+    tl.atomic_add(out_ptrs, accumulator, mask=c_mask)
 
 
 def _moe_align_block_size(topk_ids: torch.Tensor, num_experts: int, block_size: int, sorted_token_ids: torch.Tensor,
@@ -214,6 +212,7 @@ def moe_align_block_size(topk_ids: torch.Tensor, block_size: int,
     expert_ids = torch.empty((topk_ids.numel() + num_experts, ), dtype=torch.int32, device=topk_ids.device)
     sorted_ids.fill_(topk_ids.numel())
     num_tokens_post_pad = torch.empty((1), dtype=torch.int32, device=topk_ids.device)
+    # TODO do we need to predefine the vars? may be they can be defined in the function and reurned
     _moe_align_block_size(topk_ids, num_experts, block_size, sorted_ids, expert_ids, num_tokens_post_pad)
 
     return sorted_ids, expert_ids, num_tokens_post_pad
@@ -315,19 +314,16 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, topk_weights: to
     config = get_config_func(M)
 
     sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size(topk_ids, config['BLOCK_SIZE_M'], E)
-    print(config['BLOCK_SIZE_M'])
-    print(num_tokens_post_padded)
-    print(topk_ids)
     print(sorted_token_ids)
     print(expert_ids)
 
-    EM = sorted_token_ids.shape[0]
+    EM = num_tokens_post_padded.item()
     _, N, K = b.shape
-    grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']))
+    grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),)
 
-    # moe_gemm_kernel[grid](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2), c.stride(0),
-    #                       c.stride(1), top_k, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, EM, N,
-    #                       K, **config)
+    moe_gemm_kernel[grid](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2), c.stride(0),
+                          c.stride(1), top_k, topk_weights, sorted_token_ids, expert_ids, EM, N,
+                          K, M, **config)
     return c
 
 
@@ -364,21 +360,22 @@ def input_helper(M: int, K: int, N: int, top_k: int, E: int):
 
 
 @pytest.mark.parametrize("M, K, N, top_k, E", [
-    (128, 64, 256, 2, 4),
-    #  (64, 32, 128, 1, 2),
-    # (256, 128, 512, 2, 8)
+    (16, 64, 256, 2, 4),
+    (64, 32, 128, 1, 2),
+    (256, 128, 512, 2, 8)
 ])
 def test_correctness(M: int, K: int, N: int, top_k: int, E: int):
     a, b, c, topk_weights, topk_ids = input_helper(M, K, N, top_k, E)
 
+    # TODO weights and other features
     tri_out = moe_gemm(a, b, c, topk_weights, topk_ids)
 
-    # ref_out = torch.empty_like(c)
-    # for token_id in range(M):
-    #     token = a[token_id, :]
-    #     for expert_id in topk_ids[token_id, :]:
-    #         expert = b[expert_id, :, :]
-    #         ref_out[token_id, :] += torch.einsum('k,nk->n', token, expert)
+    ref_out = torch.empty_like(c)
+    for token_id in range(M):
+        expert_ids = topk_ids[token_id, :]
+        experts = b[expert_ids, :, :]
+        token = a[token_id, :]
+        ref_out[token_id, :] = torch.einsum('k,enk->n', token, experts)
 
     # Validate correctness
     torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=1e-2)
