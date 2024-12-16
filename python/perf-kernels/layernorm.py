@@ -17,10 +17,11 @@ def get_autotune_config():
         triton.Config({'waves_per_eu': 2}, num_warps=8),
     ]
 
+
 @triton.autotune(configs=get_autotune_config(), key=['n_rows', 'n_cols'], use_cuda_graph=True)
 @triton.jit
 def layernorm_kernel_blocked_impl(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride, n_rows, n_cols, eps,
-                     BLOCK_SIZE: tl.constexpr):
+                                  BLOCK_SIZE: tl.constexpr):
 
     tl.assume(x_row_stride > 0)
     tl.assume(y_row_stride > 0)
@@ -90,7 +91,8 @@ def layernorm_kernel_blocked_impl(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_ro
 
 @triton.autotune(configs=get_autotune_config(), key=['n_rows', 'n_cols'], use_cuda_graph=True)
 @triton.jit
-def layernorm_kernel_impl(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride, n_rows, n_cols, eps, BLOCK_SIZE: tl.constexpr):
+def layernorm_kernel_impl(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride, n_rows, n_cols, eps,
+                          BLOCK_SIZE: tl.constexpr):
 
     tl.assume(x_row_stride > 0)
     tl.assume(y_row_stride > 0)
@@ -105,9 +107,9 @@ def layernorm_kernel_impl(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride
     x_ptrs = x_ptr_start + col_offs
     mask = col_offs < n_cols
     x_block = tl.load(x_ptrs, cache_modifier=".cg", mask=mask, other=0.0).to(tl.float32)  #Unmasked loads
-    mean = tl.sum(x_block, axis=0) / n_cols 
+    mean = tl.sum(x_block, axis=0) / n_cols
     _x_block = tl.where(mask, x_block - mean, 0.0)
-    var = tl.sum(_x_block * _x_block, axis=0) / n_cols 
+    var = tl.sum(_x_block * _x_block, axis=0) / n_cols
     rstd = tl.rsqrt(var + eps)
 
     w_block = tl.load(w_ptr + col_offs, mask=mask, other=0.0)
@@ -116,12 +118,14 @@ def layernorm_kernel_impl(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride
     y_block = y_block * w_block + b_block
     tl.store(y_ptr_start + col_offs, y_block, mask=mask)
 
+
 def layernorm(x, y, w, b, eps=1e-5):
     n_rows, n_cols = x.shape
 
     grid = lambda meta: (n_rows, )
     if n_cols <= 8192:
-        layernorm_kernel_impl[grid](x, y, w, b, x.stride(0), y.stride(0), n_rows, n_cols, eps, BLOCK_SIZE=triton.next_power_of_2(n_cols))
+        layernorm_kernel_impl[grid](x, y, w, b, x.stride(0), y.stride(0), n_rows, n_cols, eps,
+                                    BLOCK_SIZE=triton.next_power_of_2(n_cols))
     else:
         layernorm_kernel_blocked_impl[grid](x, y, w, b, x.stride(0), y.stride(0), n_rows, n_cols, eps, BLOCK_SIZE=2048)
 
@@ -184,7 +188,7 @@ def run_benchmark(args):
                         "-" + str(args.M_end) + "-" + str(args.M_step))
         x_names = ['M']
     elif (sweep_n):
-        x_vals_list = [i for i in range(args.N_start, args.N_end+1, args.N_step)]
+        x_vals_list = [i for i in range(args.N_start, args.N_end + 1, args.N_step)]
         mn_args = {'M': args.M_start}
         plot_name = str("layernorm-performance_" + args.dtype + "_M" + str(args.M_start) + "_N" + str(args.N_start) +
                         "-" + str(args.N_end) + "-" + str(args.N_step))
@@ -192,7 +196,7 @@ def run_benchmark(args):
     else:
         x_vals_list.append(args.N_start)
         x_names = ['N']
-        mn_args={'M': args.M_start}
+        mn_args = {'M': args.M_start}
         plot_name = str("layernorm-performance" + "_M" + str(args.M_start) + "_N" + str(args.N_start))
     dtype = arg_to_torch_dtype[args.dtype]
 
