@@ -107,21 +107,16 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
     else:
         mask = col_offsets < n_cols
         for row_idx in tl.range(row_start, n_rows, NUM_PRGMS, num_stages=2):
-            row_start_ptr = input_ptr + row_idx * input_row_stride
-            input_ptrs = row_start_ptr + col_offsets
+            input_ptrs = input_ptr + row_idx * input_row_stride + col_offsets
             input_ptrs = tl.multiple_of(input_ptrs, (16, ))
             row = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg").to(tl.float32)
             g = tl.load(g_ptr + col_offsets, mask=mask, other=0.0).to(tl.float32)
             row_norm = row * row
             row_norm = tl.sum(row_norm, axis=-1)
-            row_norm = row_norm / n_cols
-            row_norm = row_norm + epsilon
-            row_norm = tl.rsqrt(row_norm)
-            rms_norm = row * row_norm
-            rms_norm = rms_norm * g
+            row_norm = tl.math.rsqrt((row_norm / n_cols) + epsilon)
+            rms_norm = row * row_norm * g
 
-            output_row_start_ptr = output_ptr + row_idx * output_row_stride
-            output_ptrs = output_row_start_ptr + col_offsets
+            output_ptrs = output_ptr + row_idx * output_row_stride + col_offsets
             output_ptrs = tl.multiple_of(output_ptrs, (16, ))
             tl.store(output_ptrs, rms_norm.to(output_ptr.type.element_ty), mask=mask)
 
