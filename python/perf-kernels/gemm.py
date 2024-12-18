@@ -114,12 +114,13 @@ def matmul_kernel(
         # Advance the ptrs to the next K block.
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
-    # Apply activation function, if specified.
-    if ACTIVATION == "leaky_relu":
-        accumulator = leaky_relu(accumulator)
     # Apply scale to recover dynamic range reduced due to lower precision inputs.
     if APPLY_SCALE:
         accumulator = accumulator * a_scale * b_scale
+    # Apply activation function, if specified.
+    # TODO(vgokhale): Add different types of activations.
+    if ACTIVATION == "leaky_relu":
+        accumulator = leaky_relu(accumulator)
     c = accumulator.to(c_ptr.type.element_ty)
 
     # Write back the block of the output matrix C with masks.
@@ -216,6 +217,7 @@ def get_x_vals():
 
 
 # Unit tests
+#TODO(vgokhale): Test activation.
 @pytest.mark.parametrize(
     "M, N, K, in_dtype, out_dtype, col_a, col_b",
     [(*shape, in_dtype, out_dtype, col_a, col_b)
