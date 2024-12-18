@@ -176,10 +176,14 @@ name_to_torch_types = {
     'fp8e4': torch.float8_e4m3fnuz,
 }
 
+
 dtype_max = {
-    torch.float8_e5m2fnuz: 57344,
-    torch.float8_e4m3fnuz: 240,
-    torch.int8: 127,
+    dtype: (torch.finfo(dtype) if dtype.is_floating_point else torch.iinfo(dtype)).max
+    for dtype in [
+        torch.float8_e5m2fnuz,
+        torch.float8_e4m3fnuz,
+        torch.int8,
+    ]
 }
 
 
