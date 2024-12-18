@@ -55,7 +55,8 @@ def matmul_kernel(
     stride_bn,
     stride_cm,
     stride_cn,
-    scale,
+    a_scale_ptr,
+    b_scale_ptr,
     # Meta-parameters
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
@@ -92,6 +93,9 @@ def matmul_kernel(
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    if APPLY_SCALE:
+        a_scale = tl.load(a_scale_ptr)
+        b_scale = tl.load(b_scale_ptr)
 
     acc_dtype = tl.float32 if c_ptr.type.element_ty != tl.int8 else tl.int32
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=acc_dtype)
@@ -115,7 +119,7 @@ def matmul_kernel(
         accumulator = leaky_relu(accumulator)
     # Apply scale to recover dynamic range reduced due to lower precision inputs.
     if APPLY_SCALE:
-        accumulator = accumulator * scale
+        accumulator = accumulator * a_scale * b_scale
     c = accumulator.to(c_ptr.type.element_ty)
 
     # Write back the block of the output matrix C with masks.
@@ -134,15 +138,13 @@ def leaky_relu(x):
 
 
 # Wrapper for gemm kernel.
-def matmul(a, b, c, a_scale, b_scale, activation=""):
+def matmul(a, b, c, a_scale, b_scale, scale_a8_b8=False, activation=""):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions!!!"
     assert a.dtype == b.dtype, "Mixed dtype GEMMs are not supported!!!"
     M, K = a.shape
     K, N = b.shape
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-    apply_scale = a_scale is not None and b_scale is not None
-    scale = a_scale * b_scale if apply_scale else None
     matmul_kernel[grid](
         a,
         b,
@@ -156,8 +158,9 @@ def matmul(a, b, c, a_scale, b_scale, activation=""):
         b.stride(1),
         c.stride(0),
         c.stride(1),
-        scale,
-        APPLY_SCALE=apply_scale,
+        a_scale,
+        b_scale,
+        APPLY_SCALE=scale_a8_b8,
         ACTIVATION=activation,
     )
 
@@ -232,12 +235,12 @@ def test_correctness(M, N, K, col_a, col_b, in_dtype, out_dtype):
     # This requires us to compute in fp32 because for e5m2, the range is same as fp16 (e5m10).
     # If we use fp16 it is possible to return infs from the torch.matmul call.
     if dtype_is_8_bit(torch_in_dtype):
-        matmul(a, b, c, a_scale.item(), b_scale.item(), activation="")
+        matmul(a, b, c, a_scale, b_scale, scale_a8_b8=True, activation="")
         torch_output = torch.matmul(a_fp32, b_fp32)
         torch_output = torch_output * a_scale * b_scale
     # For other dtypes, use the same torch matmul as the dtype.
     else:
-        matmul(a, b, c, a_scale=None, b_scale=None, activation="")
+        matmul(a, b, c, a_scale=None, b_scale=None, scale_a8_b8=False, activation="")
         torch_output = torch.matmul(a.to(torch_in_dtype), b.to(torch_in_dtype))
     if out_dtype == 'int8':
         torch.testing.assert_close(c.to(torch.float32),
