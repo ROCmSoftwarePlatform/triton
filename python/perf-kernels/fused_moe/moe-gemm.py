@@ -6,7 +6,8 @@ from typing import Any, Dict, Optional, Tuple
 import os
 import json
 import functools
-
+import argparse
+import sys
 
 @triton.jit
 def moe_gemm_kernel(
@@ -352,3 +353,117 @@ def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: 
 
     # Validate correctness
     torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=1e-2)
+
+def get_configs():
+    configs = [
+        # Small-Scale Configurations
+        {"M": 1, "K": 128, "N": 256, "E": 32,  "top_k": 1},
+        {"M": 1, "K": 128, "N": 256, "E": 32,  "top_k": 2},
+        # {"M": 1, "K": 1024, "N": 256, "E": 32,  "top_k": 1},
+
+        # # Medium-Scale Configurations
+        # {"M": 2048, "K": 2048, "N": 2048, "E": 64,  "top_k": 1},
+        # {"M": 2048, "K": 2048, "N": 2048, "E": 128, "top_k": 1},
+        # {"M": 2048, "K": 2048, "N": 2048, "E": 64,  "top_k": 2},
+
+        # # Large-Scale Configurations
+        # {"M": 4096, "K": 4096, "N": 4096, "E": 128, "top_k": 1},
+        # {"M": 4096, "K": 4096, "N": 4096, "E": 256, "top_k": 1},
+        # {"M": 4096, "K": 4096, "N": 4096, "E": 128, "top_k": 2},
+
+        # # Very Large-Scale Configuration
+        # {"M": 8192, "K": 2048, "N": 2048, "E": 64,  "top_k": 2},
+
+        # Mixtral
+        # {"M": 64, "K": 4096, "N": 1792, "E": 128, "top_k": 2}
+        # {"M": 64, "K": 4096, "N": 3584, "E": 128, "top_k": 2}
+        # {"M": 64, "K": 4096, "N": 7168, "E": 128, "top_k": 2}
+        # {"M": 64, "K": 4096, "N": 14336, "E": 128, "top_k": 2}
+    ]
+    return configs
+
+
+def run_benchmark(custom, args):
+    print_time = args.return_time
+    routed_weight = args.routed_weight
+    if custom:
+        # User provides custom M,K,N,E,top_k via arguments
+        # Ensure all are provided
+        assert args.M and args.K and args.N and args.E and args.top_k, \
+            "Please provide M, K, N, E, top_k for custom runs."
+        configs = [{"M": args.M, "K": args.K, "N": args.N, "E": args.E, "top_k": args.top_k}]
+    else:
+        configs = get_configs()
+
+    # We'll create a Benchmark with multiple X values from the configs
+    # We'll treat each config as a separate run.
+    # x_names: We'll vary M, K, N, E, top_k as parameters.
+    # line_arg: We'll compare routed_weight = True vs False
+    x_names = ['M', 'K', 'N', 'E', 'top_k']
+    x_vals_list = [(cfg['M'], cfg['K'], cfg['N'], cfg['E'], cfg['top_k']) for cfg in configs]
+
+    line_names = 'Time (ms)' if print_time else 'TFLOPS'
+
+    benchmark = triton.testing.Benchmark(
+        x_names=x_names,
+        x_vals=x_vals_list,
+        line_arg='provider',
+        line_vals=['triton'],
+        line_names=[line_names],
+        styles=[('red', '-'), ('blue', '-')],
+        ylabel='ms',
+        plot_name='moe-gemm-benchmark',
+        args={'print_time': print_time, 'routed_weight': routed_weight}
+    )
+
+    @triton.testing.perf_report([benchmark])
+    def bench_moe_gemm(M, K, N, E, top_k, routed_weight, print_time, provider):
+        # Create input tensors
+        a, b, c, topk_weights, topk_ids = input_helper(M, K, N, top_k, E, routed_weight=routed_weight)
+
+        # Compute FLOPs
+        # For each of the M tokens, we pick top_k experts and perform a [K, N] GEMM (K*N multiplications and additions)
+        # FLOPs ~ 2 * M * top_k * K * N (2 for multiply-add)
+        flops = 2.0 * M * top_k * K * N
+
+        warmup = 25
+        rep = 100
+
+        fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids)
+        # ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
+        ms = triton.testing.do_bench(fn)
+
+        if print_time:
+            return ms
+        else:
+            # Convert flops to TFLOPs
+            return flops / ms * 1e-9
+
+    bench_moe_gemm.run(save_path=".", print_data=True)
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        prog="Benchmark MoE GEMM",
+        allow_abbrev=False,
+    )
+    parser.add_argument("-M", type=int, default=0, help="M dimension")
+    parser.add_argument("-K", type=int, default=0, help="K dimension")
+    parser.add_argument("-N", type=int, default=0, help="N dimension")
+    parser.add_argument("-E", type=int, default=0, help="Number of experts")
+    parser.add_argument("-top_k", type=int, default=0, help="top_k experts per token")
+    parser.add_argument("-routed_weight", action='store_true', default=False)
+    parser.add_argument("-return_time", action='store_true', default=False,
+                        help='Return time instead of TFLOPs')
+    args = parser.parse_args()
+    return args
+
+def main():
+    args = parse_args()
+    custom_config = False
+    # If user provides all M,K,N,E,top_k we consider it custom
+    if args.M and args.K and args.N and args.E and args.top_k:
+        custom_config = True
+    run_benchmark(custom_config, args)
+
+if __name__ == '__main__':
+    sys.exit(main())
