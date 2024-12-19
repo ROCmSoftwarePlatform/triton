@@ -4,68 +4,6 @@ import os
 import subprocess
 
 
-def draw_preamble_cmd():
-    return '''\\documentclass[tikz, border=1mm, dvipsnames]{standalone}
-\\usepackage{ifthen}
-\\usepackage{tikz}
-\\usetikzlibrary{arrows.meta,arrows}
-\\usetikzlibrary{intersections}
-\\usetikzlibrary{calc, quotes}
-\\usetikzlibrary{patterns}
-\\usepackage{xparse}
-
-\\ExplSyntaxOn
-\\NewExpandableDocumentCommand{\\bitwiseXor}{mm}
- {
-  \\recuenco_bitwise_xor:nn { #1 } { #2 }
- }
-
-\\cs_new:Nn \\recuenco_bitwise_xor:nn
- {
-  \\int_from_bin:e
-   {
-    \\__recuenco_bitwise_xor:ee { \\int_to_bin:n { #1 } } { \\int_to_bin:n { #2 } }
-   }
- }
-\\cs_generate_variant:Nn \\int_from_bin:n { e }
-
-\\cs_new:Nn \\__recuenco_bitwise_xor:nn
- {
-  \\__recuenco_bitwise_xor_binary:ee
-   {
-    \\prg_replicate:nn
-     {
-      \\int_max:nn { \\tl_count:n { #1 } } { \\tl_count:n { #2 } } - \\tl_count:n { #1 }
-     }
-     { 0 }
-     #1
-   }
-   {
-    \\prg_replicate:nn
-     {
-      \\int_max:nn { \\tl_count:n { #1 } } { \\tl_count:n { #2 } } - \\tl_count:n { #2 }
-     }
-     { 0 }
-     #2
-   }
- }
-\\cs_generate_variant:Nn \\__recuenco_bitwise_xor:nn { ee }
-
-\\cs_new:Nn \\__recuenco_bitwise_xor_binary:nn
- {
-  \\__recuenco_bitwise_xor_binary:w #1;#2;
- }
-\\cs_generate_variant:Nn \\__recuenco_bitwise_xor_binary:nn { ee }
-
-\\cs_new:Npn \\__recuenco_bitwise_xor_binary:w #1#2;#3#4;
- {
-  \\int_abs:n { #1-#3 }
-  \\tl_if_empty:nF { #2 } { \\__recuenco_bitwise_xor_binary:w #2;#4; }
- }
-
-\\ExplSyntaxOff'''
-
-
 def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kpack):
     return f'''\\begin{{document}}
   \\begin{{tikzpicture}}
@@ -254,8 +192,6 @@ def main():
         with open("tikzplot.tex") as file:
             tikz_code = file.read()
 
-        preamble_str = draw_preamble_cmd()
-
         draw_blockedLayout_str = draw_blocked_layout_cmd(M, K, sizePerThread, threadsPerWarp, warpsPerCTA, order)
 
         draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kpack)
@@ -264,7 +200,6 @@ def main():
 
         draw_wmma_str = draw_wmma_instr_cmd(waveSize)
 
-        f_plot.write(preamble_str + "\n")
         f_plot.write(tikz_code)
         if plot_mode == 'blocked':
             f_plot.write(draw_blockedLayout_str)
