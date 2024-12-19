@@ -4,7 +4,7 @@ import os
 import subprocess
 
 
-def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kpack):
+def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth):
     return f'''\\begin{{document}}
   \\begin{{tikzpicture}}
     \\def\\scale{{1}}
@@ -14,7 +14,7 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kpack):
     \\def\\opColorAR{{cyan}}
     \\def\\opColorBL{{Maroon}}
     \\def\\opColorBR{{BlueGreen}}
-    \\drawDot{{{M}}}{{{N}}}{{{K}}}{{{mfmaNonKDim}}}{{{warpsPerCTA[0]}}}{{{warpsPerCTA[1]}}}{{{trans}}}{{{kpack}}}
+    \\drawDot{{{M}}}{{{N}}}{{{K}}}{{{mfmaNonKDim}}}{{{warpsPerCTA[0]}}}{{{warpsPerCTA[1]}}}{{{trans}}}{{{kWidth}}}
 
     \\coordinate (C TL) at ($(C TL)+({N}*\elem+32*\elem, 0)$);
     \\def\\mfmaTrans{{{trans}}}
@@ -24,8 +24,8 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kpack):
     \\pgfmathsetmacro{{\\gap}}{{\\elem*5}}
     \\pgfmathsetmacro{{\\nonTrans}}{{1-\\mfmaTrans}}
     \\pgfmathsetmacro{{\\groups}}{{64/{mfmaNonKDim}}}
-    \\coordinate (C TL) at ($(C TL)+(.5*\\gap+1.2*\\nonTrans*\\gap+\\groups*{kpack}*\\elem, 0)$);
-    \\drawMFMAInstr{{{mfmaNonKDim}}}{{{kpack}}}{{\\mfmaTrans}}
+    \\coordinate (C TL) at ($(C TL)+(.5*\\gap+1.2*\\nonTrans*\\gap+\\groups*{kWidth}*\\elem, 0)$);
+    \\drawMFMAInstr{{{mfmaNonKDim}}}{{{kWidth}}}{{\\mfmaTrans}}
 
   \\end{{tikzpicture}}
 \\end{{document}}'''
@@ -42,7 +42,7 @@ def draw_blocked_layout_cmd(M, K, sizePerThread, threadsPerWarp, warpsPerCTA, or
 \\end{{document}}'''
 
 
-def draw_lds_access_cmd(M, K, kpack, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp):
+def draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp):
     if ldsLayout == 'swizzle':
         hasSwizzle = 1
     elif ldsLayout == 'padding':
@@ -62,7 +62,7 @@ def draw_lds_access_cmd(M, K, kpack, ldsLayout, ldsAccess, sizePerThread, thread
     \\def\\scale{{1}}
     \\def\\M{{{M}}}
     \\def\\K{{{K}}}
-    \\def\\vec{{{kpack}}}
+    \\def\\vec{{{kWidth}}}
     \\def\\hasSwizzle{{{hasSwizzle}}}
     \\def\\accessMode{{{accessMode}}}
 
@@ -112,7 +112,7 @@ def parse_args():
     parser.add_argument("-warpsPerCTA", type=int, nargs=2, default=(1, 4))
     parser.add_argument("-order", type=int, nargs=2, default=(1, 0))
     ## LDS access parameters
-    parser.add_argument("-kWidth", type=int, default=4, choices=[4, 8, 16], help='number of elements per thread')
+    parser.add_argument("-kWidth", type=int, default=4, choices=[4, 8, 16, 32], help='number of contiguous elements per thread')
     parser.add_argument("-lds_layout", type=str, default="none", choices=['swizzle', 'padding', 'none'],
                         help='choose the LDS data layout')
     parser.add_argument("-lds_access", type=str, default="none", choices=['read', 'write', 'none'],
@@ -138,7 +138,7 @@ def main():
     K = shape[2]
     plot_mode = args.plot
     mfmaNonKDim = args.nonKDim
-    kpack = args.kWidth
+    kWidth = args.kWidth
     trans = 1 if args.mfmaTrans else 0
     ofilename = args.o
     keepSrc = args.keep
@@ -167,7 +167,7 @@ def main():
         mfma_inst_str = "mfma_32x32" if mfmaNonKDim == 32 else "mfma_16x16"
         mfma_trans_str = ".trans" if trans else ""
         print(f"Plotting dot operation with shapes M={M},N={N},K={K}")
-        print("MFMA: " + mfma_inst_str + mfma_trans_str + f" kWidth = {kpack}", end=" ")
+        print("MFMA: " + mfma_inst_str + mfma_trans_str + f" kWidth = {kWidth}", end=" ")
         print(f"warpsPerCTA={warpsPerCTA}", end=" ")
         CTAShape.append(mfmaNonKDim * warpsPerCTA[0])
         CTAShape.append(mfmaNonKDim * warpsPerCTA[1])
@@ -181,10 +181,10 @@ def main():
 
     if plot_mode == 'dot':
         assert N != 0 and CTAShape[1] <= N and N % CTAShape[1] == 0, "bad tensor dimension N"
-        assert K != 0 and K % (2 * kpack) == 0, "bad tensor dimension K"
+        assert K != 0 and K % (2 * kWidth) == 0, "bad tensor dimension K"
 
     if plot_mode == 'lds':
-        print(f"Plotting LDS access for tensor M={M},K={K} with vec={kpack}")
+        print(f"Plotting LDS access for tensor M={M},K={K} with vec={kWidth}")
         if ldsAccess == 'write':
             print(f"sizePerThread={sizePerThread}, threadsPerWarp={threadsPerWarp}")
 
@@ -194,9 +194,9 @@ def main():
 
         draw_blockedLayout_str = draw_blocked_layout_cmd(M, K, sizePerThread, threadsPerWarp, warpsPerCTA, order)
 
-        draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kpack)
+        draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth)
 
-        draw_lds_str = draw_lds_access_cmd(M, K, kpack, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp)
+        draw_lds_str = draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp)
 
         draw_wmma_str = draw_wmma_instr_cmd(waveSize)
 
