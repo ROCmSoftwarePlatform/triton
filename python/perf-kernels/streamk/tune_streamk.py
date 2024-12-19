@@ -9,8 +9,9 @@ import glob
 import torch
 import triton
 import triton.language as tl
+import importlib
 
-from streamk_kernel import streamk_gemm
+#from streamk_kernel import streamk_gemm
 
 from datetime import datetime
 import multiprocessing
@@ -377,8 +378,8 @@ def gen_rotating_tensors(M, N, K, dtype_a, need_Trans_a, dtype_b, need_Trans_b, 
     return in_outs
 
 
-def matmul(a, b, c, bias, P, locks, num_sms, block_m, block_n, block_k, group_m, num_warps, num_stages, waves_per_eu,
-           mfmaInstrSize, kpack, use_bias):
+def matmul(kernel_func, a, b, c, bias, P, locks, num_sms, block_m, block_n, block_k, group_m, num_warps, num_stages,
+           waves_per_eu, mfmaInstrSize, kpack, use_bias):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     #assert a.is_contiguous(), "Matrix A must be contiguous"
@@ -396,7 +397,7 @@ def matmul(a, b, c, bias, P, locks, num_sms, block_m, block_n, block_k, group_m,
     streamk_tiles = m_tiles * n_tiles % num_sms
     # change num_xcds = 1 if using MI250
     num_xcds = 8
-    streamk_gemm[
+    kernel_func[
         grid,
     ](a, b, c, bias, P, locks, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1),
       stride_bias=stride_bias, BLOCK_SIZE_M=block_m, BLOCK_SIZE_N=block_n, BLOCK_SIZE_K=block_k, GROUP_SIZE_M=group_m,
@@ -405,7 +406,8 @@ def matmul(a, b, c, bias, P, locks, num_sms, block_m, block_n, block_k, group_m,
     return c
 
 
-def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, config, bias_vector, verbose):
+def test_correctness(kernel_func, M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, config, bias_vector,
+                     verbose):
     block_m, block_n, block_k, group_m, num_sms, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(
         config)
     use_bias = bias_vector
@@ -423,8 +425,8 @@ def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     c = torch.zeros((M, N), device=a.device, dtype=tl_to_torch_types[name_to_tl_types[dtype_c]])
     locks = torch.zeros((num_sms, ), device="cuda", dtype=torch.int32)
     P = torch.zeros((num_sms, block_m * block_n), device="cuda", dtype=torch.float32)
-    triton_output = matmul(a, b, c, bias, P, locks, num_sms, block_m, block_n, block_k, group_m, num_warps, num_stages,
-                           waves_per_eu, mfmaInstrSize, kpack, use_bias)
+    triton_output = matmul(kernel_func, a, b, c, bias, P, locks, num_sms, block_m, block_n, block_k, group_m, num_warps,
+                           num_stages, waves_per_eu, mfmaInstrSize, kpack, use_bias)
     torch_output = torch.matmul(a_fp16, b_fp16)
     if use_bias:
         torch_output += bias_fp16[:, None]
@@ -435,7 +437,7 @@ def test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     size_str = ''
     if verbose:
         size_str = f'SIZE M: {M}, N: {N}, K: {K}, trans: {row_a_str}{row_b_str}'
-    print(f'{size_str} correctness check')
+    print(f'{kernel_func} {size_str} correctness check')
     torch.testing.assert_close(triton_output.to(torch.float16), torch_output, atol=atol, rtol=rtol)
     print(f'{size_str} Correct✅')
 
@@ -446,6 +448,8 @@ def parse_args():
         allow_abbrev=False,
     )
 
+    parser.add_argument('--kernel', default='streamk_kernel, streamk_gemm',
+                        help='can specify different kernel file name')
     parser.add_argument("-m", type=int, default=0)
     parser.add_argument("-n", type=int, default=0)
     parser.add_argument("-k", type=int, default=0)
@@ -542,6 +546,13 @@ def get_rocm_version():
 
 def main():
     args = parse_args()
+    # parse kernel file and kernel function name
+    module_name, kernel_name = args.kernel.split(',')
+    module_name = module_name.strip()
+    kernel_name = kernel_name.strip()
+    module = importlib.import_module(module_name)
+    kernel_func = getattr(module, kernel_name)
+
     matrix_size_file = args.gemm_size_file
     output_file = args.o
     keepTmp = args.keep
@@ -613,7 +624,8 @@ def main():
         for (M, N, K, col_a, col_b, myConfig) in mnks:
             if myConfig is None:
                 raise Exception("kernel config is None, need to provide a tuning config")
-            test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, myConfig, bias_vector, True)
+            test_correctness(kernel_func, M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, myConfig,
+                             bias_vector, True)
         return
 
     configs_full = get_full_tuning_space()
