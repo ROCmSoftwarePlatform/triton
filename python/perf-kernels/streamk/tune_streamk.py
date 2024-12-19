@@ -11,8 +11,6 @@ import triton
 import triton.language as tl
 import importlib
 
-#from streamk_kernel import streamk_gemm
-
 from datetime import datetime
 import multiprocessing
 import pandas as pd
@@ -207,9 +205,9 @@ def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose):
     os.environ['ROCR_VISIBLE_DEVICES'] = str(gpuid)
     jobId = gpuIdx
     while jobId < jobs:
-        kernel_name = get_filename_profile_driver(M, N, K, jobId)
+        kernelname = get_filename_profile_driver(M, N, K, jobId)
         if verbose:
-            print(f"profiling {kernel_name} on GPU {gpuid}")
+            print(f"profiling {kernelname} on GPU {gpuid}")
         run_bash_command_wrapper(
             f"rocprof --stats -o results_{jobId}.csv python {get_filename_profile_driver(M, N, K, jobId)}",
             #            f"rocprofv2 --plugin file --plugin-version 1 --kernel-trace -o {jobId} python {get_filename_profile_driver(M, N, K, jobId)}",
@@ -218,15 +216,15 @@ def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose):
 
 
 def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, dtype_p, dtype_lock, init_type, configs,
-                     run_bench, jobs, iters, skipWarmup, verbose=0, num_threads=32, gpus=[0], rotating_buffer_size=256,
-                     bias_size=0, icache_flush=False):
+                     run_bench, jobs, iters, skipWarmup, module_name, kernel_name, verbose=0, num_threads=32, gpus=[0],
+                     rotating_buffer_size=256, bias_size=0, icache_flush=False):
 
     # precompile the kernels in parallel
     start_time = datetime.now()
     if not skipWarmup:
         # Generate kernel out of all configs
         fname = generate_compile_driver(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, dtype_p, dtype_lock,
-                                        init_type, configs, rotating_buffer_size, bias_size)
+                                        init_type, configs, rotating_buffer_size, bias_size, kernel_name)
 
         run_bash_command(f"python {fname} -n {num_threads}", capture=(verbose < 2))
     compile_end = datetime.now()
@@ -236,7 +234,8 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, dtype_p, 
 
     # Generate kernels out of all configs
     generate_profile_tasks(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, dtype_p, dtype_lock, init_type, configs,
-                           jobs, iters, run_bench, rotating_buffer_size, bias_size, icache_flush)
+                           jobs, iters, run_bench, rotating_buffer_size, bias_size, icache_flush, module_name,
+                           kernel_name)
 
     # profile generated kernels
     running = [
@@ -490,11 +489,6 @@ def parse_args():
     parser.add_argument("--hack_triton_compiler", action='store_true', default=False,
                         help="Modify the triton source to avoid backend query")
     args = parser.parse_args()
-    if not args.o:
-        if args.benchmark:
-            args.o = "benchmarking_results.csv"
-        else:
-            args.o = get_default_tuning_result_filename()
 
     return args
 
@@ -552,6 +546,13 @@ def main():
     kernel_name = kernel_name.strip()
     module = importlib.import_module(module_name)
     kernel_func = getattr(module, kernel_name)
+
+    if not args.o:
+        if args.benchmark:
+            args.o = f"benchmarking_results_{kernel_name}.csv"
+        else:
+            default_name = get_default_tuning_result_filename()
+            args.o = f"{kernel_name}_{default_name}"
 
     matrix_size_file = args.gemm_size_file
     output_file = args.o
@@ -670,7 +671,7 @@ def main():
         configs += delta_configs
 
         ## Append new configs into the tuning space
-        generate_matmul_kernels(delta_configs)
+        generate_matmul_kernels(delta_configs, module_name, kernel_name)
 
         row_a_str = 'N' if col_a else 'T'
         row_b_str = 'N' if col_b else 'T'
@@ -691,8 +692,9 @@ def main():
         bias_size = M if bias_vector else 0
         minTime, bestConfig, compile_time, profile_time, post_time = tune_gemm_config(
             M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, dtype_p, dtype_lock, init_type, pruned_configs, run_bench,
-            jobs, iters, skipWarmup, num_threads=args.num_threads, gpus=gpus, verbose=verbose_level,
-            rotating_buffer_size=rotating_buffer_size, bias_size=bias_size, icache_flush=icache_flush)
+            jobs, iters, skipWarmup, module_name, kernel_name, num_threads=args.num_threads, gpus=gpus,
+            verbose=verbose_level, rotating_buffer_size=rotating_buffer_size, bias_size=bias_size,
+            icache_flush=icache_flush)
 
         # post processing the numbers
         perf_tflops = lambda us: 2 * M * N * K * 1e-12 / (us * 1e-6)
