@@ -109,7 +109,6 @@ def _moe_align_block_size(topk_ids: torch.Tensor, num_experts: int, top_k: int, 
                           num_tokens_post_pad: torch.Tensor) -> None:
     M, top_k = topk_ids.shape
 
-    # 1) Build a list of tokens for each expert
     expert_to_tokens = [[] for _ in range(num_experts)]
     # For each token, for each selected expert, we append (token_id, expert)
     for token_id in range(M):
@@ -117,7 +116,7 @@ def _moe_align_block_size(topk_ids: torch.Tensor, num_experts: int, top_k: int, 
             e_id = topk_ids[token_id, j].item()
             expert_to_tokens[e_id].append(token_id * top_k + j)
 
-    # 2) Reorder tokens block by block, padding if needed
+    # Reorder tokens block by block, padding if needed
     reordered_token_ids = []
     reordered_expert_ids = []
 
@@ -141,8 +140,7 @@ def _moe_align_block_size(topk_ids: torch.Tensor, num_experts: int, top_k: int, 
 
     token_length = len(reordered_token_ids)
     expert_length = len(reordered_expert_ids)
-    # 3) Write data back in-place into sorted_token_ids, expert_ids
-    #    sorted_token_ids / expert_ids are expected to have shape >= [M*top_k]
+
     sorted_token_ids[:token_length] = torch.tensor(reordered_token_ids, dtype=sorted_token_ids.dtype,
                                                    device=sorted_token_ids.device)
     expert_ids[:expert_length] = torch.tensor(reordered_expert_ids, dtype=expert_ids.dtype, device=expert_ids.device)
@@ -153,7 +151,6 @@ def _moe_align_block_size(topk_ids: torch.Tensor, num_experts: int, top_k: int, 
     if expert_length < expert_ids.numel():
         expert_ids[expert_length:] = -1
 
-    # 4) Set num_tokens_post_pad to the new total length
     num_tokens_post_pad.fill_(token_length)
 
 
@@ -191,7 +188,6 @@ def moe_align_block_size(topk_ids: torch.Tensor, block_size: int,
     expert_ids = torch.empty((topk_ids.numel() + num_experts, ), dtype=torch.int32, device=topk_ids.device)
     sorted_ids.fill_(topk_ids.numel())
     num_tokens_post_pad = torch.empty((1), dtype=torch.int32, device=topk_ids.device)
-    # TODO do we need to predefine the vars? may be they can be defined in the function and reurned
     _moe_align_block_size(topk_ids, num_experts, top_k, block_size, sorted_ids, expert_ids, num_tokens_post_pad)
 
     return sorted_ids, expert_ids, num_tokens_post_pad
@@ -295,7 +291,6 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, topk_weights: to
 
 
 def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool):
-    # TODO get config type once quantization is enabled
     a = torch.randn((M, K), dtype=torch.float32, device='cuda')
     b = torch.randn((E, N, K), dtype=torch.float32, device='cuda')
     c = torch.zeros((M, top_k, N), dtype=torch.float32, device='cuda')
@@ -359,8 +354,10 @@ def get_configs():
     configs = [
         {"M": 1024, "K": 128, "N": 256, "E": 8, "top_k": 2},
         {"M": 1024, "K": 1024, "N": 1792, "E": 8, "top_k": 2},
+        {"M": 1024, "K": 4096, "N": 7168, "E": 8, "top_k": 2},
+        {"M": 4096, "K": 4096, "N": 7168, "E": 8, "top_k": 1},
+        {"M": 4096, "K": 4096, "N": 7168, "E": 8, "top_k": 2},
         {"M": 1024, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 2048, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
         {"M": 4096, "K": 4096, "N": 14336, "E": 8, "top_k": 1},
         {"M": 4096, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
     ]
@@ -371,18 +368,12 @@ def run_benchmark(custom, args):
     print_time = args.return_time
     routed_weight = args.routed_weight
     if custom:
-        # User provides custom M,K,N,E,top_k via arguments
-        # Ensure all are provided
         assert args.M and args.K and args.N and args.E and args.top_k, \
             "Please provide M, K, N, E, top_k for custom runs."
         configs = [{"M": args.M, "K": args.K, "N": args.N, "E": args.E, "top_k": args.top_k}]
     else:
         configs = get_configs()
 
-    # We'll create a Benchmark with multiple X values from the configs
-    # We'll treat each config as a separate run.
-    # x_names: We'll vary M, K, N, E, top_k as parameters.
-    # line_arg: We'll compare routed_weight = True vs False
     x_names = ['M', 'K', 'N', 'E', 'top_k']
     x_vals_list = [(cfg['M'], cfg['K'], cfg['N'], cfg['E'], cfg['top_k']) for cfg in configs]
 
@@ -395,20 +386,15 @@ def run_benchmark(custom, args):
 
     @triton.testing.perf_report([benchmark])
     def bench_moe_gemm(M, K, N, E, top_k, routed_weight, print_time, provider):
-        # Create input tensors
         a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
             M, K, N, top_k, E, routed_weight=routed_weight)
 
-        # Compute FLOPs
-        # For each of the M tokens, we pick top_k experts and perform a [K, N] GEMM (K*N multiplications and additions)
-        # FLOPs ~ 2 * M * top_k * K * N (2 for multiply-add)
         flops = 2.0 * M * top_k * K * N
         if routed_weight:
             flops += M * top_k * N
 
         fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
                               config)
-        # ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         ms = triton.testing.do_bench(fn)
 
         if print_time:
