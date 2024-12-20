@@ -9,6 +9,7 @@ import functools
 import argparse
 import sys
 
+
 @triton.jit
 def moe_gemm_kernel(
     A,
@@ -277,8 +278,9 @@ def get_config_dtype_str(dtype: torch.dtype, use_int8_w8a16: Optional[bool] = Fa
     return None
 
 
-def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, topk_weights: torch.Tensor,
-             topk_ids: torch.Tensor, sorted_token_ids: torch.Tensor, expert_ids: torch.Tensor, num_tokens_post_padded: torch.Tensor, config) -> None:
+def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
+             sorted_token_ids: torch.Tensor, expert_ids: torch.Tensor, num_tokens_post_padded: torch.Tensor,
+             config) -> None:
 
     _, top_k = topk_ids.shape
 
@@ -334,7 +336,8 @@ def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool
 @pytest.mark.parametrize('routed_weight', [True, False])
 def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool):
     torch.manual_seed(20)
-    a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(M, K, N, top_k, E, routed_weight=routed_weight)
+    a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
+        M, K, N, top_k, E, routed_weight=routed_weight)
 
     # TODO Quantization support
     tri_out = moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config)
@@ -351,10 +354,11 @@ def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: 
     # Validate correctness
     torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=1e-2)
 
+
 def get_configs():
     configs = [
-        {"M": 1024, "K": 128, "N": 256, "E": 8,  "top_k": 2},
-        {"M": 1024, "K": 1024, "N": 1792, "E": 8,  "top_k": 2},
+        {"M": 1024, "K": 128, "N": 256, "E": 8, "top_k": 2},
+        {"M": 1024, "K": 1024, "N": 1792, "E": 8, "top_k": 2},
         {"M": 1024, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
         {"M": 2048, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
         {"M": 4096, "K": 4096, "N": 14336, "E": 8, "top_k": 1},
@@ -384,31 +388,26 @@ def run_benchmark(custom, args):
 
     line_names = 'Time (ms)' if print_time else 'TFLOPS'
 
-    benchmark = triton.testing.Benchmark(
-        x_names=x_names,
-        x_vals=x_vals_list,
-        line_arg='provider',
-        line_vals=['triton'],
-        line_names=[line_names],
-        styles=[('red', '-'), ('blue', '-')],
-        ylabel='ms',
-        plot_name='moe-gemm-benchmark',
-        args={'print_time': print_time, 'routed_weight': routed_weight}
-    )
+    benchmark = triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'],
+                                         line_names=[line_names], styles=[('red', '-'), ('blue', '-')], ylabel='ms',
+                                         plot_name='moe-gemm-benchmark',
+                                         args={'print_time': print_time, 'routed_weight': routed_weight})
 
     @triton.testing.perf_report([benchmark])
     def bench_moe_gemm(M, K, N, E, top_k, routed_weight, print_time, provider):
         # Create input tensors
-        a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(M, K, N, top_k, E, routed_weight=routed_weight)
+        a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
+            M, K, N, top_k, E, routed_weight=routed_weight)
 
         # Compute FLOPs
         # For each of the M tokens, we pick top_k experts and perform a [K, N] GEMM (K*N multiplications and additions)
         # FLOPs ~ 2 * M * top_k * K * N (2 for multiply-add)
         flops = 2.0 * M * top_k * K * N
         if routed_weight:
-            flops +=  M * top_k * N
+            flops += M * top_k * N
 
-        fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config)
+        fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
+                              config)
         # ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         ms = triton.testing.do_bench(fn)
 
@@ -419,6 +418,7 @@ def run_benchmark(custom, args):
             return flops / ms * 1e-9
 
     bench_moe_gemm.run(save_path=".", print_data=True)
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -431,10 +431,10 @@ def parse_args():
     parser.add_argument("-E", type=int, default=0, help="Number of experts")
     parser.add_argument("-top_k", type=int, default=0, help="top_k experts per token")
     parser.add_argument("-routed_weight", action='store_true', default=False)
-    parser.add_argument("-return_time", action='store_true', default=False,
-                        help='Return time instead of TFLOPs')
+    parser.add_argument("-return_time", action='store_true', default=False, help='Return time instead of TFLOPs')
     args = parser.parse_args()
     return args
+
 
 def main():
     args = parse_args()
@@ -443,6 +443,7 @@ def main():
     if args.M and args.K and args.N and args.E and args.top_k:
         custom_config = True
     run_benchmark(custom_config, args)
+
 
 if __name__ == '__main__':
     sys.exit(main())
