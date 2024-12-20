@@ -551,8 +551,7 @@ def main():
         if args.benchmark:
             args.o = f"benchmarking_results_{kernel_name}.csv"
         else:
-            default_name = get_default_tuning_result_filename()
-            args.o = f"{kernel_name}_{default_name}"
+            args.o = get_default_tuning_result_filename(kernel_name)
 
     matrix_size_file = args.gemm_size_file
     output_file = args.o
@@ -715,9 +714,9 @@ def main():
 
         sizeDict = {'M': M, 'N': N, 'K': K, 'rowMajorA': row_a_str, 'rowMajorB': row_b_str}
         sizeDict.update(bestConfig)
+        sizeDict.update({'TFLOPS': formatted_tflops, 'time(us)': minTime})
         if not run_bench:
             f_results.write("- " + str(sizeDict) + " ")
-            f_results.write(f'# TFLOPS: {formatted_tflops} time(us): {minTime}\n')
 
         # remove generated files if asked to
         if not keepTmp:
