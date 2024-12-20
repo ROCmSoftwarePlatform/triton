@@ -100,8 +100,6 @@ def moe_gemm_kernel(
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     out_ptrs = Out + stride_cm * offs_token[:, None] + stride_cn * offs_cn[None, :]
     c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
-    # TODO why it doesn't do accumulation over experts???
-    # tl.store(out_ptrs, accumulator, mask=c_mask)
     tl.store(out_ptrs, accumulator, mask=c_mask)
 
 
@@ -252,7 +250,7 @@ def try_get_optimal_moe_config(
     M: int,
     is_marlin: bool = False,
 ):
-    E, K, N = b_shape
+    E, N, K = b_shape
     configs = get_moe_configs(E, N, dtype)
 
     if configs:
@@ -262,6 +260,7 @@ def try_get_optimal_moe_config(
     else:
         # Else use the default config
         config = get_default_config(M, E, N, K, top_k, dtype, is_marlin)
+
     return config
 
 
@@ -279,21 +278,9 @@ def get_config_dtype_str(dtype: torch.dtype, use_int8_w8a16: Optional[bool] = Fa
 
 
 def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, topk_weights: torch.Tensor,
-             topk_ids: torch.Tensor) -> None:
-    # TODO get config type once quantization is enabled
-    config_dtype = None
-    get_config_func = functools.partial(
-        try_get_optimal_moe_config,
-        b.shape,
-        topk_ids.shape[1],
-        config_dtype,
-    )
-    M, top_k = topk_ids.shape
-    E, _, _ = b.shape
+             topk_ids: torch.Tensor, sorted_token_ids: torch.Tensor, expert_ids: torch.Tensor, num_tokens_post_padded: torch.Tensor, config) -> None:
 
-    config = get_config_func(M)
-
-    sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size(topk_ids, config['BLOCK_SIZE_M'], E)
+    _, top_k = topk_ids.shape
 
     EM = num_tokens_post_padded.item()
     _, N, K = b.shape
@@ -306,6 +293,7 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, topk_weights: to
 
 
 def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool):
+    # TODO get config type once quantization is enabled
     a = torch.randn((M, K), dtype=torch.float32, device='cuda')
     b = torch.randn((E, N, K), dtype=torch.float32, device='cuda')
     c = torch.zeros((M, top_k, N), dtype=torch.float32, device='cuda')
@@ -315,16 +303,25 @@ def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool
     softmax_vals = torch.softmax(values, dim=1)
     topk_weights, topk_ids = torch.topk(softmax_vals, k=top_k, dim=1)
 
-    if not routed_weight:
-        return a, b, c, None, topk_ids
+    config_dtype = None
+    get_config_func = functools.partial(
+        try_get_optimal_moe_config,
+        b.shape,
+        topk_ids.shape[1],
+        config_dtype,
+    )
+    config = get_config_func(M)
+    sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size(topk_ids, config['BLOCK_SIZE_M'], E)
 
-    return a, b, c, topk_weights, topk_ids
+    if not routed_weight:
+        return a, b, c, None, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config
+
+    return a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config
 
 
 # TODO assert the input shape
-
-
 @pytest.mark.parametrize("M, K, N, top_k, E", [
+    (64, 4096, 14336, 2, 8),
     (16, 1, 14336, 2, 4),
     (1, 128, 14336, 2, 4),
     (16, 128, 14336, 1, 4),
@@ -337,10 +334,10 @@ def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool
 @pytest.mark.parametrize('routed_weight', [True, False])
 def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool):
     torch.manual_seed(20)
-    a, b, c, topk_weights, topk_ids = input_helper(M, K, N, top_k, E, routed_weight=routed_weight)
+    a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(M, K, N, top_k, E, routed_weight=routed_weight)
 
     # TODO Quantization support
-    tri_out = moe_gemm(a, b, c, topk_weights, topk_ids)
+    tri_out = moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config)
 
     ref_out = torch.empty_like(c)
     # Repeat a -> (M, top_k, K)
@@ -356,29 +353,12 @@ def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: 
 
 def get_configs():
     configs = [
-        # Small-Scale Configurations
-        {"M": 1, "K": 128, "N": 256, "E": 32,  "top_k": 1},
-        {"M": 1, "K": 128, "N": 256, "E": 32,  "top_k": 2},
-        # {"M": 1, "K": 1024, "N": 256, "E": 32,  "top_k": 1},
-
-        # # Medium-Scale Configurations
-        # {"M": 2048, "K": 2048, "N": 2048, "E": 64,  "top_k": 1},
-        # {"M": 2048, "K": 2048, "N": 2048, "E": 128, "top_k": 1},
-        # {"M": 2048, "K": 2048, "N": 2048, "E": 64,  "top_k": 2},
-
-        # # Large-Scale Configurations
-        # {"M": 4096, "K": 4096, "N": 4096, "E": 128, "top_k": 1},
-        # {"M": 4096, "K": 4096, "N": 4096, "E": 256, "top_k": 1},
-        # {"M": 4096, "K": 4096, "N": 4096, "E": 128, "top_k": 2},
-
-        # # Very Large-Scale Configuration
-        # {"M": 8192, "K": 2048, "N": 2048, "E": 64,  "top_k": 2},
-
-        # Mixtral
-        # {"M": 64, "K": 4096, "N": 1792, "E": 128, "top_k": 2}
-        # {"M": 64, "K": 4096, "N": 3584, "E": 128, "top_k": 2}
-        # {"M": 64, "K": 4096, "N": 7168, "E": 128, "top_k": 2}
-        # {"M": 64, "K": 4096, "N": 14336, "E": 128, "top_k": 2}
+        {"M": 1024, "K": 128, "N": 256, "E": 8,  "top_k": 2},
+        {"M": 1024, "K": 1024, "N": 1792, "E": 8,  "top_k": 2},
+        {"M": 1024, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
+        {"M": 2048, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
+        {"M": 4096, "K": 4096, "N": 14336, "E": 8, "top_k": 1},
+        {"M": 4096, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
     ]
     return configs
 
@@ -419,17 +399,16 @@ def run_benchmark(custom, args):
     @triton.testing.perf_report([benchmark])
     def bench_moe_gemm(M, K, N, E, top_k, routed_weight, print_time, provider):
         # Create input tensors
-        a, b, c, topk_weights, topk_ids = input_helper(M, K, N, top_k, E, routed_weight=routed_weight)
+        a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(M, K, N, top_k, E, routed_weight=routed_weight)
 
         # Compute FLOPs
         # For each of the M tokens, we pick top_k experts and perform a [K, N] GEMM (K*N multiplications and additions)
         # FLOPs ~ 2 * M * top_k * K * N (2 for multiply-add)
         flops = 2.0 * M * top_k * K * N
+        if routed_weight:
+            flops +=  M * top_k * N
 
-        warmup = 25
-        rep = 100
-
-        fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids)
+        fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config)
         # ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         ms = triton.testing.do_bench(fn)
 
