@@ -55,9 +55,6 @@ import triton.language as tl"""
     with open(module_path, "r") as file:
         matmul_kernel_code = file.read()
 
-#    with open(os.path.dirname(os.path.abspath(__file__)) + "/../streamk_kernel.py") as file:
-#        matmul_kernel_code = file.read()
-
     for config in configs:
         configStr = gen_configStr(config)
         # Copy the matmul_kernel with name replaced
@@ -302,9 +299,6 @@ from icache_flush import icache_flush
 """
     for fi in range(jobs):
         f_kernel[fi].write(import_str + "\n")
-
-#    with open("streamk_kernel.py") as file:
-#        streamk_gemm_code = file.read()
 
     module_path = f"{module_name}.py"
     with open(module_path, "r") as file:
