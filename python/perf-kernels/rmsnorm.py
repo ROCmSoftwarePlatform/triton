@@ -2,6 +2,7 @@ import argparse
 import torch
 import sys
 import pytest
+from itertools import product
 
 import triton
 import triton.language as tl
@@ -15,6 +16,13 @@ def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
+def get_num_sms():
+    current_device_index = torch.cuda.current_device()
+    current_device = torch.cuda.get_device_properties(current_device_index)
+    num_sms = current_device.multi_processor_count
+    return num_sms
+
+
 def get_cuda_autotune_config():
     return [
         triton.Config({}, num_warps=4, num_stages=1),
@@ -24,17 +32,7 @@ def get_cuda_autotune_config():
 
 
 def get_hip_autotune_config():
-    return [
-        triton.Config({'waves_per_eu': 1}, num_warps=4, num_stages=1),
-        triton.Config({'waves_per_eu': 1}, num_warps=8, num_stages=1),
-        triton.Config({'waves_per_eu': 1}, num_warps=16, num_stages=1),
-        triton.Config({'waves_per_eu': 2}, num_warps=4, num_stages=1),
-        triton.Config({'waves_per_eu': 2}, num_warps=8, num_stages=1),
-        triton.Config({'waves_per_eu': 2}, num_warps=16, num_stages=1),
-        triton.Config({'waves_per_eu': 4}, num_warps=4, num_stages=1),
-        triton.Config({'waves_per_eu': 4}, num_warps=8, num_stages=1),
-        triton.Config({'waves_per_eu': 4}, num_warps=16, num_stages=1),
-    ]
+    return [triton.Config({'waves_per_eu': we}, num_warps=nw) for (we, nw) in product([0, 1, 2, 4], [4, 8, 16])]
 
 
 def get_autotune_config():
@@ -47,40 +45,85 @@ def get_autotune_config():
 @triton.autotune(configs=get_autotune_config(), key=['n_rows', 'n_cols'], use_cuda_graph=True)
 @triton.jit
 def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride, n_rows, n_cols, epsilon,
-               BLOCK_SIZE: tl.constexpr):
+               BLOCK_SIZE: tl.constexpr, USE_BLOCKED: tl.constexpr, NUM_PRGMS: tl.constexpr):
     row_start = tl.program_id(0)
-    row_step = tl.num_programs(0)
     col_offsets = tl.arange(0, BLOCK_SIZE)
-    mask = col_offsets < n_cols
-    for row_idx in tl.range(row_start, n_rows, row_step):
-        row_start_ptr = input_ptr + row_idx * input_row_stride
-        input_ptrs = row_start_ptr + col_offsets
-        input_ptrs = tl.multiple_of(input_ptrs, (16, ))
-        row = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg")
-        g = tl.load(g_ptr + col_offsets, mask=mask, other=0.0)
-        row_norm = row * row  #square each value
-        row_norm = tl.sum(row_norm, axis=-1)  #sum across columns(axis=-1)
-        row_norm = row_norm / n_cols  #divide by n_cols
-        row_norm = row_norm + epsilon  #add epsilon
-        row_norm = tl.rsqrt(row_norm)  #take rsqrt, this is normalization value
-        rms_norm = row * row_norm  #multiply each x by normalization value
-        rms_norm = rms_norm * g  #element wise multiplication with g
+    tl.assume(input_row_stride >= 0)
+    tl.assume(output_row_stride >= 0)
+    tl.assume(row_start >= 0)
 
-        output_row_start_ptr = output_ptr + row_idx * output_row_stride
-        output_ptrs = output_row_start_ptr + col_offsets
-        output_ptrs = tl.multiple_of(output_ptrs, (16, ))
-        tl.store(output_ptrs, rms_norm, mask=mask)
+    if USE_BLOCKED:
+
+        # Persistent loop for rows
+        for row_idx in tl.range(row_start, n_rows, NUM_PRGMS, num_stages=1):
+            row_input_ptr = input_ptr + row_idx * input_row_stride
+            row_output_ptr = output_ptr + row_idx * output_row_stride
+
+            # Accumulate sum of squares
+            sum_squares = tl.zeros([1], dtype=tl.float32)
+            n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
+            for blk_idx in tl.range(0, n_cols_blks, num_stages=2):
+                cols = blk_idx * BLOCK_SIZE + col_offsets
+                input_ptrs = row_input_ptr + cols
+                input_ptrs = tl.multiple_of(input_ptrs, (16, ))
+                x = tl.load(input_ptrs).to(tl.float32)
+                sum_squares += tl.sum(x * x, axis=0)
+
+            # Handle remainder
+            cols = n_cols_blks * BLOCK_SIZE + col_offsets
+            mask = cols < n_cols
+            input_ptrs = row_input_ptr + cols
+            input_ptrs = tl.multiple_of(input_ptrs, (16, ))
+            x = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg").to(tl.float32)
+            sum_squares += tl.sum(x * x, axis=0)
+
+            # Compute normalization factor
+            mean_square = sum_squares / n_cols
+            norm_factor = tl.rsqrt(mean_square + epsilon)
+
+            # Normalize and write output
+            for blk_idx in tl.range(0, n_cols_blks, num_stages=2):
+                cols = blk_idx * BLOCK_SIZE + col_offsets
+                input_ptrs = row_input_ptr + cols
+                input_ptrs = tl.multiple_of(input_ptrs, (16, ))
+                x = tl.load(input_ptrs).to(tl.float32)
+                g_ptrs = g_ptr + cols
+                g = tl.load(g_ptrs).to(tl.float32)
+                rms_norm = x * norm_factor * g
+                output_ptrs = row_output_ptr + cols
+                tl.store(output_ptrs, rms_norm.to(output_ptr.type.element_ty))
+
+            # Handle remainder
+            cols = n_cols_blks * BLOCK_SIZE + col_offsets
+            mask = cols < n_cols
+            input_ptrs = row_input_ptr + cols
+            x = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg").to(tl.float32)
+            g_ptrs = g_ptr + cols
+            g = tl.load(g_ptrs, mask=mask, other=0.0).to(tl.float32)
+            rms_norm = x * norm_factor * g
+            output_ptrs = row_output_ptr + cols
+            tl.store(output_ptrs, rms_norm.to(output_ptr.type.element_ty), mask=mask)
+
+    else:
+        mask = col_offsets < n_cols
+        for row_idx in tl.range(row_start, n_rows, NUM_PRGMS, num_stages=2):
+            input_ptrs = input_ptr + row_idx * input_row_stride + col_offsets
+            input_ptrs = tl.multiple_of(input_ptrs, (16, ))
+            row = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg").to(tl.float32)
+            g = tl.load(g_ptr + col_offsets, mask=mask, other=0.0).to(tl.float32)
+            row_norm = row * row
+            row_norm = tl.sum(row_norm, axis=-1)
+            row_norm = tl.math.rsqrt((row_norm / n_cols) + epsilon)
+            rms_norm = row * row_norm * g
+
+            output_ptrs = output_ptr + row_idx * output_row_stride + col_offsets
+            output_ptrs = tl.multiple_of(output_ptrs, (16, ))
+            tl.store(output_ptrs, rms_norm.to(output_ptr.type.element_ty), mask=mask)
 
 
-def triton_rmsnorm(x, g, epsilon=1e-6):
-    n_rows, n_cols = x.shape
-    BLOCK_SIZE = triton.next_power_of_2(n_cols)
-
-    y = torch.empty_like(x, device='cuda')
-
-    num_programs = n_rows
-    grid = lambda meta: (num_programs, )
-    rms_kernel[grid](y, x, g, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, BLOCK_SIZE)
+def triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS, epsilon=1e-6):
+    grid = lambda meta: (NUM_PRGMS, )
+    rms_kernel[grid](y, x, g, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, blk_size, USE_BLOCKED, NUM_PRGMS)
 
     return y
 
@@ -102,13 +145,21 @@ def torch_rmsnorm(x, g):
     (8192, 4096),
     (4096, 8192),
     (1, 8192),
+    (1, 31744),
+    (3, 65536),
     (873, 1245),
 ])
 def test_rmsnorm(M, N):
     torch.manual_seed(0)
     x = torch.randn(M, N, device='cuda')
+    y = torch.zeros_like(x, device='cuda')
+    n_rows, n_cols = x.shape
+    MAX_FUSED_SIZE = 65536 // x.element_size()
+    blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
+    USE_BLOCKED = n_cols > blk_size
+    NUM_PRGMS = min(n_rows, get_num_sms())
     g = torch.ones((1, N), device='cuda')
-    y_triton = triton_rmsnorm(x, g)
+    y_triton = triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS)
 
     y_torch = torch_rmsnorm(x, g)
 
@@ -157,13 +208,24 @@ def run_benchmark(args):
     @triton.testing.perf_report(config)
     def benchmark(M, N, provider):
         x = torch.randn(M, N, device='cuda', dtype=dtype)
+        y = torch.zeros_like(x, device='cuda')
+        n_rows, n_cols = x.shape
+        MAX_FUSED_SIZE = 65536 // x.element_size()
+        blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
+        USE_BLOCKED = n_cols > blk_size
+        NUM_PRGMS = min(n_rows, get_num_sms())
         stream = torch.cuda.Stream()
         torch.cuda.set_stream(stream)
         g = torch.ones((1, N), device='cuda')
         if provider == 'torch':
             ms = triton.testing.do_bench(lambda: torch_rmsnorm(x, g))
         if provider == 'triton':
-            ms = triton.testing.do_bench(lambda: triton_rmsnorm(x, g))
+            ms = triton.testing.do_bench(
+                lambda: triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS))
+            global verbose
+            if verbose:
+                print(f'SIZE: {N} Best tuning config: ({rms_kernel.best_config})')
+                print(f'time: {ms}')
         gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
         return gbps(ms)
 
@@ -187,17 +249,26 @@ def parse_args():
 
     parser.add_argument('-d', "--dtype", default="fp16")
     parser.add_argument('-nb', "--no_benchmark", default=False, type=bool)
+    parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
 
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    global verbose
     if args.no_benchmark:
-        x = torch.randn(args.M_start, args.N_start)
+        x = torch.randn(args.M_start, args.N_start, device='cuda')
+        y = torch.zeros_like(x, device='cuda')
+        n_rows, n_cols = x.shape
+        MAX_FUSED_SIZE = 65536 // x.element_size()
+        blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
+        USE_BLOCKED = n_cols > blk_size
+        NUM_PRGMS = min(n_rows, get_num_sms())
         g = torch.ones((1, args.N_start), device='cuda')
-        triton_rmsnorm(x, g)
+        triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS)
     else:
+        verbose = args.v
         run_benchmark(args)
 
 
