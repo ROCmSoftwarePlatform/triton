@@ -31,13 +31,15 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth):
 \\end{{document}}'''
 
 
-def draw_blocked_layout_cmd(M, K, sizePerThread, threadsPerWarp, warpsPerCTA, order):
+def draw_blocked_layout_cmd(dim0, dim1, dim0Name, dim1Name, sizePerThread, threadsPerWarp, warpsPerCTA, order):
     return f'''\\begin{{document}}
   \\begin{{tikzpicture}}
     \\def\\scale{{1}}
     \\def\\elem{{0.06}}
     \\coordinate (TL) at (0,0);
-    \\drawBlockedTensor{{{M}}}{{{K}}}{{{sizePerThread[0]}}}{{{sizePerThread[1]}}}{{{threadsPerWarp[0]}}}{{{warpsPerCTA[0]}}}{{{warpsPerCTA[1]}}}{{{order[0]}}}
+    \\def\\dimColName{{{dim0Name}}}
+    \\def\\dimRowName{{{dim1Name}}}
+    \\drawBlockedTensor{{{dim0}}}{{{dim1}}}{{{sizePerThread[0]}}}{{{sizePerThread[1]}}}{{{threadsPerWarp[0]}}}{{{warpsPerCTA[0]}}}{{{warpsPerCTA[1]}}}{{{order[0]}}}
   \\end{{tikzpicture}}
 \\end{{document}}'''
 
@@ -102,17 +104,22 @@ def parse_args():
         allow_abbrev=False,
     )
     ## tensor shapes
-    parser.add_argument("-shape", type=int, nargs=3, default=(32, 128, 64), help='Tensor shape in the form of M,N,K')
+    parser.add_argument("-tensorShape", type=int, nargs=2, default=(128, 64),
+                        help='2D tensor shape in the form of dim0,dim1')
+    parser.add_argument("-dotShape", type=int, nargs=3, default=(32, 128, 64), help='Dot op shape in the form of M,N,K')
     parser.add_argument("-plot", type=str, default="blocked", choices=['blocked', 'dot', 'wmma', 'lds'],
                         help='choose plot mode')
     parser.add_argument("-nonKDim", type=int, default=32, choices=[16, 32], help='mfma instruction dim')
+    parser.add_argument("-dim0", type=str, default="M", help='tensor dim0 name')
+    parser.add_argument("-dim1", type=str, default="K", help='tensor dim1 name')
     ## blocked layout parameters
     parser.add_argument("-sizePerThread", type=int, nargs=2, default=(1, 4))
     parser.add_argument("-threadsPerWarp", type=int, nargs=2, default=(16, 4))
     parser.add_argument("-warpsPerCTA", type=int, nargs=2, default=(1, 4))
     parser.add_argument("-order", type=int, nargs=2, default=(1, 0))
     ## LDS access parameters
-    parser.add_argument("-kWidth", type=int, default=4, choices=[4, 8, 16, 32], help='number of contiguous elements per thread')
+    parser.add_argument("-kWidth", type=int, default=4, choices=[4, 8, 16, 32],
+                        help='number of contiguous elements per thread')
     parser.add_argument("-lds_layout", type=str, default="none", choices=['swizzle', 'padding', 'none'],
                         help='choose the LDS data layout')
     parser.add_argument("-lds_access", type=str, default="none", choices=['read', 'write', 'none'],
@@ -132,10 +139,15 @@ def parse_args():
 def main():
     args = parse_args()
 
-    shape = args.shape
-    M = shape[0]
-    N = shape[1]
-    K = shape[2]
+    dotShape = args.dotShape
+    M = dotShape[0]
+    N = dotShape[1]
+    K = dotShape[2]
+    tShape = args.tensorShape
+    dim0 = tShape[0]
+    dim1 = tShape[1]
+    dim0Name = args.dim0
+    dim1Name = args.dim1
     plot_mode = args.plot
     mfmaNonKDim = args.nonKDim
     kWidth = args.kWidth
@@ -155,31 +167,32 @@ def main():
 
     CTAShape = []
     if plot_mode == 'blocked':
-        print(f"Plotting tensor M={M},K={K} with blocked layout:")
-        print(f"sizePerThread={sizePerThread}", end=" ")
-        print(f"threadsPerWarp={threadsPerWarp}", end=" ")
-        print(f"warpsPerCTA={warpsPerCTA}", end=" ")
-        print(f"order={order}", end=" ")
+        print(f"Plotting tensor {dim0Name}={dim0},{dim1Name}={dim1} with blocked layout:")
+        print(f"{sizePerThread=}", end=" ")
+        print(f"{threadsPerWarp=}", end=" ")
+        print(f"{warpsPerCTA=}", end=" ")
+        print(f"{order=}", end=" ")
         CTAShape.append(sizePerThread[0] * threadsPerWarp[0] * warpsPerCTA[0])
         CTAShape.append(sizePerThread[1] * threadsPerWarp[1] * warpsPerCTA[1])
 
     if plot_mode == 'dot':
         mfma_inst_str = "mfma_32x32" if mfmaNonKDim == 32 else "mfma_16x16"
         mfma_trans_str = ".trans" if trans else ""
-        print(f"Plotting dot operation with shapes M={M},N={N},K={K}")
-        print("MFMA: " + mfma_inst_str + mfma_trans_str + f" kWidth = {kWidth}", end=" ")
-        print(f"warpsPerCTA={warpsPerCTA}", end=" ")
+        print(f"Plotting dot operation with shapes {M=},{N=},{K=}")
+        print("MFMA: " + mfma_inst_str + mfma_trans_str + f" {kWidth=}", end=" ")
+        print(f"{warpsPerCTA=}", end=" ")
         CTAShape.append(mfmaNonKDim * warpsPerCTA[0])
         CTAShape.append(mfmaNonKDim * warpsPerCTA[1])
 
     if plot_mode == 'blocked' or plot_mode == 'dot':
         print(f"CTAShape={CTAShape}")
-        assert M != 0 and CTAShape[0] <= M and M % CTAShape[0] == 0, "bad tensor dimension M"
 
     if plot_mode == 'blocked':
-        assert K != 0 and CTAShape[1] <= K and K % CTAShape[1] == 0, "bad tensor dimension K"
+        assert dim0 != 0 and CTAShape[0] <= dim0 and dim0 % CTAShape[0] == 0, "bad tensor dimension " + dim0Name
+        assert dim1 != 0 and CTAShape[1] <= dim1 and dim1 % CTAShape[1] == 0, "bad tensor dimension " + dim1Name
 
     if plot_mode == 'dot':
+        assert M != 0 and CTAShape[0] <= M and M % CTAShape[0] == 0, "bad tensor dimension M"
         assert N != 0 and CTAShape[1] <= N and N % CTAShape[1] == 0, "bad tensor dimension N"
         assert K != 0 and K % (2 * kWidth) == 0, "bad tensor dimension K"
 
@@ -192,7 +205,8 @@ def main():
         with open("tikzplot.tex") as file:
             tikz_code = file.read()
 
-        draw_blockedLayout_str = draw_blocked_layout_cmd(M, K, sizePerThread, threadsPerWarp, warpsPerCTA, order)
+        draw_blockedLayout_str = draw_blocked_layout_cmd(dim0, dim1, dim0Name, dim1Name, sizePerThread, threadsPerWarp,
+                                                         warpsPerCTA, order)
 
         draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth)
 

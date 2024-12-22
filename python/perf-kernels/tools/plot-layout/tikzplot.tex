@@ -159,6 +159,8 @@
   %%
   %% TL: pre defined top-left coordinate of the tensor
   %% \elem: pre defined variable
+  %% \dimColName: dim0Name
+  %% \dimRowName: dim1Name
   %%
   %% #1: tensorShape[0] --> M
   %% #2: tensorShape[1] --> N
@@ -193,8 +195,8 @@
     \drawBlockedCTA{\sizePerThreadM}{\sizePerThreadN}{\threadsPerWarpM}{\threadsPerWarpN}{\warpsPerCTAM}{\warpsPerCTAN}{\order}
   }
 
-  \node [scale=.7*\scale, above, rotate=90] at ($(TL)+(0, -.5*\M*\elem)$) {M=\M};
-  \node [scale=.7*\scale, above] at ($(TL)+(.5*\N*\elem, 0)$) {K=\N};
+  \node [scale=.7*\scale, above, rotate=90] at ($(TL)+(0, -.5*\M*\elem)$) {\dimColName=\M};
+  \node [scale=.7*\scale, above] at ($(TL)+(.5*\N*\elem, 0)$) {\dimRowName=\N};
 
   \def\zoomR{1.5}
   \coordinate (zoomin BL) at ($(TL)+(0, .3)$);

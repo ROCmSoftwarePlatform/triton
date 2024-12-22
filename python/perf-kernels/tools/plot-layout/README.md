@@ -41,36 +41,34 @@ sudo apt install texlive-full
 
 Examples:
 ```bash
-python3 plot_layout.py -plot blocked -shape 128 128 64 -sizePerThread 1 8 -threadsPerWarp 8 8 -warpsPerCTA 4 1
-python3 plot_layout.py -plot blocked -shape 16 128 64 -sizePerThread 1 8 -threadsPerWarp 16 4 -warpsPerCTA 1 2
-python3 plot_layout.py -plot blocked -shape 32 128 64 -sizePerThread 8 1 -threadsPerWarp 4 16 -warpsPerCTA 1 2 -order 0 1
+python3 plot_layout.py -plot blocked -tensorShape 128 64 -sizePerThread 1 8 -threadsPerWarp 8 8 -warpsPerCTA 4 1
+python3 plot_layout.py -plot blocked -tensorShape 16 64 -sizePerThread 1 8 -threadsPerWarp 16 4 -warpsPerCTA 1 2
+python3 plot_layout.py -plot blocked -tensorShape 32 64 -sizePerThread 8 1 -threadsPerWarp 4 16 -warpsPerCTA 1 2 -order 0 1
 ```
 
 Blocked layouts are used during global load. It is used to describe the layout of the tensor
 for pointers and results.
-We can provide tensor shape (`-shape M N K`) and blocked layout parameters (
+We can provide tensor shape (`-tensorShape dim0 dim1`) and blocked layout parameters (
 `-sizePerThread x y`, `-threadsPerWarp x y`, and `-warpsPerCTA x y`).
 We can also provide the order of the tensor as `-order x y` to control which dim
 is the fastest changing dimension.
 
 Notes
-- All of the gemm dims (M, N, and K) are needed when providing the shape. But only
-  M and K will be used to plot the layout of the tensor.
 - The script does not support the case when threads are loading elements that are
   out of the boundary of the tensor dimensions. This means
-  - For M: sizePerThread[0] * threadsPerWarps[0] * warpsPerCTA[0] <= M
-  - For K: sizePerThread[1] * threadsPerWarps[1] * warpsPerCTA[1] <= K
+  - For dim0: sizePerThread[0] * threadsPerWarps[0] * warpsPerCTA[0] <= dim0
+  - For dim1: sizePerThread[1] * threadsPerWarps[1] * warpsPerCTA[1] <= dim1
 
 
 ## Draw mfma operand and result layouts (`-plot dot`)
 
 Examples:
 ```bash
-python3 plot_layout.py -plot dot -shape 128 128 64 -warpsPerCTA 2 4 -nonKDim 32 -kWidth 4
-python3 plot_layout.py -plot dot -shape 128 128 64 -warpsPerCTA 2 4 -nonKDim 32 -kWidth 8
-python3 plot_layout.py -plot dot -shape 128 128 64 -warpsPerCTA 2 4 -nonKDim 32 -kWidth 8 -mfmaTrans
-python3 plot_layout.py -plot dot -shape 128 128 64 -warpsPerCTA 2 4 -nonKDim 16 -kWidth 8
-python3 plot_layout.py -plot dot -shape 128 128 64 -warpsPerCTA 2 4 -nonKDim 16 -kWidth 16
+python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 32 -kWidth 4
+python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 32 -kWidth 8
+python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 32 -kWidth 8 -mfmaTrans
+python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 16 -kWidth 8
+python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 16 -kWidth 16
 ```
 
 This mode draws two graphs:
@@ -86,7 +84,7 @@ Knobs
 
 Notes
 - The layout shows the mapping from the threads/wave to the elements in the
-  original tensor. It does not care if the elements are arranged in LDS, like
+  original tensor. It does not care if the elements are re-arranged in LDS, like
   swizzling to avoid bank conflicts.
 - The script does not allow settings for data type or k dim of the mfma instruction.
   This can be controled by the `-kWidth` flag.
