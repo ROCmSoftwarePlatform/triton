@@ -10,10 +10,6 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth):
     \\def\\scale{{1}}
     \\def\\elem{{0.04}}
     \\coordinate (C TL) at (0,0);
-    \\def\\opColorAL{{magenta}}
-    \\def\\opColorAR{{cyan}}
-    \\def\\opColorBL{{Maroon}}
-    \\def\\opColorBR{{BlueGreen}}
     \\drawDot{{{M}}}{{{N}}}{{{K}}}{{{mfmaNonKDim}}}{{{warpsPerCTA[0]}}}{{{warpsPerCTA[1]}}}{{{trans}}}{{{kWidth}}}
 
     \\coordinate (C TL) at ($(C TL)+({N}*\elem+32*\elem, 0)$);
@@ -202,8 +198,8 @@ def main():
             print(f"sizePerThread={sizePerThread}, threadsPerWarp={threadsPerWarp}")
 
     with open("myplot.tex", 'w') as f_plot:
-        with open("tikzplot.tex") as file:
-            tikz_code = file.read()
+        with open("preamble.tex") as file:
+            preamble = file.read()
 
         draw_blockedLayout_str = draw_blocked_layout_cmd(dim0, dim1, dim0Name, dim1Name, sizePerThread, threadsPerWarp,
                                                          warpsPerCTA, order)
@@ -214,14 +210,18 @@ def main():
 
         draw_wmma_str = draw_wmma_instr_cmd(waveSize)
 
-        f_plot.write(tikz_code)
+        f_plot.write(preamble)
         if plot_mode == 'blocked':
+            f_plot.write("\input{blockedLayout}\n")
             f_plot.write(draw_blockedLayout_str)
         elif plot_mode == 'dot':
+            f_plot.write("\input{dotLayout}\n")
             f_plot.write(draw_dotLayout_str)
         elif plot_mode == 'lds':
+            f_plot.write("\input{ldsLayout}\n")
             f_plot.write(draw_lds_str)
         elif plot_mode == 'wmma':
+            f_plot.write("\input{wmmaLayout}\n")
             f_plot.write(draw_wmma_str)
 
     run_bash_command(f"pdflatex -jobname {ofilename} myplot.tex")
