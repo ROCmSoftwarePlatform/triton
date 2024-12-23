@@ -5,10 +5,22 @@ import subprocess
 
 
 def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth):
+    elemSmall = 0.04
+    elemLarge = 0.16
+    if kWidth == 16:
+        ratio = 0.8
+    elif kWidth == 32:
+        ratio = 0.6
+    else:
+        ratio = 1
+    elemWidth = elemLarge * ratio
+
+    scaleLabel = 0.7 if kWidth == 4 else 1
+
     return f'''\\begin{{document}}
   \\begin{{tikzpicture}}
     \\def\\scale{{1}}
-    \\def\\elem{{0.04}}
+    \\def\\elem{{{elemSmall}}}
     \\coordinate (C TL) at (0,0);
     \\drawDot{{{M}}}{{{N}}}{{{K}}}{{{mfmaNonKDim}}}{{{warpsPerCTA[0]}}}{{{warpsPerCTA[1]}}}{{{trans}}}{{{kWidth}}}
 
@@ -16,11 +28,14 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth):
     \\def\\mfmaTrans{{{trans}}}
 
     %% Draw zoomed in view of mfma
-    \\def\\elem{{.16}}
+    \\def\\scaleLabel{{{scaleLabel}}}
+    \\pgfmathsetmacro{{\\oldElem}}{{\\elem}}
+    \\def\\elem{{{elemLarge}}}
+    \\def\\elemW{{{elemWidth}}}
     \\pgfmathsetmacro{{\\gap}}{{\\elem*5}}
     \\pgfmathsetmacro{{\\nonTrans}}{{1-\\mfmaTrans}}
     \\pgfmathsetmacro{{\\groups}}{{64/{mfmaNonKDim}}}
-    \\coordinate (C TL) at ($(C TL)+(.5*\\gap+1.2*\\nonTrans*\\gap+\\groups*{kWidth}*\\elem, 0)$);
+    \\coordinate (C TL) at ($(C TL)+(.5*\\gap+1.2*\\nonTrans*\\gap+\\groups*{kWidth}*\\elemW, -{M}*\\oldElem+{mfmaNonKDim}*\\elem)$);
     \\drawMFMAInstr{{{mfmaNonKDim}}}{{{kWidth}}}{{\\mfmaTrans}}
 
   \\end{{tikzpicture}}
