@@ -31,6 +31,7 @@ import triton.language as tl
 import model_benchmarking
 import os
 
+
 class MetaData():
     cu_seqlens_q = None
     cu_seqlens_k = None
@@ -1870,6 +1871,7 @@ def varlen_benchmark_configs():
     ]
     return configs
 
+
 def model_benchmark_configs(batch_size, seq_len):
     config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json")
     return model_benchmarking.get_FA_configs(batch_size=batch_size, seq_len=seq_len, config_file=config_file)
@@ -1986,11 +1988,8 @@ def parse_args():
     )
 
     available_models = model_benchmarking.get_available_models()  # Dynamically load model names
-    model_help = (
-        "Model name to benchmark. Select from: ["
-        + ", ".join(available_models)
-        + "]. Use 'all' to benchmark all models or leave blank for the default benchmark script."
-    )
+    model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
+                  "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
     parser.add_argument("-model", type=str, default=None, help=model_help)
     parser.add_argument("-b", type=int, default=0)
     parser.add_argument("-hq", type=int, default=0)

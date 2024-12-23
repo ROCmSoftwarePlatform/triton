@@ -306,6 +306,7 @@ def benchmark(M, N, K, provider):
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
+
 # TODO(vgokhale): Add more options to benchmarking
 
 
@@ -316,11 +317,8 @@ def parse_args():
     )
 
     available_models = model_benchmarking.get_available_models()  # Dynamically load model names
-    model_help = (
-        "Model name to benchmark. Select from: ["
-        + ", ".join(available_models)
-        + "]. Use 'all' to benchmark all models or leave blank for the default benchmark script."
-    )
+    model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
+                  "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
 
     parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
     parser.add_argument("-b", type=int, default=None)
@@ -341,7 +339,7 @@ def main():
     global verbose
     args = parse_args()
     verbose = args.v
-    
+
     if args.model:
         batch_size = args.b if args.b is not None else 1
         config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json")
@@ -350,13 +348,12 @@ def main():
             x_vals = model_benchmarking.get_mnk(batch_size=batch_size, seq_len=args.sq, config_file=config_file)
         else:
             # Benchmark a specific model
-            x_vals = model_benchmarking.get_mnk(
-                batch_size=batch_size, config_file=config_file, seq_len=args.sq, model_name=args.model
-            )
+            x_vals = model_benchmarking.get_mnk(batch_size=batch_size, config_file=config_file, seq_len=args.sq,
+                                                model_name=args.model)
         benchmark.benchmarks.x_vals = x_vals
-    
+
     if args.M and args.N and args.K:
-        x_vals = [(args.M,args.N,args.K)]
+        x_vals = [(args.M, args.N, args.K)]
         benchmark.benchmarks.x_vals = x_vals
 
     benchmark.run(show_plots=True, print_data=True)

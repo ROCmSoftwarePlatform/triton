@@ -1,18 +1,17 @@
 {
-    "llama3_8B": {
-      "head_count": 32,
-      "head_dimension": 128,
-      "max_seq_len": 8192
-    },
-    "llama3_70B": {
-      "head_count": 64,
-      "head_dimension": 128,
-      "max_seq_len": 8192
-    },
-    "llama3_405B": {
-      "head_count": 128,
-      "head_dimension": 128,
-      "max_seq_len": 8192
-    }
+  "llama3_8B": {
+    "head_count": 32,
+    "head_dimension": 128,
+    "max_seq_len": 8192
+  },
+  "llama3_70B": {
+    "head_count": 64,
+    "head_dimension": 128,
+    "max_seq_len": 8192
+  },
+  "llama3_405B": {
+    "head_count": 128,
+    "head_dimension": 128,
+    "max_seq_len": 8192
   }
-  
+}

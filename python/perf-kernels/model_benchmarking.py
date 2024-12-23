@@ -1,6 +1,7 @@
 import json
 import os
 
+
 def load_model_config(config_file='model_configs.json'):
     """Load all model configurations from a JSON file."""
     with open(config_file, 'r') as f:
@@ -18,9 +19,9 @@ def infer_mnk(model_name, batch_size, seq_len, config_file='model_configs.json')
     head_dimension = config["head_dimension"]
 
     # Infer M, N, K based on the feedforward network (FFN) dimensions
-    M = batch_size * seq_len             # Total tokens in a batch
-    K = head_dimension * head_count      # Hidden size (d)
-    N = 4 * K                            # FFN dimension is typically 4× hidden size
+    M = batch_size * seq_len  # Total tokens in a batch
+    K = head_dimension * head_count  # Hidden size (d)
+    N = 4 * K  # FFN dimension is typically 4× hidden size
 
     return M, N, K
 
@@ -50,9 +51,7 @@ def get_mnk(batch_size=1, seq_len=None, config_file='model_configs.json', model_
             max_seq_len = config["max_seq_len"]
             actual_seq_len = seq_len or max_seq_len
             if actual_seq_len > max_seq_len:
-                raise ValueError(
-                    f"Sequence length {actual_seq_len} exceeds maximum {max_seq_len} for {model_name}"
-                )
+                raise ValueError(f"Sequence length {actual_seq_len} exceeds maximum {max_seq_len} for {model_name}")
             M, N, K = infer_mnk(model_name, batch_size, actual_seq_len, config_file)
             mnk_list.append((M, N, K))
 
@@ -98,4 +97,3 @@ def get_FA_configs(batch_size=1, seq_len=None, model_name=None, config_file='mod
             fa_configs.append((batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
 
     return fa_configs
-
