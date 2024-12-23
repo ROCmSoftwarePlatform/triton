@@ -25,21 +25,35 @@ def infer_mnk(model_name, batch_size, seq_len, config_file='model_configs.json')
     return M, N, K
 
 
-def get_all_mnk(batch_size=1, seq_len=None, config_file='model_configs.json'):
+def get_mnk(batch_size=1, seq_len=None, config_file='model_configs.json', model_name=None):
     """
-    Retrieve all MNK dimensions for benchmarking, iterating over all models in the configuration.
+    Retrieve MNK dimensions for benchmarking. Can return:
+    - All models (default)
+    - A specific model if model_name is provided
     """
     configs = load_model_config(config_file)
     mnk_list = []
 
-    for model_name, config in configs.items():
+    if model_name:
+        # Check if the model exists
+        if model_name not in configs:
+            raise ValueError(f"Model '{model_name}' not found in {config_file}")
+        # Handle a specific model
+        config = configs[model_name]
         max_seq_len = config["max_seq_len"]
-        actual_seq_len = seq_len or max_seq_len  # Use default seq_len if not provided
-        if actual_seq_len > max_seq_len:
-            raise ValueError(
-                f"Sequence length {actual_seq_len} exceeds maximum {max_seq_len} for {model_name}"
-            )
+        actual_seq_len = seq_len or max_seq_len
         M, N, K = infer_mnk(model_name, batch_size, actual_seq_len, config_file)
         mnk_list.append((M, N, K))
+    else:
+        # Handle all models
+        for model_name, config in configs.items():
+            max_seq_len = config["max_seq_len"]
+            actual_seq_len = seq_len or max_seq_len
+            if actual_seq_len > max_seq_len:
+                raise ValueError(
+                    f"Sequence length {actual_seq_len} exceeds maximum {max_seq_len} for {model_name}"
+                )
+            M, N, K = infer_mnk(model_name, batch_size, actual_seq_len, config_file)
+            mnk_list.append((M, N, K))
 
     return mnk_list

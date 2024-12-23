@@ -282,11 +282,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
         else:
             if INT8_KV:
                 k = (k * k_descale).to(q.type.element_ty)
-<<<<<<< HEAD
-            qk += tl.dot( (q * QK_SCALE).to(q.type.element_ty), k)
-=======
-            qk += tl.dot((q * QK_SCALE).to(q.type.element_ty), k) 
->>>>>>> a2a9bee90 (benchmark and configs files added)
+            qk += tl.dot((q * QK_SCALE).to(q.type.element_ty), k)
 
         if bias_ptrs is not None:
             bias_offs_n = start_n + tl.arange(0, BLOCK_N) if MASK_STEPS else None

@@ -5,7 +5,8 @@ import sys
 import argparse
 import pytest
 import re
-
+import benchmarking
+import os
 
 @triton.autotune(
     configs=[
@@ -259,15 +260,10 @@ def get_type(provider):
     return res[0][1:-1]
 
 
-import benchmarking
-import os
-config_file =  os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json") 
-
-
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['M', 'N', 'K'],
-        x_vals=benchmarking.get_all_mnk(config_file=config_file),
+        x_vals=get_x_vals(),
         line_arg='provider',
         line_vals=[
             'rocblas(fp16)', 'rocblas(bf16)', 'triton(fp16)', 'triton(bf16)', 'triton(int8)', 'triton(fp8e4)',
@@ -317,7 +313,9 @@ def parse_args():
     )
 
     parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
-    parser.add_argument("-b", type=int, default=0)
+    parser.add_argument("-b", type=int, default=None)
+    parser.add_argument("-sq", type=int, default=None)
+    parser.add_argument("-model", type=str, default=None, help="")
     
     args = parser.parse_args()
 
@@ -330,6 +328,20 @@ def main():
     global verbose
     args = parse_args()
     verbose = args.v
+    
+    if args.model:
+        batch_size = args.b if args.b is not None else 1
+        config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json")
+        if args.model.lower() == "all":
+            # Benchmark all models
+            x_vals = benchmarking.get_mnk(batch_size=batch_size, seq_len=args.sq, config_file=config_file)
+        else:
+            # Benchmark a specific model
+            x_vals = benchmarking.get_mnk(
+                batch_size=batch_size, config_file=config_file, seq_len=args.sq, model_name=args.model
+            )
+        benchmark.benchmarks.x_vals = x_vals
+    
     benchmark.run(show_plots=True, print_data=True)
 
 
