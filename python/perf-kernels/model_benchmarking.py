@@ -65,3 +65,36 @@ def get_available_models(config_file='model_configs.json'):
     with open(config_path, 'r') as f:
         configs = json.load(f)
     return list(configs.keys())
+
+
+def get_FA_configs(batch_size=1, model_name=None, config_file='model_configs.json'):
+    """
+    Retrieve Flash Attention configurations.
+    Args:
+        batch_size: Batch size for the configurations.
+        model_name: Name of the model. If None, return all models.
+        config_file: Path to the model configuration file.
+    Returns:
+        List of Flash Attention configurations as tuples: (BATCH, HQ, HK, N_CTX_Q, N_CTX_K)
+    """
+    configs = load_model_config(config_file)
+    fa_configs = []
+
+    if model_name:
+        # Check if the model exists
+        if model_name not in configs:
+            raise ValueError(f"Model '{model_name}' not found in {config_file}")
+        # Handle a specific model
+        config = configs[model_name]
+        HQ = HK = config["head_count"]
+        N_CTX_Q = N_CTX_K = config["max_seq_len"]
+        fa_configs.append((batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
+    else:
+        # Handle all models
+        for model_name, config in configs.items():
+            HQ = HK = config["head_count"]
+            N_CTX_Q = N_CTX_K = config["max_seq_len"]
+            fa_configs.append((batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
+
+    return fa_configs
+

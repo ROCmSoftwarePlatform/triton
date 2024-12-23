@@ -28,7 +28,8 @@ import torch
 
 import triton
 import triton.language as tl
-
+import model_benchmarking
+import os
 
 class MetaData():
     cu_seqlens_q = None
@@ -1869,6 +1870,10 @@ def varlen_benchmark_configs():
     ]
     return configs
 
+def model_benchmark_configs(batch_size):
+    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json")
+    return model_benchmarking.get_FA_configs(batch_size=batch_size, config_file=config_file)
+
 
 def run_benchmark(custom, args):
 
@@ -1891,6 +1896,9 @@ def run_benchmark(custom, args):
             x_vals_list = varlen_benchmark_configs()
         else:
             x_vals_list = nonvarlen_benchmark_configs()
+
+        if args.model:
+            x_vals_list = model_benchmark_configs(batch_size=args.b)
 
     print_time = args.return_time
     line_names = 'Time (ms)' if print_time else 'TFLOPS'
@@ -1976,6 +1984,14 @@ def parse_args():
         prog="Benchmark FlashAttention",
         allow_abbrev=False,
     )
+
+    available_models = model_benchmarking.get_available_models()  # Dynamically load model names
+    model_help = (
+        "Model name to benchmark. Select from: ["
+        + ", ".join(available_models)
+        + "]. Use 'all' to benchmark all models or leave blank for the default benchmark script."
+    )
+    parser.add_argument("-model", type=str, default=None, help=model_help)
     parser.add_argument("-b", type=int, default=0)
     parser.add_argument("-hq", type=int, default=0)
     parser.add_argument("-hk", type=int, default=0)
@@ -2006,7 +2022,7 @@ def main():
     custom_config = False
     assert args.layout == 'thd' or not args.equal_seqlens, \
            "Equal sequence lengths arg must be used with the thd layout."
-    if args.b or args.hq or args.hk or args.sq or args.sk or args.d:
+    if args.hq or args.hk or args.sq or args.sk or args.d:
         custom_config = True
         assert args.b and args.hq and args.sq and args.d, \
                "If custom config is specified, please provide \
