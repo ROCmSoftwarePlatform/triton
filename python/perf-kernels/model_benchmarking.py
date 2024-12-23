@@ -67,7 +67,7 @@ def get_available_models(config_file='model_configs.json'):
     return list(configs.keys())
 
 
-def get_FA_configs(batch_size=1, model_name=None, config_file='model_configs.json'):
+def get_FA_configs(batch_size=1, seq_len=None, model_name=None, config_file='model_configs.json'):
     """
     Retrieve Flash Attention configurations.
     Args:
@@ -87,7 +87,8 @@ def get_FA_configs(batch_size=1, model_name=None, config_file='model_configs.jso
         # Handle a specific model
         config = configs[model_name]
         HQ = HK = config["head_count"]
-        N_CTX_Q = N_CTX_K = config["max_seq_len"]
+        max_seq_len = config["max_seq_len"]
+        N_CTX_Q = N_CTX_K = max_seq_len if seq_len is None else seq_len
         fa_configs.append((batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
     else:
         # Handle all models
