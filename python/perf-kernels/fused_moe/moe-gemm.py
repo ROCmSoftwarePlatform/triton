@@ -2,7 +2,7 @@ import triton
 import torch
 import triton.language as tl
 import pytest
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, TypedDict
 import os
 import json
 import functools
@@ -101,7 +101,7 @@ def moe_gemm_kernel(
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     out_ptrs = Out + stride_cm * offs_token[:, None] + stride_cn * offs_cn[None, :]
     c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
-    tl.store(out_ptrs, accumulator, mask=c_mask)
+    tl.store(out_ptrs, accumulator.to(Out.dtype.element_ty), mask=c_mask)
 
 
 def _moe_align_block_size(topk_ids: torch.Tensor, num_experts: int, top_k: int, block_size: int,
@@ -290,10 +290,10 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, topk_weights: to
     return c
 
 
-def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool):
-    a = torch.randn((M, K), dtype=torch.float32, device='cuda')
-    b = torch.randn((E, N, K), dtype=torch.float32, device='cuda')
-    c = torch.zeros((M, top_k, N), dtype=torch.float32, device='cuda')
+def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool, dtype):
+    a = torch.randn((M, K), dtype=dtype, device='cuda')
+    b = torch.randn((E, N, K), dtype=dtype, device='cuda')
+    c = torch.zeros((M, top_k, N), dtype=dtype, device='cuda')
 
     values = torch.randn(M, E, device='cuda')
 
@@ -329,10 +329,10 @@ def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool
     (64, 128, 64, 2, 8),
 ])
 @pytest.mark.parametrize('routed_weight', [True, False])
-def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool):
+def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool, dtype=torch.float16):
     torch.manual_seed(20)
     a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
-        M, K, N, top_k, E, routed_weight=routed_weight)
+        M, K, N, top_k, E, routed_weight=routed_weight, dtype=dtype)
 
     # TODO Quantization support
     tri_out = moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config)
@@ -367,6 +367,7 @@ def get_configs():
 def run_benchmark(custom, args):
     print_time = args.return_time
     routed_weight = args.routed_weight
+    dtype = arg_to_torch_dtype[args.dtype]
     if custom:
         assert args.M and args.K and args.N and args.E and args.top_k, \
             "Please provide M, K, N, E, top_k for custom runs."
@@ -382,12 +383,12 @@ def run_benchmark(custom, args):
     benchmark = triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'],
                                          line_names=[line_names], styles=[('red', '-'), ('blue', '-')], ylabel='ms',
                                          plot_name='moe-gemm-benchmark',
-                                         args={'print_time': print_time, 'routed_weight': routed_weight})
+                                         args={'dtype': dtype, 'print_time': print_time, 'routed_weight': routed_weight})
 
     @triton.testing.perf_report([benchmark])
-    def bench_moe_gemm(M, K, N, E, top_k, routed_weight, print_time, provider):
+    def bench_moe_gemm(M, K, N, E, top_k, dtype, routed_weight, print_time, provider):
         a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
-            M, K, N, top_k, E, routed_weight=routed_weight)
+            M, K, N, top_k, E, routed_weight=routed_weight, dtype=dtype)
 
         flops = 2.0 * M * top_k * K * N
         if routed_weight:
@@ -417,10 +418,12 @@ def parse_args():
     parser.add_argument("-E", type=int, default=0, help="Number of experts")
     parser.add_argument("-top_k", type=int, default=0, help="top_k experts per token")
     parser.add_argument("-routed_weight", action='store_true', default=False)
+    parser.add_argument("-dtype", default='fp16')
     parser.add_argument("-return_time", action='store_true', default=False, help='Return time instead of TFLOPs')
     args = parser.parse_args()
     return args
 
+arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
 
 def main():
     args = parse_args()
