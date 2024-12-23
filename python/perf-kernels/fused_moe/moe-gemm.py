@@ -2,7 +2,7 @@ import triton
 import torch
 import triton.language as tl
 import pytest
-from typing import Any, Dict, Optional, Tuple, TypedDict
+from typing import Any, Dict, Optional, Tuple
 import os
 import json
 import functools
@@ -380,10 +380,10 @@ def run_benchmark(custom, args):
 
     line_names = 'Time (ms)' if print_time else 'TFLOPS'
 
-    benchmark = triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'],
-                                         line_names=[line_names], styles=[('red', '-'), ('blue', '-')], ylabel='ms',
-                                         plot_name='moe-gemm-benchmark',
-                                         args={'dtype': dtype, 'print_time': print_time, 'routed_weight': routed_weight})
+    benchmark = triton.testing.Benchmark(
+        x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'], line_names=[line_names],
+        styles=[('red', '-'), ('blue', '-')], ylabel='ms', plot_name='moe-gemm-benchmark',
+        args={'dtype': dtype, 'print_time': print_time, 'routed_weight': routed_weight})
 
     @triton.testing.perf_report([benchmark])
     def bench_moe_gemm(M, K, N, E, top_k, dtype, routed_weight, print_time, provider):
@@ -423,7 +423,9 @@ def parse_args():
     args = parser.parse_args()
     return args
 
+
 arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
+
 
 def main():
     args = parse_args()
