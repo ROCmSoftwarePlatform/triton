@@ -9,28 +9,28 @@ import re
 
 @triton.autotune(
     configs=[
-        triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
-            num_warps=8, num_stages=2),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'waves_per_eu': 2,
-                'kpack': 2, 'matrix_instr_nonkdim': 16
-            }, num_warps=8, num_stages=2),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0,
-                'kpack': 1
-            }, num_warps=8, num_stages=2),
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
-            num_warps=8, num_stages=2),
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2},
-            num_warps=4, num_stages=2),
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
-            num_warps=8, num_stages=2),
+        # triton.Config(
+        #     {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
+        #     num_warps=8, num_stages=2),
+        # triton.Config(
+        #     {
+        #         'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'waves_per_eu': 2,
+        #         'kpack': 2, 'matrix_instr_nonkdim': 16
+        #     }, num_warps=8, num_stages=2),
+        # triton.Config(
+        #     {
+        #         'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0,
+        #         'kpack': 1
+        #     }, num_warps=8, num_stages=2),
+        # triton.Config(
+        #     {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
+        #     num_warps=8, num_stages=2),
+        # triton.Config(
+        #     {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2},
+        #     num_warps=4, num_stages=2),
+        # triton.Config(
+        #     {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
+        #     num_warps=8, num_stages=2),
         triton.Config(
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 32, 'waves_per_eu': 2},
             num_warps=4, num_stages=2),
@@ -259,10 +259,15 @@ def get_type(provider):
     return res[0][1:-1]
 
 
+import benchmarking
+import os
+config_file =  os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json") 
+
+
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['M', 'N', 'K'],
-        x_vals=get_x_vals(),
+        x_vals=benchmarking.get_all_mnk(config_file=config_file),
         line_arg='provider',
         line_vals=[
             'rocblas(fp16)', 'rocblas(bf16)', 'triton(fp16)', 'triton(bf16)', 'triton(int8)', 'triton(fp8e4)',
@@ -312,6 +317,8 @@ def parse_args():
     )
 
     parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
+    parser.add_argument("-b", type=int, default=0)
+    
     args = parser.parse_args()
 
     return args
