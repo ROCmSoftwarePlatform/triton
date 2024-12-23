@@ -10,29 +10,32 @@ import re
 @triton.autotune(
     configs=[
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
+          {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'SPLIT_K': 1, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
             num_warps=8, num_stages=2),
         triton.Config(
             {
-                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'waves_per_eu': 2,
+                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'SPLIT_K': 1, 'GROUP_SIZE_M': 8, 'waves_per_eu': 2,
                 'kpack': 2, 'matrix_instr_nonkdim': 16
             }, num_warps=8, num_stages=2),
         triton.Config(
             {
-                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0,
+                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'SPLIT_K': 1, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0,
                 'kpack': 1
             }, num_warps=8, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'SPLIT_K': 1, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
             num_warps=8, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2},
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'SPLIT_K': 1, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2},
             num_warps=4, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'SPLIT_K': 1, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
             num_warps=8, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 32, 'waves_per_eu': 2},
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'SPLIT_K': 1, 'GROUP_SIZE_M': 32, 'waves_per_eu': 2},
+            num_warps=4, num_stages=2),
+        triton.Config(
+            {'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 256, 'SPLIT_K': 2, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0, 'kpack': 2, 'matrix_instr_nonkdim': 16},
             num_warps=4, num_stages=2),
     ],
     key=['M', 'N', 'K'],
@@ -61,6 +64,7 @@ def matmul_kernel(
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
+    SPLIT_K: tl.constexpr,
     EVEN_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     APPLY_SCALE: tl.constexpr,
@@ -74,6 +78,7 @@ def matmul_kernel(
     # This is done in a grouped ordering to promote L2 data reuse.
     # TODO(vgokhale): Add XCD remapping.
     pid = tl.program_id(axis=0)
+    pid_z = tl.program_id(1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     if GROUP_SIZE_M == 1:
@@ -88,7 +93,10 @@ def matmul_kernel(
         pid_n = (pid % num_pid_in_group) // group_size_m
 
     # Create pointers for first block of A and B input matrices
-    offs_k = tl.arange(0, BLOCK_SIZE_K)
+    if SPLIT_K == 1:
+        offs_k = tl.arange(0, BLOCK_SIZE_K)
+    else:
+        offs_k = pid_z * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
     offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
@@ -100,20 +108,21 @@ def matmul_kernel(
     acc_dtype = tl.float32 if c_ptr.type.element_ty != tl.int8 else tl.int32
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=acc_dtype)
 
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
         if EVEN_K:
             a = tl.load(a_ptrs)
             b = tl.load(b_ptrs)
         else:
-            a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
-            b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+            k_remaining = K - k * (BLOCK_SIZE_K * SPLIT_K)
+            a = tl.load(a_ptrs, mask=offs_k[None, :] < k_remaining, other=0.0)
+            b = tl.load(b_ptrs, mask=offs_k[:, None] < k_remaining, other=0.0)
         accumulator += tl.dot(a, b)
 
         # Advance the ptrs to the next K block.
-        a_ptrs += BLOCK_SIZE_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * stride_bk
+        a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_bk
     # Apply scale to recover dynamic range reduced due to lower precision inputs.
     if APPLY_SCALE:
         accumulator = accumulator * a_scale * b_scale
@@ -128,7 +137,11 @@ def matmul_kernel(
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, c, mask=c_mask)
+
+    if SPLIT_K == 1:
+        tl.store(c_ptrs, c, mask=c_mask)
+    else:
+        tl.atomic_add(c_ptrs, c, mask=c_mask)
 
 
 # Activation function.
@@ -145,7 +158,11 @@ def matmul(a, b, c, a_scale, b_scale, scale_a8_b8=False, activation=""):
     assert a.dtype == b.dtype, "Mixed dtype GEMMs are not supported!!!"
     M, K = a.shape
     K, N = b.shape
-    grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
+    splitk = 1
+    grid = lambda META: (
+        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+        META['SPLIT_K']
+    )
     matmul_kernel[grid](
         a,
         b,
@@ -163,6 +180,7 @@ def matmul(a, b, c, a_scale, b_scale, scale_a8_b8=False, activation=""):
         b_scale,
         APPLY_SCALE=scale_a8_b8,
         ACTIVATION=activation,
+#        SPLIT_K = splitk,
     )
 
 
@@ -212,9 +230,11 @@ def gen_input(M, N, dtype, needTrans, seed, device='cuda'):
 
 
 def get_x_vals():
-    x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
+#    x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
 
-    x_vals += [(4864, 4096, 8192), (9728, 8192, 65536), (4864, 8192, 4160)]
+#    x_vals += [(4864, 4096, 8192), (9728, 8192, 65536), (4864, 8192, 4160)]
+
+    x_vals = [(1, 8192, 28672)]
 
     return x_vals
 
@@ -265,11 +285,13 @@ def get_type(provider):
         x_vals=get_x_vals(),
         line_arg='provider',
         line_vals=[
-            'rocblas(fp16)', 'rocblas(bf16)', 'triton(fp16)', 'triton(bf16)', 'triton(int8)', 'triton(fp8e4)',
-            'triton(fp8e5)'
+#            'rocblas(fp16)', 'rocblas(bf16)', 'triton(fp16)', 'triton(bf16)', 'triton(int8)', 'triton(fp8e4)',
+#            'triton(fp8e5)'
+            'rocblas(fp16)', 'rocblas(bf16)', 'triton(fp16)'
         ],
         line_names=[
-            "rocBLAS.Fp16", "rocBLAS.Bf16", "Triton.Fp16", "Triton.Bf16", "Triton.Int8", "Triton.Fp8E4", "Triton.Fp8E5"
+#            "rocBLAS.Fp16", "rocBLAS.Bf16", "Triton.Fp16", "Triton.Bf16", "Triton.Int8", "Triton.Fp8E4", "Triton.Fp8E5"
+            "rocBLAS.Fp16", "rocBLAS.Bf16", "Triton.Fp16"
         ],
         ylabel="TFLOPS",
         plot_name="matmul-performance",
