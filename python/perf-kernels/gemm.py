@@ -5,8 +5,10 @@ import sys
 import argparse
 import pytest
 import re
-import benchmarking
+
+import model_benchmarking
 import os
+
 
 @triton.autotune(
     configs=[
@@ -304,19 +306,30 @@ def benchmark(M, N, K, provider):
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
-
 # TODO(vgokhale): Add more options to benchmarking
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         prog="GEMM tutorial example",
         allow_abbrev=False,
     )
 
+    available_models = model_benchmarking.get_available_models()  # Dynamically load model names
+    model_help = (
+        "Model name to benchmark. Select from: ["
+        + ", ".join(available_models)
+        + "]. Use 'all' to benchmark all models or leave blank for the default benchmark script."
+    )
+
     parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
     parser.add_argument("-b", type=int, default=None)
     parser.add_argument("-sq", type=int, default=None)
-    parser.add_argument("-model", type=str, default=None, help="")
-    
+    parser.add_argument("-model", type=str, default=None, help=model_help)
+    parser.add_argument("-M", type=int, default=0)
+    parser.add_argument("-N", type=int, default=0)
+    parser.add_argument("-K", type=int, default=0)
+
     args = parser.parse_args()
 
     return args
@@ -334,14 +347,18 @@ def main():
         config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json")
         if args.model.lower() == "all":
             # Benchmark all models
-            x_vals = benchmarking.get_mnk(batch_size=batch_size, seq_len=args.sq, config_file=config_file)
+            x_vals = model_benchmarking.get_mnk(batch_size=batch_size, seq_len=args.sq, config_file=config_file)
         else:
             # Benchmark a specific model
-            x_vals = benchmarking.get_mnk(
+            x_vals = model_benchmarking.get_mnk(
                 batch_size=batch_size, config_file=config_file, seq_len=args.sq, model_name=args.model
             )
         benchmark.benchmarks.x_vals = x_vals
     
+    if args.M and args.N and args.K:
+        x_vals = [(args.M,args.N,args.K)]
+        benchmark.benchmarks.x_vals = x_vals
+
     benchmark.run(show_plots=True, print_data=True)
 
 
