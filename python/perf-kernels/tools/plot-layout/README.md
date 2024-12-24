@@ -5,21 +5,26 @@ Here is the help info from the script.
 
 ```bash
 >$ python3 plot_layout.py -h
-usage: Draw triton layouts [-h] [-shape SHAPE SHAPE SHAPE] [-plot {blocked,dot,wmma,lds}] [-nonKDim {16,32}] [-sizePerThread SIZEPERTHREAD SIZEPERTHREAD] [-threadsPerWarp THREADSPERWARP THREADSPERWARP]
-                           [-warpsPerCTA WARPSPERCTA WARPSPERCTA] [-order ORDER ORDER] [-kWidth {4,8,16}] [-lds_layout {swizzle,padding,none}] [-lds_access {read,write,none}] [-wave_size {32,64}] [-o O] [-mfmaTrans] [-keep]
+usage: Draw triton layouts [-h] [-tensorShape TENSORSHAPE TENSORSHAPE] [-dotShape DOTSHAPE DOTSHAPE DOTSHAPE] [-plot {blocked,dot,wmma,lds}] [-dim0 DIM0] [-dim1 DIM1] [-sizePerThread SIZEPERTHREAD SIZEPERTHREAD] [-threadsPerWarp THREADSPERWARP THREADSPERWARP]
+                           [-warpsPerCTA WARPSPERCTA WARPSPERCTA] [-order ORDER ORDER] [-nonKDim {16,32}] [-kWidth {4,8,16,32}] [-kGroup {1,2}] [-lds_layout {swizzle,padding,none}] [-lds_access {read,write,none}] [-wave_size {32,64}] [-o O] [-mfmaTrans] [-keep]
 
 options:
   -h, --help            show this help message and exit
-  -shape SHAPE SHAPE SHAPE
-                        Tensor shape in the form of M,N,K
+  -tensorShape TENSORSHAPE TENSORSHAPE
+                        2D tensor shape in the form of dim0,dim1
+  -dotShape DOTSHAPE DOTSHAPE DOTSHAPE
+                        Dot op shape in the form of M,N,K
   -plot {blocked,dot,wmma,lds}
                         choose plot mode
-  -nonKDim {16,32}      mfma instruction dim
+  -dim0 DIM0            tensor dim0 name
+  -dim1 DIM1            tensor dim1 name
   -sizePerThread SIZEPERTHREAD SIZEPERTHREAD
   -threadsPerWarp THREADSPERWARP THREADSPERWARP
   -warpsPerCTA WARPSPERCTA WARPSPERCTA
   -order ORDER ORDER
-  -kWidth {4,8,16}      number of elements per thread
+  -nonKDim {16,32}      mfma instruction dim
+  -kWidth {4,8,16,32}   number of contiguous elements per thread
+  -kGroup {1,2}         total number of elements / kWidth per mfma instruction
   -lds_layout {swizzle,padding,none}
                         choose the LDS data layout
   -lds_access {read,write,none}
@@ -69,6 +74,7 @@ python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 
 python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 32 -kWidth 8 -mfmaTrans
 python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 16 -kWidth 8
 python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 16 -kWidth 16
+python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -nonKDim 16 -kWidth 16 -kGroup 2
 ```
 
 This mode draws two graphs:
@@ -79,6 +85,9 @@ This mode draws two graphs:
 
 Knobs
 - `-kWidth`: the number of elements that will be loaded into one thread at once
+- `-kGroup`: total number of elements / kWidth for on mfma instruction.
+   This is 1 for all mfma instructions except for mfma_f32_16x16x128_f8f6f4 and mfma_f32_32x32x64_f8f6f4
+   with fp8 input types (CBSZ=0 or 1 and/or BLGP=0 or 1)
 - `-nonKDim`: 16 ot 32, which is used to control the mfma instruction size
 - `-mfmaTrans`: if set, the transposed mfma layout will be plotted.
 

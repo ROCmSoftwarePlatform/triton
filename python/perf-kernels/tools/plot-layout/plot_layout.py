@@ -4,12 +4,13 @@ import os
 import subprocess
 
 
-def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth):
+def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup):
     elemSmall = 0.04
     elemLarge = 0.16
-    if kWidth == 16:
+    elemPerThread = kWidth * kGroup
+    if elemPerThread == 16:
         ratio = 0.8
-    elif kWidth == 32:
+    elif elemPerThread == 32:
         ratio = 0.6
     else:
         ratio = 1
@@ -21,8 +22,9 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth):
   \\begin{{tikzpicture}}
     \\def\\scale{{1}}
     \\def\\elem{{{elemSmall}}}
+    \\def\\elemW{{\\elem}}
     \\coordinate (C TL) at (0,0);
-    \\drawDot{{{M}}}{{{N}}}{{{K}}}{{{mfmaNonKDim}}}{{{warpsPerCTA[0]}}}{{{warpsPerCTA[1]}}}{{{trans}}}{{{kWidth}}}
+    \\drawDot{{{M}}}{{{N}}}{{{K}}}{{{mfmaNonKDim}}}{{{warpsPerCTA[0]}}}{{{warpsPerCTA[1]}}}{{{trans}}}{{{kWidth}}}{{{kGroup}}}
 
     \\coordinate (C TL) at ($(C TL)+({N}*\elem+32*\elem, 0)$);
     \\def\\mfmaTrans{{{trans}}}
@@ -35,8 +37,8 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth):
     \\pgfmathsetmacro{{\\gap}}{{\\elem*5}}
     \\pgfmathsetmacro{{\\nonTrans}}{{1-\\mfmaTrans}}
     \\pgfmathsetmacro{{\\groups}}{{64/{mfmaNonKDim}}}
-    \\coordinate (C TL) at ($(C TL)+(.5*\\gap+1.2*\\nonTrans*\\gap+\\groups*{kWidth}*\\elemW, -{M}*\\oldElem+{mfmaNonKDim}*\\elem)$);
-    \\drawMFMAInstr{{{mfmaNonKDim}}}{{{kWidth}}}{{\\mfmaTrans}}
+    \\coordinate (C TL) at ($(C TL)+(.5*\\gap+1.2*\\nonTrans*\\gap+\\groups*{kWidth}*{kGroup}*\\elemW, -{M}*\\oldElem+{mfmaNonKDim}*\\elem)$);
+    \\drawMFMAInstr{{{mfmaNonKDim}}}{{{kWidth}}}{{{kGroup}}}{{\\mfmaTrans}}
 
   \\end{{tikzpicture}}
 \\end{{document}}'''
@@ -120,7 +122,6 @@ def parse_args():
     parser.add_argument("-dotShape", type=int, nargs=3, default=(32, 128, 64), help='Dot op shape in the form of M,N,K')
     parser.add_argument("-plot", type=str, default="blocked", choices=['blocked', 'dot', 'wmma', 'lds'],
                         help='choose plot mode')
-    parser.add_argument("-nonKDim", type=int, default=32, choices=[16, 32], help='mfma instruction dim')
     parser.add_argument("-dim0", type=str, default="M", help='tensor dim0 name')
     parser.add_argument("-dim1", type=str, default="K", help='tensor dim1 name')
     ## blocked layout parameters
@@ -128,9 +129,13 @@ def parse_args():
     parser.add_argument("-threadsPerWarp", type=int, nargs=2, default=(16, 4))
     parser.add_argument("-warpsPerCTA", type=int, nargs=2, default=(1, 4))
     parser.add_argument("-order", type=int, nargs=2, default=(1, 0))
-    ## LDS access parameters
+    ## dot layout parameters
+    parser.add_argument("-nonKDim", type=int, default=16, choices=[16, 32], help='mfma instruction dim')
     parser.add_argument("-kWidth", type=int, default=4, choices=[4, 8, 16, 32],
                         help='number of contiguous elements per thread')
+    parser.add_argument("-kGroup", type=int, default=1, choices=[1, 2],
+                        help='total number of elements / kWidth per mfma instruction')
+    ## LDS access parameters
     parser.add_argument("-lds_layout", type=str, default="none", choices=['swizzle', 'padding', 'none'],
                         help='choose the LDS data layout')
     parser.add_argument("-lds_access", type=str, default="none", choices=['read', 'write', 'none'],
@@ -162,6 +167,7 @@ def main():
     plot_mode = args.plot
     mfmaNonKDim = args.nonKDim
     kWidth = args.kWidth
+    kGroup = args.kGroup
     trans = 1 if args.mfmaTrans else 0
     ofilename = args.o
     keepSrc = args.keep
@@ -190,7 +196,7 @@ def main():
         mfma_inst_str = "mfma_32x32" if mfmaNonKDim == 32 else "mfma_16x16"
         mfma_trans_str = ".trans" if trans else ""
         print(f"Plotting dot operation with shapes {M=},{N=},{K=}")
-        print("MFMA: " + mfma_inst_str + mfma_trans_str + f" {kWidth=}", end=" ")
+        print("MFMA: " + mfma_inst_str + mfma_trans_str + f" {kWidth=}, {kGroup=}", end=" ")
         print(f"{warpsPerCTA=}", end=" ")
         CTAShape.append(mfmaNonKDim * warpsPerCTA[0])
         CTAShape.append(mfmaNonKDim * warpsPerCTA[1])
@@ -205,7 +211,8 @@ def main():
     if plot_mode == 'dot':
         assert M != 0 and CTAShape[0] <= M and M % CTAShape[0] == 0, "bad tensor dimension M"
         assert N != 0 and CTAShape[1] <= N and N % CTAShape[1] == 0, "bad tensor dimension N"
-        assert K != 0 and K % (2 * kWidth) == 0, "bad tensor dimension K"
+        kDim = kWidth * kGroup * 64 / mfmaNonKDim
+        assert K != 0 and K % kDim == 0, f"one mfma instruction requires {kDim:.0f} elements along k dim but BLOCK_K = {K}"
 
     if plot_mode == 'lds':
         print(f"Plotting LDS access for tensor M={M},K={K} with vec={kWidth}")
@@ -219,7 +226,7 @@ def main():
         draw_blockedLayout_str = draw_blocked_layout_cmd(dim0, dim1, dim0Name, dim1Name, sizePerThread, threadsPerWarp,
                                                          warpsPerCTA, order)
 
-        draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth)
+        draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup)
 
         draw_lds_str = draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp)
 
