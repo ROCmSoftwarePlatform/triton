@@ -299,7 +299,7 @@
   \node [scale=.8*\scale, above] at ($(C TL)+(.5*\mfmaNonKDim*\elem, 0)$) {\mfmaNonKDim};
 }
 
-\newcommand{\drawMFMAInstr}[4]{
+\newcommand{\drawMFMAInstr}[7]{
   %%
   %% Draw layout of mfma instructions with tid labeled
   %%
@@ -313,6 +313,10 @@
   %% #2: kpack
   %% #3: kGroup
   %% #4: mfmaTrans
+  %% #5: dtype_a
+  %% #6: dtype_b
+  %% #7: outType
+  
   \pgfmathsetmacro{\mfmaNonKDim}{#1}
   \pgfmathsetmacro{\groups}{64/\mfmaNonKDim}
   \pgfmathsetmacro{\kpack}{#2}
@@ -332,6 +336,10 @@
   \drawBlockMFMALayoutLarge{\mfmaTrans}{\mfmaNonKDim}{1}
 
   %% Draw labels
+  %% Set data types
+  \def\opAType{#5}
+  \def\opBType{#6}
+  \def\outType{#7}
   %% Draw kWidth vector and lable of first operand
   \coordinate (vec TL) at ($(mfma opA TL)+(0, 5*\elem)$);
   \pgfmathsetmacro{\maxVec}{\kpack-1}
@@ -353,29 +361,29 @@
   %% Draw labels according to mfma.trans or not
   \ifthenelse{\mfmaTrans=0}{
     \node [scale=\scaleLabel, above left] at ($(mfma opA TL)+(\kpack*\elemW*\groups*\kGroup, 0)$)
-    {inA:$\mfmaNonKDim \times \kDim$};
+    {inA:$\mfmaNonKDim \times \kDim \times $\opAType};
     \node [scale=\scaleLabel, above right, rotate=90] at ($(mfma op TL)+(0,-\groups*\kpack*\elemW*\kGroup)$)
-    {inB:$\kDim \times \mfmaNonKDim$};
+    {inB:$\kDim \times \mfmaNonKDim \times $\opBType};
     \coordinate (vec TL) at ($(block TL)+(-3*\elem-\elem,0)$);
     \foreach \vecId in {0,1,2,3}{
       \draw ($(vec TL)+(0, -\vecId*\elem)$) rectangle ++(\elem, -\elem);
     }
     \draw [densely dotted] (block TL) -- ++(-3*\elem,0);
     \draw [densely dotted] ($(block TL)+(0, -4*\elem)$) -- ++(-3*\elem,0);
-    \node [scale=.8*\scale, above, rotate=90] at ($(vec TL)+(0, -.5*4*\elem)$) {vec=4$\times$f32};
+    \node [scale=.8*\scale, above, rotate=90] at ($(vec TL)+(0, -.5*4*\elem)$) {vec=4$\times$\outType};
     \node [scale=.8*\scale, above, align=center] at ($(block TL)+(.5*\mfmaNonKDim*\elem, 0)$) {mfmaLayout\\trans=False};
   }{
     \node [scale=\scaleLabel, above left] at ($(mfma opA TL)+(\kpack*\elemW*\groups*\kGroup, 0)$)
-    {inB:$\kDim \times \mfmaNonKDim^T$};
+    {inB:$\kDim \times \mfmaNonKDim^T \times $\opBType};
     \node [scale=\scaleLabel, above right, rotate=90] at ($(mfma op TL)+(0, -\groups*\kpack*\elemW*\kGroup)$)
-    {inA:$\mfmaNonKDim \times \kDim^T$};
+    {inA:$\mfmaNonKDim \times \kDim^T \times $\opAType};
     \coordinate (vec TL) at ($(block TL)+(0, 3*\elem+\elem)$);
     \foreach \vecId in {0,1,2,3}{
       \draw ($(vec TL)+(\vecId*\elem, 0)$) rectangle ++(\elem, -\elem);
     }
     \draw [densely dotted] (block TL) -- ++(0, 3*\elem);
     \draw [densely dotted] ($(block TL)+(4*\elem, 0)$) -- ++(0, 3*\elem);
-    \node [scale=.8*\scale, above] at ($(vec TL)+(.5*4*\elem, 0)$) {vec=4$\times$f32};
+    \node [scale=.8*\scale, above] at ($(vec TL)+(.5*4*\elem, 0)$) {vec=4$\times$\outType};
     \node [scale=.6*\scale, above, align=center] at ($(block TL)+(8*\elem, 0)$) {mfmaLayout\\trans=True};
   }
 }

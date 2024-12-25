@@ -4,7 +4,8 @@ import os
 import subprocess
 
 
-def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup):
+def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup, dtype_a, dtype_b, mfma_inst_str,
+                        kpack):
     elemSmall = 0.04
     elemLarge = 0.16
     elemPerThread = kWidth * kGroup
@@ -16,7 +17,9 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup
         ratio = 1
     elemWidth = elemLarge * ratio
 
-    scaleLabel = 0.7 if kWidth == 4 else 1
+    scaleLabel = 0.7 if (kWidth == 4 or (kWidth == 8 and mfmaNonKDim == 32)) else 1
+
+    outType = 'i32' if dtype_a == 'i8' else 'f32'
 
     return f'''\\begin{{document}}
   \\begin{{tikzpicture}}
@@ -38,7 +41,9 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup
     \\pgfmathsetmacro{{\\nonTrans}}{{1-\\mfmaTrans}}
     \\pgfmathsetmacro{{\\groups}}{{64/{mfmaNonKDim}}}
     \\coordinate (C TL) at ($(C TL)+(.5*\\gap+1.2*\\nonTrans*\\gap+\\groups*{kWidth}*{kGroup}*\\elemW, -{M}*\\oldElem+{mfmaNonKDim}*\\elem)$);
-    \\drawMFMAInstr{{{mfmaNonKDim}}}{{{kWidth}}}{{{kGroup}}}{{\\mfmaTrans}}
+    \\coordinate (mfma instr) at ($(C TL)+(-.5*\\gap-0.6*\\nonTrans*\\gap-0.4*\\mfmaTrans*\\gap, 1.5*\\gap+.5*\\mfmaTrans*\\gap)$);
+    \\node [scale=\scaleLabel, above left, align=left, draw=black, fill=white] at (mfma instr) {{{mfma_inst_str}}};
+    \\drawMFMAInstr{{{mfmaNonKDim}}}{{{kWidth}}}{{{kGroup}}}{{\\mfmaTrans}}{{{dtype_a}}}{{{dtype_b}}}{{{outType}}}
 
   \\end{{tikzpicture}}
 \\end{{document}}'''
@@ -106,6 +111,125 @@ def draw_wmma_instr_cmd(waveSize):
 \\end{{document}}'''
 
 
+matrixFormatTable = {'fp8': 0, 'bf8': 1, 'fp6': 2, 'bf6': 3, 'f4': 4}
+
+
+def matrixFormat(dtype_a, dtype_b):
+    '''
+    return CBSZ and BLGP according to data types
+    b000: E4M3(FP8)
+    b001: E5M2(BF8)
+    b010: E2M3(FP6)
+    b011: E3M2(BF6)
+    b100: E2M1(FP4)
+    '''
+    return matrixFormatTable[dtype_a], matrixFormatTable[dtype_b]
+
+
+def isType4Or6Bit(dtype):
+    return dtype == 'fp6' or dtype == 'bf6' or dtype == 'f4'
+
+
+def isType8BitFloat(dtype):
+    return dtype == 'fp8' or dtype == 'bf8'
+
+
+def isType16Bit(dtype):
+    return dtype == 'bf16' or dtype == 'fp16'
+
+
+def isMixedPrecType(dtype):
+    return isType8BitFloat(dtype) or isType4Or6Bit(dtype)
+
+
+def isMixedPrecBtwF8AndF4OrF6(dtype_a, dtype_b):
+    return (isType8BitFloat(dtype_a) and isType4Or6Bit(dtype_b)) or (isType8BitFloat(dtype_b)
+                                                                     and isType4Or6Bit(dtype_a))
+
+
+def checkMfmaValidity(mfmaNonKDim, kWidth, kGroup, dtype_a, dtype_b, trans):
+    ## Check input types
+    ## Mixed precision is only allowed within f8, f6 and f4
+    assert (isMixedPrecType(dtype_a) and isMixedPrecType(dtype_b)) or (
+        dtype_a == dtype_b), f"Cannot do mixed precision mfma with {dtype_a} and {dtype_b}"
+    '''
+    Check mfma size according to data types
+    * refers to newly added instructions on MI350
+    Both dtyes are f4 or fp6 or bf6
+      *mfma_f32_16x16x128_f8f6f4: kWidth = 32, kGroup = 1
+      *mfma_f32_32x32x64_f8f6f4: kWidth = 32, kGroup = 1
+    One dtype is fp8 or bf8
+      When the other operand is f4, fp6, or bf6
+        *mfma_f32_16x16x128_f8f6f4: kWidth = 16, kGroup = 2
+        *mfma_f32_32x32x64_f8f6f4: kWidth = 16, kGroup = 2
+      When the other operand is fp8 or bf8
+        *mfma_f32_16x16x128_f8f6f4: kWidth = 16, kGroup = 2
+        mfma_f32_16x16x32_fp8/bf8_fp8/bf8: kWidth = 16, kGroup = 1, kpack=2
+        mfma_f32_16x16x32_fp8/bf8_fp8/bf8: kWidth = 8, kGroup = 1
+        *mfma_f32_32x32x64_f8f6f4: kWidth = 16, kGroup = 2
+        mfma_f32_32x32x16_fp8/bf8_fp8/bf8: kWidth = 16, kGroup = 1, kpack=2
+        mfma_f32_32x32x16_fp8/bf8_fp8/bf8: kWidth = 8, kGroup = 1
+    Both dtypes are bf16 or bf16
+        *mfma_f32_16x16x32_f16/bf16: kWidth = 8, kGroup = 1
+        mfma_f32_16x16x16_f16/bf16: kWidth = 4, kGroup = 1
+        *mfma_f32_32x32x16_f16/bf16: kWidth = 8, kGroup = 1
+        mfma_f32_32x32x8_f16/bf16: kWidth = 4, kGroup = 1
+    Both types are i8
+        *mfma_i32_16x16x64_i8: kWidth = 16, kGroup = 1
+        mfma_i32_16x16x32_i8: kWidth = 8, kGroup = 1
+        *mfma_i32_32x32x32_i8: kWidth = 16, kGroup = 1
+        mfma_i32_32x32x16_i8: kWidth = 8, kGroup = 1
+
+    Return mfma instruction name and kpack
+    '''
+    kDim = 64 / mfmaNonKDim * kWidth * kGroup
+    ## Both dtyes are f4 or fp6 or bf6
+    if isType4Or6Bit(dtype_a) and isType4Or6Bit(dtype_b):
+        assert kWidth == 32 and kGroup == 1, f"Only kWidth=32 and kGroup=1 is supported for {dtype_a} x {dtype_b}"
+        kpack = 1
+        CBSZ = matrixFormatTable[dtype_b] if trans else matrixFormatTable[dtype_a]
+        BLGP = matrixFormatTable[dtype_a] if trans else matrixFormatTable[dtype_b]
+        return f"mfma_f32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_f8f6f4", kpack, CBSZ, BLGP
+
+    ## Both dtypes are fp8 or bf8
+    if isType8BitFloat(dtype_a) and isType8BitFloat(dtype_b):
+        assert (kWidth == 8 and kGroup == 1) or (
+            kWidth == 16), f"Not a valid mfma instruction for {dtype_a} x {dtype_b} with {kWidth=} and {kGroup=}"
+        kpack = 2 if (kWidth == 16 and kGroup == 1) else 1
+        if kGroup == 2:
+            suffix = "f8f6f4"
+            CBSZ = matrixFormatTable[dtype_b] if trans else matrixFormatTable[dtype_a]
+            BLGP = matrixFormatTable[dtype_a] if trans else matrixFormatTable[dtype_b]
+        else:
+            suffix = f"{dtype_b}_{dtype_a}" if trans else f"{dtype_a}_{dtype_b}"
+            CBSZ = -1
+            BLGP = -1
+        kDim = kDim / 2 if kpack == 2 else kDim
+        return f"mfma_f32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_{suffix}", kpack, CBSZ, BLGP
+
+    ## Both types are fp16 or bf16
+    if isType16Bit(dtype_a) and isType16Bit(dtype_b):
+        assert (
+            kWidth == 8 or kWidth == 4
+        ) and kGroup == 1, f"Not a valid mfma instruction for {dtype_a} x {dtype_b} with {kWidth=} and {kGroup=}"
+        kpack = 1
+        CBSZ = -1
+        BLGP = -1
+        return f"mfma_f32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_{dtype_a}", kpack, CBSZ, BLGP
+
+    ## Both types are i8
+    if dtype_a == 'i8' and dtype_b == 'i8':
+        assert (
+            kWidth == 16 or kWidth == 8
+        ) and kGroup == 1, f"Not a valid mfma instruction for {dtype_a} x {dtype_b} with {kWidth=} and {kGroup=}"
+        kpack = 1
+        CBSZ = -1
+        BLGP = -1
+        return f"mfma_i32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_{dtype_a}", kpack, CBSZ, BLGP
+
+    assert False, "Mixed precision between fp8/bf8 and fp6/bf6/f4 not supported in this mode"
+
+
 def run_bash_command(commandstring):
     proc = subprocess.run(commandstring, shell=True, check=True, executable='/bin/bash', stdout=subprocess.PIPE)
     return proc.stdout.splitlines()
@@ -135,6 +259,12 @@ def parse_args():
                         help='number of contiguous elements per thread')
     parser.add_argument("-kGroup", type=int, default=1, choices=[1, 2],
                         help='total number of elements / kWidth per mfma instruction')
+    parser.add_argument("-dtype_a", type=str, default='fp16',
+                        choices=['fp16', 'bf16', 'fp8', 'bf8', 'fp6', 'bf6', 'f4',
+                                 'i8'], help='element type of operand A')
+    parser.add_argument("-dtype_b", type=str, default='fp16',
+                        choices=['fp16', 'bf16', 'fp8', 'bf8', 'fp6', 'bf6', 'f4',
+                                 'i8'], help='element type of operand B')
     ## LDS access parameters
     parser.add_argument("-lds_layout", type=str, default="none", choices=['swizzle', 'padding', 'none'],
                         help='choose the LDS data layout')
@@ -168,6 +298,8 @@ def main():
     mfmaNonKDim = args.nonKDim
     kWidth = args.kWidth
     kGroup = args.kGroup
+    dtype_a = args.dtype_a
+    dtype_b = args.dtype_b
     trans = 1 if args.mfmaTrans else 0
     ofilename = args.o
     keepSrc = args.keep
@@ -191,28 +323,44 @@ def main():
         print(f"{order=}", end=" ")
         CTAShape.append(sizePerThread[0] * threadsPerWarp[0] * warpsPerCTA[0])
         CTAShape.append(sizePerThread[1] * threadsPerWarp[1] * warpsPerCTA[1])
-
-    if plot_mode == 'dot':
-        mfma_inst_str = "mfma_32x32" if mfmaNonKDim == 32 else "mfma_16x16"
-        mfma_trans_str = ".trans" if trans else ""
-        print(f"Plotting dot operation with shapes {M=},{N=},{K=}")
-        print("MFMA: " + mfma_inst_str + mfma_trans_str + f" {kWidth=}, {kGroup=}", end=" ")
-        print(f"{warpsPerCTA=}", end=" ")
-        CTAShape.append(mfmaNonKDim * warpsPerCTA[0])
-        CTAShape.append(mfmaNonKDim * warpsPerCTA[1])
-
-    if plot_mode == 'blocked' or plot_mode == 'dot':
         print(f"CTAShape={CTAShape}")
-
-    if plot_mode == 'blocked':
         assert dim0 != 0 and CTAShape[0] <= dim0 and dim0 % CTAShape[0] == 0, "bad tensor dimension " + dim0Name
         assert dim1 != 0 and CTAShape[1] <= dim1 and dim1 % CTAShape[1] == 0, "bad tensor dimension " + dim1Name
 
     if plot_mode == 'dot':
+        CTAShape.append(mfmaNonKDim * warpsPerCTA[0])
+        CTAShape.append(mfmaNonKDim * warpsPerCTA[1])
+        print(f"Plotting dot operation with shapes=M{M}-N{N}-K{K},{kWidth=},{kGroup=},{warpsPerCTA=},{CTAShape=}")
         assert M != 0 and CTAShape[0] <= M and M % CTAShape[0] == 0, "bad tensor dimension M"
         assert N != 0 and CTAShape[1] <= N and N % CTAShape[1] == 0, "bad tensor dimension N"
-        kDim = kWidth * kGroup * 64 / mfmaNonKDim
-        assert K != 0 and K % kDim == 0, f"one mfma instruction requires {kDim:.0f} elements along k dim but BLOCK_K = {K}"
+        if isMixedPrecBtwF8AndF4OrF6(dtype_a, dtype_b):
+            ## In the case of mixed precision between 8-bit and 4 or 6-bit,
+            ## ignore kWidth and kGroup since inA and inB have different kWidth and kGroup values
+            kDim = 128
+            assert K != 0 and K % kDim == 0, f"one mfma instruction requires {kDim:.0f} elements along k dim but BLOCK_K = {K}"
+            kpack = 1
+            CBSZ = matrixFormatTable[dtype_b] if trans else matrixFormatTable[dtype_a]
+            BLGP = matrixFormatTable[dtype_a] if trans else matrixFormatTable[dtype_b]
+            mfma_inst_str = f"mfma_f32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_f8f6f4"
+        else:
+            kDim = kWidth * kGroup * 64 / mfmaNonKDim
+            assert K != 0 and K % kDim == 0, f"one mfma instruction requires {kDim:.0f} elements along k dim but BLOCK_K = {K}"
+            mfma_inst_str, kpack, CBSZ, BLGP = checkMfmaValidity(mfmaNonKDim, kWidth, kGroup, dtype_a, dtype_b, trans)
+        flag = '' if CBSZ == -1 else f" with {CBSZ=},{BLGP=}"
+        print(f"MFMA: {mfma_inst_str} x {kpack}{flag}", end="")
+        mfma_inst_str = mfma_inst_str.replace("_", "\\_")
+        mfma_inst_str = mfma_inst_str + flag
+        if kpack == 2:
+            mfma_inst_str = mfma_inst_str + " $\\times$ 2"
+        if ((dtype_a == 'fp16' or dtype_a == 'bf16') and kWidth == 8) or (dtype_a == 'i8' and kWidth == 16):
+            kDim = 64 / mfmaNonKDim * kWidth / 2
+            outType = "i32" if dtype_a == 'i8' else "f32"
+            old_instr = f"mfma_{outType}_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_{dtype_a}"
+            print(f" or {old_instr} x 2")
+            old_instr = old_instr.replace("_", "\\_")
+            mfma_inst_str = mfma_inst_str + " or\\\\" + old_instr + "$\\times$2"
+        else:
+            print("")
 
     if plot_mode == 'lds':
         print(f"Plotting LDS access for tensor M={M},K={K} with vec={kWidth}")
@@ -226,7 +374,8 @@ def main():
         draw_blockedLayout_str = draw_blocked_layout_cmd(dim0, dim1, dim0Name, dim1Name, sizePerThread, threadsPerWarp,
                                                          warpsPerCTA, order)
 
-        draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup)
+        draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup, dtype_a,
+                                                 dtype_b, mfma_inst_str, kpack)
 
         draw_lds_str = draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp)
 

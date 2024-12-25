@@ -6,7 +6,8 @@ Here is the help info from the script.
 ```bash
 >$ python3 plot_layout.py -h
 usage: Draw triton layouts [-h] [-tensorShape TENSORSHAPE TENSORSHAPE] [-dotShape DOTSHAPE DOTSHAPE DOTSHAPE] [-plot {blocked,dot,wmma,lds}] [-dim0 DIM0] [-dim1 DIM1] [-sizePerThread SIZEPERTHREAD SIZEPERTHREAD] [-threadsPerWarp THREADSPERWARP THREADSPERWARP]
-                           [-warpsPerCTA WARPSPERCTA WARPSPERCTA] [-order ORDER ORDER] [-nonKDim {16,32}] [-kWidth {4,8,16,32}] [-kGroup {1,2}] [-lds_layout {swizzle,padding,none}] [-lds_access {read,write,none}] [-wave_size {32,64}] [-o O] [-mfmaTrans] [-keep]
+                           [-warpsPerCTA WARPSPERCTA WARPSPERCTA] [-order ORDER ORDER] [-nonKDim {16,32}] [-kWidth {4,8,16,32}] [-kGroup {1,2}] [-dtype_a {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}] [-dtype_b {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}]
+                           [-lds_layout {swizzle,padding,none}] [-lds_access {read,write,none}] [-wave_size {32,64}] [-o O] [-mfmaTrans] [-keep]
 
 options:
   -h, --help            show this help message and exit
@@ -25,6 +26,10 @@ options:
   -nonKDim {16,32}      mfma instruction dim
   -kWidth {4,8,16,32}   number of contiguous elements per thread
   -kGroup {1,2}         total number of elements / kWidth per mfma instruction
+  -dtype_a {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}
+                        element type of operand A
+  -dtype_b {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}
+                        element type of operand B
   -lds_layout {swizzle,padding,none}
                         choose the LDS data layout
   -lds_access {read,write,none}
@@ -69,37 +74,41 @@ Notes
 
 Examples:
 ```bash
-python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 32 -kWidth 4
-python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 32 -kWidth 8
-python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 32 -kWidth 8 -mfmaTrans
-python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 16 -kWidth 8
-python3 plot_layout.py -plot dot -dotShape 128 128 64 -warpsPerCTA 2 4 -nonKDim 16 -kWidth 16
-python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -nonKDim 16 -kWidth 16 -kGroup 2
+## i8 inputs
+python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -kWidth 8 -dtype_a i8 -dtype_b i8
+python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -kWidth 16 -dtype_a i8 -dtype_b i8
+## fp16/bf16 inputs
+python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -kWidth 4 -dtype_a fp16 -dtype_b fp16
+python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -kWidth 8 -dtype_a fp16 -dtype_b fp16
+## fp8/bf8 inputs
+python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -kWidth 8 -dtype_a fp8 -dtype_b bf8
+python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -kWidth 16 -dtype_a fp8 -dtype_b bf8
+python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -kWidth 16 -kGroup 2 -dtype_a fp8 -dtype_b bf8
+## f4 and fp6/bf6 inputs
+python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -kWidth 32 -kGroup 1 -dtype_a f4 -dtype_b bf6
 ```
 
+One can add `-nonKDim [16,32]` and `-mfmaTrans` to all of the above examples.
+
 This mode draws two graphs:
-1. The layout of the whole tile for tile A, B, and C
+1. The layout of the dot operation, i.e. tile C = tile A x tile B
 2. The layout of a single mfma block, operands and results of one or more mfma
    instructions that share the same accumulating VGPRs.
-   This view has thread distributions among tensor elements.
 
 Knobs
-- `-kWidth`: the number of elements that will be loaded into one thread at once
-- `-kGroup`: total number of elements / kWidth for on mfma instruction.
+- `-kWidth [4,8,16,32]`: the number of elements that will be loaded into one thread at once
+- `-kGroup [1,2]`: total number of elements / kWidth for on mfma instruction.
    This is 1 for all mfma instructions except for mfma_f32_16x16x128_f8f6f4 and mfma_f32_32x32x64_f8f6f4
    with fp8 input types (CBSZ=0 or 1 and/or BLGP=0 or 1)
-- `-nonKDim`: 16 ot 32, which is used to control the mfma instruction size
+- `-nonKDim [16,32]`: mfma instruction size. The default is set to 16.
 - `-mfmaTrans`: if set, the transposed mfma layout will be plotted.
+- `-dtype_a` and `-dtype_b`: element types of operand A and B. The default value is fp16.
 
 Notes
 - The layout shows the mapping from the threads/wave to the elements in the
-  original tensor. It does not care if the elements are re-arranged in LDS, like
-  swizzling to avoid bank conflicts.
-- The script does not allow settings for data type or k dim of the mfma instruction.
-  This can be controled by the `-kWidth` flag.
-  - For example, if we want `mfma_32x32x8xf16`, we can set `-nonKDim 32` and `-kWidth 4`.
-  - If we want `mfma_32x32x16xf8`, we can set `-nonKDim 32` and `-kWidth 8`.
-
+  original tensor. It does not matter if LDS is used.
+- The script does not allow settings for k dim of the mfma instruction.
+  This can be controled by the `-kWidth` and `-kGroup`.
 
 ## Draw LDS access (`-plot lds`)
 
