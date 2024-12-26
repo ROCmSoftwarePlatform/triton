@@ -20,7 +20,7 @@
   \foreach \iVec in {0,...,\maxIVec} {
     \coordinate (wave TL) at ($(block TL)+(\trans*\iVec*\groups*4*\elem, -\nonTrans*\iVec*\groups*4*\elem)$);
     \foreach \tg in {0,...,\maxGID}{
-      \pgfmathsetmacro{\colID}{\tg+4}
+      \pgfmathsetmacro{\colID}{\tg}
       \pgfmathsetmacro{\col}{\Colors[\colID]}
       \foreach \tid in {0,...,\maxTID} {
         \pgfmathsetmacro{\ratio}{\tid*2.5*\groups+15}
@@ -290,7 +290,35 @@
   \node [scale=.8*\scale, above] at ($(C TL)+(.5*\mfmaNonKDim*\elem, 0)$) {\mfmaNonKDim};
 }
 
-\newcommand{\drawMFMAInstr}[5]{
+\newcommand{\drawZoomInVec}[3]{
+  %%
+  %% Draw zoomed in view of vector of elements
+  %%
+  %% predefined variables
+  %% vec TL: top-left coordinates of the vector
+  %% orig TL: top-left coordinates of the original small vector
+  %% \elem: vertical element size of operands, element size of output
+  %% \elemW: honrizontal element size of operands
+  %% \scaleLabel: extra scale applied to labels according to kWidth
+  %%
+  %% #1: number of elements
+  %% #2: 0 for opLeft, 1 for opRight
+  %% #3: label
+
+  \pgfmathsetmacro{\kWidth}{#1}
+  \pgfmathsetmacro{\opLeft}{#2}
+  \pgfmathsetmacro{\opRight}{1-#2}
+
+  \pgfmathsetmacro{\maxVec}{\kWidth-1}
+  \foreach \vecId in {0,...,\maxVec}{
+    \draw ($(vec TL)+(\vecId*\elem*\opRight, -\vecId*\elem*\opLeft)$) rectangle ++(\elem, -\elem);
+  }
+  \draw [densely dotted] (orig TL) -- ($(vec TL)+(\elem*\opLeft, -\elem*\opRight)$);
+  \draw [densely dotted] ($(orig TL)+(\kWidth*\elemW*\opRight, -\kWidth*\elemW*\opLeft)$) -- ($(vec TL)+(\kWidth*\elem*\opRight+\elem*\opLeft, -\elem*\opRight-\kWidth*\elem*\opLeft)$);
+  \node [scale=.8*\scaleLabel, above, rotate=90*\opLeft] at ($(vec TL)+(.5*\kWidth*\elem*\opRight,  -.5*\kWidth*\elem*\opLeft)$) {#3};
+}
+
+\newcommand{\drawMFMAInstr}[6]{
   %%
   %% Draw layout of mfma instructions with tid labeled
   %%
@@ -305,11 +333,13 @@
   %% #3: dtype_a
   %% #4: dtype_b
   %% #5: outType
+  %% #6: scaling: if set, draw scaling tensors
   
   \pgfmathsetmacro{\mfmaNonKDim}{#1}
   \pgfmathsetmacro{\groups}{64/\mfmaNonKDim}
   \pgfmathsetmacro{\mfmaTrans}{#2}
   \pgfmathsetmacro{\nonTrans}{1-#2}
+  \pgfmathsetmacro{\drawScale}{#6}
 
   \ifthenelse{\mfmaTrans=0}{
     \pgfmathsetmacro{\kWidthLeft}{\kWidthA}
@@ -324,12 +354,26 @@
   }
   \pgfmathsetmacro{\kDim}{int(\kWidthLeft*\groups*\kGroupLeft)}
 
+  %% Draw operand left
   \pgfmathsetmacro{\gap}{\elem*5}
   \coordinate (mfma opA TL) at ($(C TL)+(-.5*\gap-1.2*\nonTrans*\gap-\groups*\kWidthLeft*\elemW*\kGroupLeft, 0)$);
   \coordinate (mfma op TL) at (mfma opA TL);
   \drawMFMAOperand{\mfmaNonKDim}{\kWidthLeft}{\kGroupLeft}{0}{1}
-  \coordinate (mfma op TL) at ($(C TL)+(0, 1.5*\gap+.5*\mfmaTrans*\gap+\groups*\kWidthRight*\elemW*\kGroupRight)$);
+  %% Draw operand right
+  \coordinate (mfma opB TL) at ($(C TL)+(0, 1.5*\gap+.5*\mfmaTrans*\gap+\groups*\kWidthRight*\elemW*\kGroupRight)$);
+  \coordinate (mfma op TL) at (mfma opB TL);
   \drawMFMAOperand{\mfmaNonKDim}{\kWidthRight}{\kGroupRight}{1}{1}
+
+  %% Draw scaling tensors if needed
+  \ifthenelse{\drawScale=1}{
+    \coordinate (left scaling TL) at ($(mfma opA TL)+(-0.3*\gap-\groups*4*\elemW, 0)$);
+    \coordinate (mfma op TL) at (left scaling TL);
+    \drawMFMAOperand{\mfmaNonKDim}{4}{1}{0}{1}
+
+    \coordinate (right scaling TL) at ($(mfma opB TL)+(0, 0.3*\gap+\groups*4*\elemW)$);
+    \coordinate (mfma op TL) at (right scaling TL);
+    \drawMFMAOperand{\mfmaNonKDim}{4}{1}{1}{1}
+  }{}
 
   \coordinate (block TL) at (C TL);
   \drawBlockMFMALayoutLarge{\mfmaTrans}{\mfmaNonKDim}{1}
@@ -339,31 +383,38 @@
   \def\opAType{#3}
   \def\opBType{#4}
   \def\outType{#5}
-  %% Draw kWidth vector and lable of first operand
+
+  %% Draw kWidth vector and label of first operand
   \coordinate (vec TL) at ($(mfma opA TL)+(0, 5*\elem)$);
-  \pgfmathsetmacro{\maxVec}{\kWidthLeft-1}
-  \foreach \vecId in {0,...,\maxVec}{
-    \draw ($(vec TL)+(\vecId*\elem, 0)$) rectangle ++(\elem, -\elem);
-  }
-  \draw [densely dotted] (mfma opA TL) -- ($(vec TL)+(0, -\elem)$);
-  \draw [densely dotted] ($(mfma opA TL)+(\kWidthLeft*\elemW, 0)$) -- ($(vec TL)+(\kWidthLeft*\elem, -\elem)$);
-  \node [scale=.8*\scaleLabel, above] at ($(vec TL)+(.5*\kWidthLeft*\elem, 0)$) {kWidth=\kWidthLeft};
-  %% Draw kWidth vector and lable of second operand
-  \coordinate (vec TL) at ($(mfma op TL)+(-5*\elem, 0)$);
-  \pgfmathsetmacro{\maxVec}{\kWidthRight-1}
-  \foreach \vecId in {0,...,\maxVec}{
-    \draw ($(vec TL)+(0, -\vecId*\elem)$) rectangle ++(\elem, -\elem);
-  }
-  \draw [densely dotted] (mfma op TL) -- ($(vec TL)+(\elem,0)$);
-  \draw [densely dotted] ($(mfma op TL)+(0, -\kWidthRight*\elemW)$) -- ($(vec TL)+(\elem, -\kWidthRight*\elem)$);
-  \node [scale=.8*\scaleLabel, above, rotate=90] at ($(vec TL)+(0, -.5*\kWidthRight*\elem)$) {kWidth=\kWidthRight};
+  \coordinate (orig TL) at (mfma opA TL);
+  \drawZoomInVec{\kWidthLeft}{0}{kWidth=\kWidthLeft}
+
+  %% Draw kWidth vector and label of second operand
+  \coordinate (vec TL) at ($(mfma opB TL)+(-5*\elem, 0)$);
+  \coordinate (orig TL) at (mfma opB TL);
+  \drawZoomInVec{\kWidthRight}{1}{kWidth=\kWidthRight}
+
+  \ifthenelse{\drawScale=1}{
+    %% Draw vec and label of scalingLeft
+    \coordinate (vec TL) at ($(left scaling TL)+(0, 5*\elem)$);
+    \coordinate (orig TL) at (left scaling TL);
+    \drawZoomInVec{4}{0}{vec=4$\times$e8m0}
+    %% Draw vec and label of scalingRight
+    \coordinate (vec TL) at ($(right scaling TL)+(-5*\elem, 0)$);
+    \coordinate (orig TL) at (right scaling TL);
+    \drawZoomInVec{4}{1}{vec=4$\times$e8m0}
+  }{}
 
   %% Draw labels according to mfma.trans or not
   \ifthenelse{\mfmaTrans=0}{
     \node [scale=\scaleLabel, above left] at ($(mfma opA TL)+(\kWidthLeft*\elemW*\groups*\kGroupLeft, 0)$)
     {inA:$\mfmaNonKDim \times \kDim \times $\opAType};
-    \node [scale=\scaleLabel, above right, rotate=90] at ($(mfma op TL)+(0,-\groups*\kWidthRight*\elemW*\kGroupRight)$)
+    \node [scale=\scaleLabel, above right, rotate=90] at ($(mfma opB TL)+(0,-\groups*\kWidthRight*\elemW*\kGroupRight)$)
     {inB:$\kDim \times \mfmaNonKDim \times $\opBType};
+    \ifthenelse{\drawScale=1}{
+      \node [scale=\scaleLabel, above] at ($(left scaling TL)+(0.5*4*\elemW*\groups, 0)$) {scaleA};
+      \node [scale=\scaleLabel, above, rotate=90] at ($(right scaling TL)+(0,-0.5*\groups*4*\elemW)$) {scaleB};
+    }{}
     \coordinate (vec TL) at ($(block TL)+(-3*\elem-\elem,0)$);
     \foreach \vecId in {0,1,2,3}{
       \draw ($(vec TL)+(0, -\vecId*\elem)$) rectangle ++(\elem, -\elem);
@@ -375,8 +426,12 @@
   }{
     \node [scale=\scaleLabel, above left] at ($(mfma opA TL)+(\kWidthLeft*\elemW*\groups*\kGroupLeft, 0)$)
     {inB:$\kDim \times \mfmaNonKDim^T \times $\opBType};
-    \node [scale=\scaleLabel, above right, rotate=90] at ($(mfma op TL)+(0, -\groups*\kWidthRight*\elemW*\kGroupRight)$)
+    \node [scale=\scaleLabel, above right, rotate=90] at ($(mfma opB TL)+(0, -\groups*\kWidthRight*\elemW*\kGroupRight)$)
     {inA:$\mfmaNonKDim \times \kDim^T \times $\opAType};
+    \ifthenelse{\drawScale=1}{
+      \node [scale=\scaleLabel, above] at ($(left scaling TL)+(.5*4*\elemW*\groups, 0)$) {scaleB};
+      \node [scale=\scaleLabel, above, rotate=90] at ($(right scaling TL)+(0, -.5*\groups*4*\elemW)$) {scaleA};
+    }{}
     \coordinate (vec TL) at ($(block TL)+(0, 3*\elem+\elem)$);
     \foreach \vecId in {0,1,2,3}{
       \draw ($(vec TL)+(\vecId*\elem, 0)$) rectangle ++(\elem, -\elem);
@@ -384,6 +439,6 @@
     \draw [densely dotted] (block TL) -- ++(0, 3*\elem);
     \draw [densely dotted] ($(block TL)+(4*\elem, 0)$) -- ++(0, 3*\elem);
     \node [scale=.8*\scale, above] at ($(vec TL)+(.5*4*\elem, 0)$) {vec=4$\times$\outType};
-    \node [scale=.6*\scale, above, align=center] at ($(block TL)+(8*\elem, 0)$) {mfmaLayout\\trans=True};
+    \node [scale=.6*\scale, above, align=center] at ($(block TL)+(.5*\mfmaNonKDim*\elem, 0)$) {mfmaLayout\\trans=True};
   }
 }

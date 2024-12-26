@@ -5,7 +5,7 @@ import subprocess
 
 
 def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup, dtype_a, dtype_b, mfma_inst_str,
-                        kpack, isMixed864):
+                        kpack, isMixed864, plot_scale):
     scaleLabel = 0.7 if (kWidth == 4 or (kWidth == 8 and mfmaNonKDim == 32)) else 1
 
     outType = 'i32' if dtype_a == 'i8' else 'f32'
@@ -36,6 +36,8 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup
         ratio = 1
     elemWidth = elemLarge * ratio
 
+    scaling = 1 if plot_scale else 0
+
     return f'''\\begin{{document}}
   \\begin{{tikzpicture}}
     \\def\\scale{{1}}
@@ -59,10 +61,10 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup
     \\pgfmathsetmacro{{\\gap}}{{\\elem*5}}
     \\pgfmathsetmacro{{\\nonTrans}}{{1-\\mfmaTrans}}
     \\pgfmathsetmacro{{\\groups}}{{64/{mfmaNonKDim}}}
-    \\coordinate (C TL) at ($(C TL)+(.5*\\gap+1.2*\\nonTrans*\\gap+\\groups*{kWidth_left}*{kGroup_left}*\\elemW, -{M}*\\oldElem+{mfmaNonKDim}*\\elem)$);
+    \\coordinate (C TL) at ($(C TL)+({scaling}*0.3*\\gap+{scaling}*\\groups*4*\elemW+.5*\\gap+1.2*\\nonTrans*\\gap+\\groups*{kWidth_left}*{kGroup_left}*\\elemW, -{M}*\\oldElem+{mfmaNonKDim}*\\elem)$);
     \\coordinate (mfma instr) at ($(C TL)+(-.5*\\gap-0.6*\\nonTrans*\\gap-0.4*\\mfmaTrans*\\gap, 1.5*\\gap+.5*\\mfmaTrans*\\gap)$);
     \\node [scale=\scaleLabel, above left, align=left, draw=black, fill=white] at (mfma instr) {{{mfma_inst_str}}};
-    \\drawMFMAInstr{{{mfmaNonKDim}}}{{\\mfmaTrans}}{{{dtype_a}}}{{{dtype_b}}}{{{outType}}}
+    \\drawMFMAInstr{{{mfmaNonKDim}}}{{\\mfmaTrans}}{{{dtype_a}}}{{{dtype_b}}}{{{outType}}}{{{scaling}}}
 
   \\end{{tikzpicture}}
 \\end{{document}}'''
@@ -166,7 +168,7 @@ def isMixedPrecBtwF8AndF4OrF6(dtype_a, dtype_b):
                                                                      and isType4Or6Bit(dtype_a))
 
 
-def checkMfmaValidity(mfmaNonKDim, kWidth, kGroup, dtype_a, dtype_b, trans):
+def checkMfmaValidity(mfmaNonKDim, kWidth, kGroup, dtype_a, dtype_b, trans, scale):
     ## Check input types
     ## Mixed precision is only allowed within f8, f6 and f4
     assert (isMixedPrecType(dtype_a) and isMixedPrecType(dtype_b)) or (
@@ -208,7 +210,8 @@ def checkMfmaValidity(mfmaNonKDim, kWidth, kGroup, dtype_a, dtype_b, trans):
         kpack = 1
         CBSZ = matrixFormatTable[dtype_b] if trans else matrixFormatTable[dtype_a]
         BLGP = matrixFormatTable[dtype_a] if trans else matrixFormatTable[dtype_b]
-        return f"mfma_f32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_f8f6f4", kpack, CBSZ, BLGP
+        scale_str = 'scale_' if scale else ''
+        return f"mfma_{scale_str}f32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_f8f6f4", kpack, CBSZ, BLGP, scale
 
     ## Both dtypes are fp8 or bf8
     if isType8BitFloat(dtype_a) and isType8BitFloat(dtype_b):
@@ -219,12 +222,16 @@ def checkMfmaValidity(mfmaNonKDim, kWidth, kGroup, dtype_a, dtype_b, trans):
             suffix = "f8f6f4"
             CBSZ = matrixFormatTable[dtype_b] if trans else matrixFormatTable[dtype_a]
             BLGP = matrixFormatTable[dtype_a] if trans else matrixFormatTable[dtype_b]
+            plot_scale = scale
+            scale_str = 'scale_' if scale else ''
         else:
             suffix = f"{dtype_b}_{dtype_a}" if trans else f"{dtype_a}_{dtype_b}"
             CBSZ = -1
             BLGP = -1
+            plot_scale = False
+            scale_str = ''
         kDim = kDim / 2 if kpack == 2 else kDim
-        return f"mfma_f32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_{suffix}", kpack, CBSZ, BLGP
+        return f"mfma_{scale_str}f32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_{suffix}", kpack, CBSZ, BLGP, plot_scale
 
     ## Both types are fp16 or bf16
     if isType16Bit(dtype_a) and isType16Bit(dtype_b):
@@ -234,7 +241,7 @@ def checkMfmaValidity(mfmaNonKDim, kWidth, kGroup, dtype_a, dtype_b, trans):
         kpack = 1
         CBSZ = -1
         BLGP = -1
-        return f"mfma_f32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_{dtype_a}", kpack, CBSZ, BLGP
+        return f"mfma_f32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_{dtype_a}", kpack, CBSZ, BLGP, False
 
     ## Both types are i8
     if dtype_a == 'i8' and dtype_b == 'i8':
@@ -244,7 +251,7 @@ def checkMfmaValidity(mfmaNonKDim, kWidth, kGroup, dtype_a, dtype_b, trans):
         kpack = 1
         CBSZ = -1
         BLGP = -1
-        return f"mfma_i32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_{dtype_a}", kpack, CBSZ, BLGP
+        return f"mfma_i32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_{dtype_a}", kpack, CBSZ, BLGP, False
 
     assert False, "Mixed precision between fp8/bf8 and fp6/bf6/f4 not supported in this mode"
 
@@ -284,6 +291,9 @@ def parse_args():
     parser.add_argument("-dtype_b", type=str, default='fp16',
                         choices=['fp16', 'bf16', 'fp8', 'bf8', 'fp6', 'bf6', 'f4',
                                  'i8'], help='element type of operand B')
+    parser.add_argument("-mfmaTrans", action='store_true', default=False, help='If set, then use mfma.trans layout')
+    parser.add_argument("-scale", action='store_true', default=False,
+                        help='If set, plot the scale tensor for mfma_f8f6f4 instructions')
     ## LDS access parameters
     parser.add_argument("-lds_layout", type=str, default="none", choices=['swizzle', 'padding', 'none'],
                         help='choose the LDS data layout')
@@ -291,9 +301,7 @@ def parse_args():
                         help='choose LDS access mode')
     ## wmma instruction layout parameter
     parser.add_argument("-wave_size", type=int, default=32, choices=[32, 64], help='choose the wmma instruction mode')
-
     parser.add_argument("-o", type=str, default="myplot", help='output pdf file name (without surfix)')
-    parser.add_argument("-mfmaTrans", action='store_true', default=False, help='If set, then use mfma.trans layout')
     parser.add_argument("-keep", action='store_true', default=False, help='If set, keep the generated .tex file')
 
     args = parser.parse_args()
@@ -320,6 +328,7 @@ def main():
     dtype_a = args.dtype_a
     dtype_b = args.dtype_b
     trans = 1 if args.mfmaTrans else 0
+    scale = 1 if args.scale else 0
     ofilename = args.o
     keepSrc = args.keep
 
@@ -360,15 +369,19 @@ def main():
             kpack = 1
             CBSZ = matrixFormatTable[dtype_b] if trans else matrixFormatTable[dtype_a]
             BLGP = matrixFormatTable[dtype_a] if trans else matrixFormatTable[dtype_b]
-            mfma_inst_str = f"mfma_f32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_f8f6f4"
+            scale_str = 'scale_' if scale else ''
+            mfma_inst_str = f"mfma_{scale_str}f32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_f8f6f4"
             isMixed864 = True
+            plot_scale = scale
         else:
             kDim = kWidth * kGroup * 64 / mfmaNonKDim
             assert K != 0 and K % kDim == 0, f"one mfma instruction requires {kDim:.0f} elements along k dim but BLOCK_K = {K}"
-            mfma_inst_str, kpack, CBSZ, BLGP = checkMfmaValidity(mfmaNonKDim, kWidth, kGroup, dtype_a, dtype_b, trans)
+            mfma_inst_str, kpack, CBSZ, BLGP, plot_scale = checkMfmaValidity(mfmaNonKDim, kWidth, kGroup, dtype_a,
+                                                                             dtype_b, trans, scale)
             isMixed864 = False
         flag = '' if CBSZ == -1 else f" with {CBSZ=},{BLGP=}"
-        print(f"MFMA: {mfma_inst_str} x {kpack}{flag}", end="")
+        scale_info = f" (scale is not supported hence ignored)" if (scale and not plot_scale) else ''
+        print(f"MFMA: {mfma_inst_str} x {kpack}{flag}{scale_info}", end="")
         mfma_inst_str = mfma_inst_str.replace("_", "\\_")
         mfma_inst_str = mfma_inst_str + flag
         if kpack == 2:
@@ -396,7 +409,7 @@ def main():
                                                          warpsPerCTA, order)
 
         draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup, dtype_a,
-                                                 dtype_b, mfma_inst_str, kpack, isMixed864)
+                                                 dtype_b, mfma_inst_str, kpack, isMixed864, plot_scale)
 
         draw_lds_str = draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp)
 

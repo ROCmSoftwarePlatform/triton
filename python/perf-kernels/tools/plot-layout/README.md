@@ -6,8 +6,8 @@ Here is the help info from the script.
 ```bash
 >$ python3 plot_layout.py -h
 usage: Draw triton layouts [-h] [-tensorShape TENSORSHAPE TENSORSHAPE] [-dotShape DOTSHAPE DOTSHAPE DOTSHAPE] [-plot {blocked,dot,wmma,lds}] [-dim0 DIM0] [-dim1 DIM1] [-sizePerThread SIZEPERTHREAD SIZEPERTHREAD] [-threadsPerWarp THREADSPERWARP THREADSPERWARP]
-                           [-warpsPerCTA WARPSPERCTA WARPSPERCTA] [-order ORDER ORDER] [-nonKDim {16,32}] [-kWidth {4,8,16,32}] [-kGroup {1,2}] [-dtype_a {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}] [-dtype_b {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}]
-                           [-lds_layout {swizzle,padding,none}] [-lds_access {read,write,none}] [-wave_size {32,64}] [-o O] [-mfmaTrans] [-keep]
+                           [-warpsPerCTA WARPSPERCTA WARPSPERCTA] [-order ORDER ORDER] [-nonKDim {16,32}] [-kWidth {4,8,16,32}] [-kGroup {1,2}] [-dtype_a {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}] [-dtype_b {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}] [-mfmaTrans] [-scale]
+                           [-lds_layout {swizzle,padding,none}] [-lds_access {read,write,none}] [-wave_size {32,64}] [-o O] [-keep]
 
 options:
   -h, --help            show this help message and exit
@@ -30,13 +30,14 @@ options:
                         element type of operand A
   -dtype_b {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}
                         element type of operand B
+  -mfmaTrans            If set, then use mfma.trans layout
+  -scale                If set, plot the scale tensor for mfma_f8f6f4 instructions
   -lds_layout {swizzle,padding,none}
                         choose the LDS data layout
   -lds_access {read,write,none}
                         choose LDS access mode
   -wave_size {32,64}    choose the wmma instruction mode
   -o O                  output pdf file name (without surfix)
-  -mfmaTrans            If set, then use mfma.trans layout
   -keep                 If set, keep the generated .tex file
 ```
 
@@ -88,6 +89,8 @@ python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -kWidth 
 python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -kWidth 32 -kGroup 1 -dtype_a f4 -dtype_b bf6
 ## fp8/bf8 and fp6/bf6/f4 inputs
 python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -kWidth 16 -kGroup 2 -dtype_a fp6 -dtype_b bf8
+## mixed precision with scaling
+python3 plot_layout.py -plot dot -dotShape 128 128 128 -warpsPerCTA 2 4 -kWidth 16 -kGroup 2 -dtype_a fp6 -dtype_b bf8 -scale
 ```
 
 One can add `-nonKDim [16,32]` and `-mfmaTrans` to all of the above examples.
@@ -105,6 +108,8 @@ Knobs
 - `-nonKDim [16,32]`: mfma instruction size. The default is set to 16.
 - `-mfmaTrans`: if set, the transposed mfma layout will be plotted.
 - `-dtype_a` and `-dtype_b`: element types of operand A and B. The default value is fp16.
+- `-scale`: plot scale tensors for A and B. This is only supported with f4/f6 and f8 with `kGroup=2`.
+  If `-scale` is set but not supported, it's ignored.
 
 Notes
 - The layout shows the mapping from the threads/wave to the elements in the
