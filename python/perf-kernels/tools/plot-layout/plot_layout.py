@@ -5,10 +5,29 @@ import subprocess
 
 
 def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup, dtype_a, dtype_b, mfma_inst_str,
-                        kpack):
+                        kpack, isMixed864):
+    scaleLabel = 0.7 if (kWidth == 4 or (kWidth == 8 and mfmaNonKDim == 32)) else 1
+
+    outType = 'i32' if dtype_a == 'i8' else 'f32'
+    kWidth_a = kWidth_b = kWidth
+    kGroup_a = kGroup_b = kGroup
+    if isMixed864:
+        if isType8BitFloat(dtype_a):
+            kWidth_a = 16
+            kGroup_a = 2
+            kWidth_b = 32
+            kGroup_b = 1
+        else:
+            kWidth_a = 32
+            kGroup_a = 1
+            kWidth_b = 16
+            kGroup_b = 2
+    kWidth_left = kWidth_b if trans else kWidth_a
+    kGroup_left = kGroup_b if trans else kGroup_a
+
     elemSmall = 0.04
     elemLarge = 0.16
-    elemPerThread = kWidth * kGroup
+    elemPerThread = kWidth_a * kGroup_a
     if elemPerThread == 16:
         ratio = 0.8
     elif elemPerThread == 32:
@@ -17,17 +36,17 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup
         ratio = 1
     elemWidth = elemLarge * ratio
 
-    scaleLabel = 0.7 if (kWidth == 4 or (kWidth == 8 and mfmaNonKDim == 32)) else 1
-
-    outType = 'i32' if dtype_a == 'i8' else 'f32'
-
     return f'''\\begin{{document}}
   \\begin{{tikzpicture}}
     \\def\\scale{{1}}
     \\def\\elem{{{elemSmall}}}
     \\def\\elemW{{\\elem}}
+    \\def\\kWidthA{{{kWidth_a}}}
+    \\def\\kWidthB{{{kWidth_b}}}
+    \\def\\kGroupA{{{kGroup_a}}}
+    \\def\\kGroupB{{{kGroup_b}}}
     \\coordinate (C TL) at (0,0);
-    \\drawDot{{{M}}}{{{N}}}{{{K}}}{{{mfmaNonKDim}}}{{{warpsPerCTA[0]}}}{{{warpsPerCTA[1]}}}{{{trans}}}{{{kWidth}}}{{{kGroup}}}
+    \\drawDot{{{M}}}{{{N}}}{{{K}}}{{{mfmaNonKDim}}}{{{warpsPerCTA[0]}}}{{{warpsPerCTA[1]}}}{{{trans}}}
 
     \\coordinate (C TL) at ($(C TL)+({N}*\elem+32*\elem, 0)$);
     \\def\\mfmaTrans{{{trans}}}
@@ -40,10 +59,10 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup
     \\pgfmathsetmacro{{\\gap}}{{\\elem*5}}
     \\pgfmathsetmacro{{\\nonTrans}}{{1-\\mfmaTrans}}
     \\pgfmathsetmacro{{\\groups}}{{64/{mfmaNonKDim}}}
-    \\coordinate (C TL) at ($(C TL)+(.5*\\gap+1.2*\\nonTrans*\\gap+\\groups*{kWidth}*{kGroup}*\\elemW, -{M}*\\oldElem+{mfmaNonKDim}*\\elem)$);
+    \\coordinate (C TL) at ($(C TL)+(.5*\\gap+1.2*\\nonTrans*\\gap+\\groups*{kWidth_left}*{kGroup_left}*\\elemW, -{M}*\\oldElem+{mfmaNonKDim}*\\elem)$);
     \\coordinate (mfma instr) at ($(C TL)+(-.5*\\gap-0.6*\\nonTrans*\\gap-0.4*\\mfmaTrans*\\gap, 1.5*\\gap+.5*\\mfmaTrans*\\gap)$);
     \\node [scale=\scaleLabel, above left, align=left, draw=black, fill=white] at (mfma instr) {{{mfma_inst_str}}};
-    \\drawMFMAInstr{{{mfmaNonKDim}}}{{{kWidth}}}{{{kGroup}}}{{\\mfmaTrans}}{{{dtype_a}}}{{{dtype_b}}}{{{outType}}}
+    \\drawMFMAInstr{{{mfmaNonKDim}}}{{\\mfmaTrans}}{{{dtype_a}}}{{{dtype_b}}}{{{outType}}}
 
   \\end{{tikzpicture}}
 \\end{{document}}'''
@@ -342,10 +361,12 @@ def main():
             CBSZ = matrixFormatTable[dtype_b] if trans else matrixFormatTable[dtype_a]
             BLGP = matrixFormatTable[dtype_a] if trans else matrixFormatTable[dtype_b]
             mfma_inst_str = f"mfma_f32_{mfmaNonKDim}x{mfmaNonKDim}x{kDim:.0f}_f8f6f4"
+            isMixed864 = True
         else:
             kDim = kWidth * kGroup * 64 / mfmaNonKDim
             assert K != 0 and K % kDim == 0, f"one mfma instruction requires {kDim:.0f} elements along k dim but BLOCK_K = {K}"
             mfma_inst_str, kpack, CBSZ, BLGP = checkMfmaValidity(mfmaNonKDim, kWidth, kGroup, dtype_a, dtype_b, trans)
+            isMixed864 = False
         flag = '' if CBSZ == -1 else f" with {CBSZ=},{BLGP=}"
         print(f"MFMA: {mfma_inst_str} x {kpack}{flag}", end="")
         mfma_inst_str = mfma_inst_str.replace("_", "\\_")
@@ -375,7 +396,7 @@ def main():
                                                          warpsPerCTA, order)
 
         draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup, dtype_a,
-                                                 dtype_b, mfma_inst_str, kpack)
+                                                 dtype_b, mfma_inst_str, kpack, isMixed864)
 
         draw_lds_str = draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp)
 
