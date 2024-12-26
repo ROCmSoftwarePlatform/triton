@@ -380,7 +380,7 @@ def main():
                                                                              dtype_b, trans, scale)
             isMixed864 = False
         flag = '' if CBSZ == -1 else f" with {CBSZ=},{BLGP=}"
-        scale_info = f" (scale is not supported hence ignored)" if (scale and not plot_scale) else ''
+        scale_info = " (scale is not supported hence ignored)" if (scale and not plot_scale) else ''
         print(f"MFMA: {mfma_inst_str} x {kpack}{flag}{scale_info}", end="")
         mfma_inst_str = mfma_inst_str.replace("_", "\\_")
         mfma_inst_str = mfma_inst_str + flag
