@@ -15,13 +15,11 @@ def infer_mnk(model_name, batch_size, seq_len, config_file='model_configs.json')
         raise ValueError(f"Model '{model_name}' not found in {config_file}")
 
     config = configs[model_name]
-    head_count = config["head_count"]
-    head_dimension = config["head_dimension"]
 
     # Infer M, N, K based on the feedforward network (FFN) dimensions
     M = batch_size * seq_len  # Total tokens in a batch
-    K = head_dimension * head_count  # Hidden size (d)
-    N = 4 * K  # FFN dimension is typically 4× hidden size
+    K = config["model_dimension"] # head dimension * num heads
+    N = config["FFN_dimension"]  # size of the intermediate layer of FFN
 
     return M, N, K
 
@@ -41,17 +39,17 @@ def get_mnk(batch_size=1, seq_len=None, config_file='model_configs.json', model_
             raise ValueError(f"Model '{model_name}' not found in {config_file}")
         # Handle a specific model
         config = configs[model_name]
-        max_seq_len = config["max_seq_len"]
-        actual_seq_len = max_seq_len if seq_len is None else seq_len
+        max_ctx_len = config["max_ctx_len"]
+        actual_seq_len = max_ctx_len if seq_len is None else seq_len
         M, N, K = infer_mnk(model_name, batch_size, actual_seq_len, config_file)
         mnk_list.append((M, N, K))
     else:
         # Handle all models
         for model_name, config in configs.items():
-            max_seq_len = config["max_seq_len"]
-            actual_seq_len = seq_len or max_seq_len
-            if actual_seq_len > max_seq_len:
-                raise ValueError(f"Sequence length {actual_seq_len} exceeds maximum {max_seq_len} for {model_name}")
+            max_ctx_len = config["max_ctx_len"]
+            actual_seq_len = seq_len or max_ctx_len
+            if actual_seq_len > max_ctx_len:
+                raise ValueError(f"Sequence length {actual_seq_len} exceeds maximum {max_ctx_len} for {model_name}")
             M, N, K = infer_mnk(model_name, batch_size, actual_seq_len, config_file)
             mnk_list.append((M, N, K))
 
@@ -85,15 +83,19 @@ def get_FA_configs(batch_size=1, seq_len=None, model_name=None, config_file='mod
             raise ValueError(f"Model '{model_name}' not found in {config_file}")
         # Handle a specific model
         config = configs[model_name]
-        HQ = HK = config["head_count"]
-        max_seq_len = config["max_seq_len"]
-        N_CTX_Q = N_CTX_K = max_seq_len if seq_len is None else seq_len
+        HQ = config["num_attention_heads"]
+        HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"] 
+            
+        max_ctx_len = config["max_ctx_len"]
+        N_CTX_Q = N_CTX_K = max_ctx_len if seq_len is None else seq_len
         fa_configs.append((batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
     else:
         # Handle all models
         for model_name, config in configs.items():
-            HQ = HK = config["head_count"]
-            N_CTX_Q = N_CTX_K = config["max_seq_len"]
+            HQ = config["num_attention_heads"]
+            HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"] 
+            max_ctx_len = config["max_ctx_len"]
+            N_CTX_Q = N_CTX_K = max_ctx_len if seq_len is None else seq_len
             fa_configs.append((batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
 
     return fa_configs

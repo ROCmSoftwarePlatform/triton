@@ -1874,7 +1874,9 @@ def varlen_benchmark_configs():
 
 def model_benchmark_configs(batch_size, seq_len):
     config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json")
-    return model_benchmarking.get_FA_configs(batch_size=batch_size, seq_len=seq_len, config_file=config_file)
+    b = batch_size if batch_size else 1
+    sl = seq_len if seq_len else None
+    return model_benchmarking.get_FA_configs(batch_size=b, seq_len=sl, config_file=config_file)
 
 
 def run_benchmark(custom, args):
@@ -2021,7 +2023,7 @@ def main():
     custom_config = False
     assert args.layout == 'thd' or not args.equal_seqlens, \
            "Equal sequence lengths arg must be used with the thd layout."
-    if args.hq or args.hk or args.sk or args.d:
+    if args.hq or args.hk or args.sq or args.sk or args.d:
         custom_config = True
         assert args.b and args.hq and args.sq and args.d, \
                "If custom config is specified, please provide \
