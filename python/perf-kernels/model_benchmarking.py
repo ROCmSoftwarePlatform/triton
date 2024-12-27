@@ -18,7 +18,7 @@ def infer_mnk(model_name, batch_size, seq_len, config_file='model_configs.json')
 
     # Infer M, N, K based on the feedforward network (FFN) dimensions
     M = batch_size * seq_len  # Total tokens in a batch
-    K = config["model_dimension"] # head dimension * num heads
+    K = config["model_dimension"]  # head dimension * num heads
     N = config["FFN_dimension"]  # size of the intermediate layer of FFN
 
     return M, N, K
@@ -84,8 +84,8 @@ def get_FA_configs(batch_size=1, seq_len=None, model_name=None, config_file='mod
         # Handle a specific model
         config = configs[model_name]
         HQ = config["num_attention_heads"]
-        HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"] 
-            
+        HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"]
+
         max_ctx_len = config["max_ctx_len"]
         N_CTX_Q = N_CTX_K = max_ctx_len if seq_len is None else seq_len
         fa_configs.append((batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
@@ -93,7 +93,7 @@ def get_FA_configs(batch_size=1, seq_len=None, model_name=None, config_file='mod
         # Handle all models
         for model_name, config in configs.items():
             HQ = config["num_attention_heads"]
-            HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"] 
+            HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"]
             max_ctx_len = config["max_ctx_len"]
             N_CTX_Q = N_CTX_K = max_ctx_len if seq_len is None else seq_len
             fa_configs.append((batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
