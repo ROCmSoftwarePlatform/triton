@@ -34,24 +34,26 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
 static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
-                                    Value pred) {
-  // The epilogue peeling generates a select for the stage output. This causes
-  // too much register pressure with the loop result and the epilogue-dot in
-  // regs for the select. Conditionally executing the dot will allow the backend
-  // to optimize the select away as redundant.
-  if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
-    auto loc = dotOp->getLoc();
-    auto ifOp = rewriter.create<scf::IfOp>(loc, dotOp.getResult().getType(),
-                                           pred, /*withElseRegion=*/true);
-    auto thenB = ifOp.getThenBodyBuilder();
-    auto yield = thenB.create<scf::YieldOp>(loc, dotOp.getResult());
-    dotOp->moveBefore(yield);
-    ifOp.getElseBodyBuilder().create<scf::YieldOp>(loc, dotOp.getC());
-    return ifOp;
-  } else if (isa<gpu::BarrierOp>(op)) {
-    return op;
+                                    Value pred, bool guard) {
+  if (guard) {
+    // The epilogue peeling generates a select for the stage output. This causes
+    // too much register pressure with the loop result and the epilogue-dot in
+    // regs for the select. Conditionally executing the dot will allow the backend
+    // to optimize the select away as redundant.
+    if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
+      auto loc = dotOp->getLoc();
+      auto ifOp = rewriter.create<scf::IfOp>(loc, dotOp.getResult().getType(),
+                                             pred, /*withElseRegion=*/true);
+      auto thenB = ifOp.getThenBodyBuilder();
+      auto yield = thenB.create<scf::YieldOp>(loc, dotOp.getResult());
+      dotOp->moveBefore(yield);
+      ifOp.getElseBodyBuilder().create<scf::YieldOp>(loc, dotOp.getC());
+      return ifOp;
+    } else if (isa<gpu::BarrierOp>(op)) {
+      return op;
+    }
   }
-  return tt::predicateOp(rewriter, op, pred);
+  return tt::predicateOp(rewriter, op, pred, guard);
 }
 
 namespace {

@@ -142,7 +142,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     }
   }
   peelEpilogue = options.peelEpilogue;
-  guardEpilogue = options.guardEpilogue && dynamicLoop;
+  guardEpilogue = options.guardEpilogue;
   predicateFn = options.predicateFn;
   if ((!peelEpilogue || dynamicLoop) && predicateFn == nullptr) {
     LDBG("--no epilogue or predicate set -> BAIL");
@@ -319,7 +319,7 @@ LogicalResult LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
       int predicateIdx = i - stages[op];
       if (predicates[predicateIdx]) {
         OpBuilder::InsertionGuard insertGuard(rewriter);
-        newOp = predicateFn(rewriter, newOp, predicates[predicateIdx]);
+        newOp = predicateFn(rewriter, newOp, predicates[predicateIdx], true);
         if (newOp == nullptr)
           return failure();
       }
@@ -570,7 +570,7 @@ LogicalResult LoopPipelinerInternal::createKernel(
 
     if (predicates[useStage]) {
       OpBuilder::InsertionGuard insertGuard(rewriter);
-      newOp = predicateFn(rewriter, newOp, predicates[useStage]);
+      newOp = predicateFn(rewriter, newOp, predicates[useStage], true);
       if (!newOp)
         return failure();
       // Remap the results to the new predicated one.
@@ -697,7 +697,7 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
     // increment to next iterI
     iterI = rewriter.create<arith::AddIOp>(loc, iterI, one);
 
-    if (guardEpilogue) {
+    if (dynamicLoop) {
       // Disable stages when `i` is greater than total_iters.
       // pred = total_iters >= i
       predicates[i] = rewriter.create<arith::CmpIOp>(
@@ -722,9 +722,9 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
               newOperand->set(replacement);
             }
           });
-      if (guardEpilogue) {
+      if (dynamicLoop) {
         OpBuilder::InsertionGuard insertGuard(rewriter);
-        newOp = predicateFn(rewriter, newOp, predicates[currentVersion]);
+        newOp = predicateFn(rewriter, newOp, predicates[currentVersion], guardEpilogue);
         if (!newOp)
           return failure();
       }
@@ -752,7 +752,7 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
         }
       }
     }
-    if (guardEpilogue) {
+    if (dynamicLoop) {
       // Select return values from this stage (live outs) based on predication.
       // If the stage is valid select the peeled value, else use previous stage
       // value.
@@ -760,14 +760,16 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
         unsigned ri = pair.index();
         auto [mapVal, currentVersion] = returnMap[ri];
         if (mapVal) {
-          unsigned nextVersion = currentVersion + 1;
           Value pred = predicates[currentVersion];
-          Value prevValue = valueMapping[mapVal][currentVersion];
-          auto selOp = rewriter.create<arith::SelectOp>(loc, pred, pair.value(),
-                                                        prevValue);
-          returnValues[ri] = selOp;
+          Value val = valueMapping[mapVal][currentVersion];
+          if (guardEpilogue)
+            val = rewriter.create<arith::SelectOp>(loc, pred, pair.value(), val);
+          else
+            val = pair.value();
+          returnValues[ri] = val;
+          unsigned nextVersion = currentVersion + 1;
           if (nextVersion <= maxStage)
-            setValueMapping(mapVal, selOp, nextVersion);
+            setValueMapping(mapVal, val, nextVersion);
         }
       }
     }

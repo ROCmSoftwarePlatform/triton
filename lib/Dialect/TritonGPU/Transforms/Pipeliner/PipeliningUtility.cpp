@@ -45,7 +45,7 @@ static Value getPredMask(RewriterBase &rewriter, Type typeLike,
 
 // Function to mask operations during scheduling.
 Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
-                                     Value pred) {
+                                     Value pred, bool guardit) {
   OpBuilder::InsertionGuard guard(rewriter);
   if (mlir::isMemoryEffectFree(op))
     return op;
