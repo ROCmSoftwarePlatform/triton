@@ -760,16 +760,15 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
         unsigned ri = pair.index();
         auto [mapVal, currentVersion] = returnMap[ri];
         if (mapVal) {
-          Value pred = predicates[currentVersion];
-          Value val = valueMapping[mapVal][currentVersion];
-          if (guardEpilogue)
-            val = rewriter.create<arith::SelectOp>(loc, pred, pair.value(), val);
-          else
-            val = pair.value();
-          returnValues[ri] = val;
           unsigned nextVersion = currentVersion + 1;
+          Value pred = predicates[currentVersion];
+          Value prevValue = valueMapping[mapVal][currentVersion];
+          Value nextValue = pair.value();
+          if (guardEpilogue)
+            nextValue = rewriter.create<arith::SelectOp>(loc, pred, nextValue, prevValue);
+          returnValues[ri] = nextValue;
           if (nextVersion <= maxStage)
-            setValueMapping(mapVal, val, nextVersion);
+            setValueMapping(mapVal, nextValue, nextVersion);
         }
       }
     }
