@@ -259,26 +259,13 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
             # We can use the same offsets as k, just with dims transposed.
             v = load_fn(v_ptrs, k_offs_n, k_offs_k, actual_seqlen_k, ACTUAL_BLOCK_DMODEL)
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        # We start from end of seqlen_k so only the first iteration would need
-        # to be checked for padding if it is not a multiple of block_n
-        # TODO: This can be optimized to only be true for the padded block.
-
         if IS_CAUSAL:
             causal_boundary = start_n + offs_n_causal
             causal_mask = OFFS_M[:, None] >= causal_boundary[None, :]
             qk = tl.where(causal_mask, qk, float("-inf"))
-        
-        # -- compute qk ----
-        if INT8_GEMM:
-            qk += ((((tl.dot(q, k).to(tl.float32) * q_descale)) * k_descale) * QK_SCALE)
-        else:
-            if INT8_KV:
-                k = (k * k_descale).to(q.type.element_ty)
-            # TODO: works, but loses precision. Optimal would be that QK_SCALE comes after tl dot
-            # qk += tl.dot(q, k) * QK_SCALE
-            # qk += tl.dot((q * QK_SCALE).to(q.type.element_ty), k)
-            qk += (tl.dot(q, k) * QK_SCALE)
-        
+        # We start from end of seqlen_k so only the first iteration would need
+        # to be checked for padding if it is not a multiple of block_n
+        # TODO: This can be optimized to only be true for the padded block.
         if MASK_STEPS:
             # If this is the last block / iteration, we want to
             # mask if the sequence length is not a multiple of block size
@@ -290,12 +277,17 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
                 size_n = start_n + OFFS_N[None, :]
                 mask = size_n < boundary_m[:, None]
                 qk = tl.where(mask, qk, float("-inf"))
-
-
+        # -- compute qk ----
+        if INT8_GEMM:
+            qk += ((((tl.dot(q, k).to(tl.float32) * q_descale)) * k_descale) * QK_SCALE)
+        else:
+            if INT8_KV:
+                k = (k * k_descale).to(q.type.element_ty)
+            # TODO: works, but loses precision. Optimal would be that QK_SCALE comes after tl dot
+            # qk += tl.dot(q, k) * QK_SCALE
+            # qk += tl.dot((q * QK_SCALE).to(q.type.element_ty), k)
+            qk += (tl.dot(q, k) * QK_SCALE)
         
-
-
-
         if bias_ptrs is not None:
             bias_offs_n = start_n + tl.arange(0, BLOCK_N) if MASK_STEPS else None
             bias = load_fn(bias_ptrs, OFFS_M, bias_offs_n, actual_seqlen_q, actual_seqlen_k)
@@ -1882,11 +1874,14 @@ def varlen_benchmark_configs():
     return configs
 
 
-def model_benchmark_configs(batch_size, seq_len):
+def model_benchmark_configs(batch_size, seq_len, model="all"):
     config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json")
     b = batch_size if batch_size else 1
     sl = seq_len if seq_len else None
-    return model_benchmarking.get_FA_configs(batch_size=b, seq_len=sl, config_file=config_file)
+    model_name = None # no specified model by default, runs all
+    if model!="all":
+        model_name=model
+    return model_benchmarking.get_FA_configs(batch_size=b, seq_len=sl, config_file=config_file, model_name=model_name)
 
 
 def run_benchmark(custom, args):
@@ -1912,7 +1907,7 @@ def run_benchmark(custom, args):
             x_vals_list = nonvarlen_benchmark_configs()
 
         if args.model:
-            x_vals_list = model_benchmark_configs(batch_size=args.b, seq_len=args.sq)
+            x_vals_list = model_benchmark_configs(batch_size=args.b, seq_len=args.sq, model=args.model)
 
     print_time = args.return_time
     line_names = 'Time (ms)' if print_time else 'TFLOPS'

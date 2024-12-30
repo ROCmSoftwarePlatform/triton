@@ -4,20 +4,23 @@
     "num_key_value_heads": 8,
     "model_dimension": 4096,
     "max_ctx_len": 8192,
-    "FFN_dimension": 14336
+    "FFN_dimension": 14336,
+    "vocab_size": 128256
   },
   "llama3_70B": {
     "num_attention_heads": 64,
     "num_key_value_heads": 8,
     "model_dimension": 8192,
     "max_ctx_len": 8192,
-    "FFN_dimension": 28672
+    "FFN_dimension": 28672,
+    "vocab_size": 128256
   },
   "llama3_405B": {
     "num_attention_heads": 128,
     "num_key_value_heads": 8,
     "model_dimension": 16384,
     "max_ctx_len": 8192,
-    "FFN_dimension": 53248
+    "FFN_dimension": 53248,
+    "vocab_size": 128256
   }
 }

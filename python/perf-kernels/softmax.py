@@ -6,6 +6,8 @@ import pytest
 import triton
 import triton.language as tl
 
+import model_benchmarking
+
 
 def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
@@ -133,6 +135,28 @@ def test_softmax(M, N):
 arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
 
 
+def model_benchmark_configs(batch_size, seq_len, model):
+    import os
+    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json")
+    configs = model_benchmarking.load_model_config(config_file)
+    x_vals_list = []
+    b = 1 if batch_size < 1 else batch_size
+
+    if model=="all":
+        for model_name, config in configs.items():
+            sl = config["max_ctx_len"] if seq_len < 1 else seq_len
+            x_vals_list.append((b * sl, config["vocab_size"]))
+    else:
+        if model not in configs:
+            raise ValueError(f"Model '{model}' not found in {config_file}")
+        # Handle a specific model
+        config = configs[model]
+        sl = config["max_ctx_len"] if seq_len < 1 else seq_len
+        x_vals_list.append((b * sl, config["vocab_size"]))
+    
+    return x_vals_list
+
+
 def run_benchmark(args):
     config = []
     if (args.M_benchmark):
@@ -151,6 +175,13 @@ def run_benchmark(args):
         plot_name = str("softmax-performance_" + args.dtype + "_M" + str(args.M_start) + "_N" + str(args.N_start) +
                         "-" + str(args.N_end) + "-" + str(args.N_step))
         x_names = ['N']
+    
+    if args.model:
+        x_names = ['M', 'N']
+        mn_args = {}
+        plot_name = str("softmax-performance_" + args.dtype)
+        x_vals_list = model_benchmark_configs(args.b, args.sl, args.model)
+
     dtype = arg_to_torch_dtype[args.dtype]
 
     print(plot_name)
@@ -191,6 +222,13 @@ def parse_args():
         allow_abbrev=False,
     )
 
+    available_models = model_benchmarking.get_available_models()  # Dynamically load model names
+    model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
+                  "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
+    parser.add_argument("-model", type=str, default=None, help=model_help)
+    parser.add_argument('-b', type=int, default=0, help="batch size. Defaults to 1 with -model if not provided.")
+    parser.add_argument('-sl', type=int, default=0, help="sequence length. Defaults to max_seq_len with -model if not provided.")
+
     parser.add_argument('-M', "--M_start", default="1", type=int)
     parser.add_argument('-Ms', "--M_step", default="2", type=int)
     parser.add_argument('-Me', "--M_end", default="512", type=int)
@@ -208,6 +246,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+
     if args.no_benchmark:
         run_softmax(args.M_start, args.N_start)
     else:
