@@ -124,7 +124,7 @@
 }
 
 
-\newcommand{\drawLDSLayoutTritonSwizzling}[3]{
+\newcommand{\drawLDSLayoutAndAccess}[3]{
   %%
   %% Draw tensor layout in LDS with swizzling
   %%
@@ -154,15 +154,19 @@
 
   \drawLDSDiagram{#3}
 
-  %% Assuming fp16 data type
   \pgfmathsetmacro{\LDSK}{int(\banks*4/\bytesPerElem)}
   \pgfmathsetmacro{\numLDSVec}{\LDSK/\vec}
-  \pgfmathsetmacro{\swizzleK}{max(\LDSK, \K)}
-  \pgfmathsetmacro{\LDSM}{int(\M/\LDSK*\K)}
   \pgfmathsetmacro{\maxKVecId}{\K/\vec-1}
 
-  %% Parameters used for swizzling
+  %% Parameters for ds_read
+  % \vecInBytes: access width in bytes
+  % \vecInBits: access width in bits (ds_read_b64 or ds_read_b128)
+  % \numThreadsSameCycle: number of threads that will access LDS at the same cycle (8, 16, or 32)
+  \pgfmathsetmacro{\vecInBits}{int(\vecInBytes*8)}
+  \pgfmathsetmacro{\numThreadsSameCycle}{int(\banks*4/\vecInBytes)}
+  \pgfmathsetmacro{\maxTid}{int(\numThreadsSameCycle-1)}
 
+  %% Parameters for swizzling
   %% perPhase = ceil(LDSK / K)
   %% The number of the rows of the tensor that can share the same swizzling pattern
   \pgfmathsetmacro{\perPhase}{ceil(\LDSK/\K)}
@@ -173,7 +177,7 @@
   }{
     %% When vec is small enough, we want 16/perPhase different swizzling patterns
     %% When vec is large, we can only have 64 / \vec different swizzling pattern at most
-    \pgfmathsetmacro{\maxPhase}{min(16/\perPhase,\banks*4/\bytesPerElem/\vec)}
+    \pgfmathsetmacro{\maxPhase}{min(min(\mfmaNonKDim,\numThreadsSameCycle)/\perPhase,\banks*4/\bytesPerElem/\vec)}
   }
 
   %% Draw the vectors according to the swizzling pattern
@@ -184,9 +188,12 @@
     \pgfmathsetmacro{\kEnd}{int(\kStart+\elemsPerVec-1)}
     \foreach \row in {0,...,\maxRowId}{
       %% Compute some info of the current vec
-      \pgfmathsetmacro{\offVec}{\row*\K/\vec+\gp} %% global offset in unit of vec
-      \pgfmathsetmacro{\LDSRow}{int(\offVec/\numLDSVec)} %% which row of LDS
-      \pgfmathsetmacro{\LDSVecRaw}{int(mod(\offVec,\numLDSVec))} %% offset in the current LDS row in the unit of vec
+      % global offset in unit of vec
+      \pgfmathsetmacro{\offVec}{\row*\K/\vec+\gp}
+      % which row of LDS
+      \pgfmathsetmacro{\LDSRow}{int(\offVec/\numLDSVec)}
+      % offset in the current LDS row in the unit of vec
+      \pgfmathsetmacro{\LDSVecRaw}{int(mod(\offVec,\numLDSVec))}
       \pgfmathsetmacro{\phaseRaw}{int(\row/\perPhase)}
       \pgfmathsetmacro{\phase}{int(mod(\phaseRaw, \maxPhase))}
       \pgfmathsetmacro{\LDSVec}{\bitwiseXor{\LDSVecRaw}{\phase}}
@@ -194,6 +201,28 @@
       \coordinate (vec TL) at ($(TL)+(\LDSVec*\vecInBytes*\bsize, -\LDSRow*\elemH)$);
       \draw [ultra thin, fill=\vecColor] (vec TL) rectangle ++(\vecInBytes*\bsize, -\elemH)
       node [pos=.5, scale=.6*\bankLabelScale*\scale, white] {m\row,k\kStart:\kEnd};
+
+      %% Draw ds_read
+      \ifthenelse{\accessMode=1}{
+        % compute thread id for current vec
+        \pgfmathsetmacro{\tid}{int(\gp*\mfmaNonKDim+\row)}
+        % highlight vector of the threads that will access LDS at the same cycle
+        \ifthenelse{\tid < \numThreadsSameCycle}{
+          \ifthenelse{\vecInBits=128}{\def\ratio{0.5}}{\def\ratio{1}}
+          \draw [ultra thick, draw=white, fill=\vecColor] (vec TL) rectangle ++(\vecInBytes*\bsize, -\elemH);
+          \ifthenelse{\vecInBits=128}{
+            \node [scale=.6*\bankLabelScale*\scale, white] at ($(vec TL)+(\ratio*\vecInBytes*\bsize, -0.5*\elemH)$)
+            {m\row,k\kStart:\kEnd};}{
+            \node [scale=.6*\bankLabelScale*\scale, white, left] at ($(vec TL)+(\ratio*\vecInBytes*\bsize, -0.5*\elemH)$)
+            {m\row,k\kStart:\kEnd};
+          }
+          \node [scale=.5*\bankLabelScale*\scale, red, right] at ($(vec TL)+(0, -0.5*\elemH)$) {t\tid};
+        }{}
+        % draw ds_read instruction name
+        \ifthenelse{\tid=0}{
+          \node [scale=\scale, above right] at ($(TL)+(0, \gapT*\elemH)$)
+          {ds\_read\_b\vecInBits\ (t0$\sim$t\maxTid)};}{}
+      }{}
 
       %% draw phase of each LDS row
       \pgfmathsetmacro{\lastVecId}{\numLDSVec-1}
@@ -204,6 +233,7 @@
     }
   }
   \node [scale=0.6*\bankLabelScale*\scale, above right] at($(TL)+(\banks*4*\bsize, 0)$) {phase};
+  
 
   %% Start old code
   \ifthenelse{\accessMode = 2}{
@@ -215,7 +245,9 @@
     \pgfmathsetmacro{\maxVecId}{16*\numVecK-1}
     \pgfmathsetmacro{\drawM}{16*\K/\LDSK+4}
   }
+  \pgfmathsetmacro{\swizzleK}{max(\LDSK, \K)}
   \pgfmathsetmacro{\numVecSwizzleK}{\swizzleK/\vec}
+  \pgfmathsetmacro{\LDSM}{int(\M/\LDSK*\K)}
   %% Draw detailed vec view of LDS
   \foreach \vecId in {0,...,\maxVecId}{
     \pgfmathsetmacro{\vecCoordM}{int(\vecId/\numVecK)}
@@ -272,17 +304,6 @@
     %  node [pos=.5, scale=.6*\scale, white] {m\vecCoordM};
     %}
 
-    %% ds_read
-    %% Highlight the elements the first 16 threads access in the first cycle
-    %% This is used to visualize bank conflicts
-    \ifthenelse{\accessMode = 1}{
-      \ifthenelse{\vecCoordK = 0}{
-        \draw [fill=white]  (new vec TL) rectangle ++(\elem, -\elem);
-        \draw (new vec TL) -- ++(\elem, -\elem);
-        \draw ($(new vec TL)+(0, -\elem)$) -- ++(\elem, \elem);
-      }{}
-    }{}
-
     %% Draw ds_write pattern
     \ifthenelse{\accessMode = 2}{
       %% First compute the coverage of the first 16 threads
@@ -298,15 +319,6 @@
         }{}
       }{}
     }{}
-
-    %% Label the phase of each line if swizzling is used
-    %\ifthenelse{\hasSwizzle = 2}{}{
-    %  \pgfmathsetmacro{\lastVecId}{int(64/\vec)-1}
-    %  \ifthenelse{\vecLDSKSwizzled = \lastVecId}{
-    %    \draw [ultra thin] ($(new vec TL)+(\vec*\elem, -.5*\elem)$) -- ++(\elem, 0)
-    %    node [scale=.6*\scale, right] {\phase};
-    %  }{}
-    %}
   }
 
   %% Draw boundary of 32 banks

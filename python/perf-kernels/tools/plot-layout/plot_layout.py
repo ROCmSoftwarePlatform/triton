@@ -155,7 +155,7 @@ def draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threa
     \\coordinate (TL) at (0,0);
     \\drawTensorLayoutGlobalMem
     \\coordinate (TL) at ($(TL)+(0, -\drawM-8*\\elemH)$);
-    \\drawLDSLayoutTritonSwizzling{{\\hasSwizzle}}{{\\accessMode}}{{{banks}}}
+    \\drawLDSLayoutAndAccess{{\\hasSwizzle}}{{\\accessMode}}{{{banks}}}
   \\end{{tikzpicture}}
 \\end{{document}}'''
 
