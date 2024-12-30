@@ -9,6 +9,7 @@ import triton.language as tl
 
 import model_benchmarking
 
+
 def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
@@ -178,7 +179,7 @@ def model_benchmark_configs(batch_size, seq_len, model):
     x_vals_list = []
     b = 1 if batch_size < 1 else batch_size
 
-    if model=="all":
+    if model == "all":
         for model_name, config in configs.items():
             sl = config["max_ctx_len"] if seq_len < 1 else seq_len
             x_vals_list.append((b * sl, config["model_dimension"]))
@@ -189,8 +190,9 @@ def model_benchmark_configs(batch_size, seq_len, model):
         config = configs[model]
         sl = config["max_ctx_len"] if seq_len < 1 else seq_len
         x_vals_list.append((b * sl, config["model_dimension"]))
-    
+
     return x_vals_list
+
 
 def run_benchmark(args):
     config = []
@@ -216,7 +218,6 @@ def run_benchmark(args):
         mn_args = {}
         plot_name = str("rmsnorm-performance_" + args.dtype)
         x_vals_list = model_benchmark_configs(args.b, args.sl, args.model)
-
 
     dtype = arg_to_torch_dtype[args.dtype]
 
@@ -272,7 +273,8 @@ def parse_args():
                   "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
     parser.add_argument("-model", type=str, default=None, help=model_help)
     parser.add_argument('-b', type=int, default=0, help="batch size. Defaults to 1 with -model if not provided.")
-    parser.add_argument('-sl', type=int, default=0, help="sequence length. Defaults to max_seq_len with -model if not provided.")
+    parser.add_argument('-sl', type=int, default=0,
+                        help="sequence length. Defaults to max_seq_len with -model if not provided.")
 
     parser.add_argument('-M', "--M_start", default="1", type=int)
     parser.add_argument('-Ms', "--M_step", default="2", type=int)  #This is multiplicative step

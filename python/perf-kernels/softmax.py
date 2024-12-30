@@ -142,7 +142,7 @@ def model_benchmark_configs(batch_size, seq_len, model):
     x_vals_list = []
     b = 1 if batch_size < 1 else batch_size
 
-    if model=="all":
+    if model == "all":
         for model_name, config in configs.items():
             sl = config["max_ctx_len"] if seq_len < 1 else seq_len
             x_vals_list.append((b * sl, config["vocab_size"]))
@@ -153,7 +153,7 @@ def model_benchmark_configs(batch_size, seq_len, model):
         config = configs[model]
         sl = config["max_ctx_len"] if seq_len < 1 else seq_len
         x_vals_list.append((b * sl, config["vocab_size"]))
-    
+
     return x_vals_list
 
 
@@ -175,7 +175,7 @@ def run_benchmark(args):
         plot_name = str("softmax-performance_" + args.dtype + "_M" + str(args.M_start) + "_N" + str(args.N_start) +
                         "-" + str(args.N_end) + "-" + str(args.N_step))
         x_names = ['N']
-    
+
     if args.model:
         x_names = ['M', 'N']
         mn_args = {}
@@ -227,7 +227,8 @@ def parse_args():
                   "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
     parser.add_argument("-model", type=str, default=None, help=model_help)
     parser.add_argument('-b', type=int, default=0, help="batch size. Defaults to 1 with -model if not provided.")
-    parser.add_argument('-sl', type=int, default=0, help="sequence length. Defaults to max_seq_len with -model if not provided.")
+    parser.add_argument('-sl', type=int, default=0,
+                        help="sequence length. Defaults to max_seq_len with -model if not provided.")
 
     parser.add_argument('-M', "--M_start", default="1", type=int)
     parser.add_argument('-Ms', "--M_step", default="2", type=int)

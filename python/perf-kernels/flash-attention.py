@@ -287,7 +287,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
             # qk += tl.dot(q, k) * QK_SCALE
             # qk += tl.dot((q * QK_SCALE).to(q.type.element_ty), k)
             qk += (tl.dot(q, k) * QK_SCALE)
-        
+
         if bias_ptrs is not None:
             bias_offs_n = start_n + tl.arange(0, BLOCK_N) if MASK_STEPS else None
             bias = load_fn(bias_ptrs, OFFS_M, bias_offs_n, actual_seqlen_q, actual_seqlen_k)
@@ -1878,9 +1878,9 @@ def model_benchmark_configs(batch_size, seq_len, model="all"):
     config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json")
     b = batch_size if batch_size else 1
     sl = seq_len if seq_len else None
-    model_name = None # no specified model by default, runs all
-    if model!="all":
-        model_name=model
+    model_name = None  # no specified model by default, runs all
+    if model != "all":
+        model_name = model
     return model_benchmarking.get_FA_configs(batch_size=b, seq_len=sl, config_file=config_file, model_name=model_name)
 
 
