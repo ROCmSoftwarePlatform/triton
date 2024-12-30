@@ -54,55 +54,77 @@
   %% Draw tensor layout in global memory without any swizzling
   %%
   %% TL: pre defined top-left coordinates of the tensor in global memory
-  %% \elem: per defined variable
+  %% \elemH: The height of each element
+  %% \bsize: The width of each byte
   %% \Colors: a pre defined array of 16 colors
   %%
   %% The following arguments are also expected to be pre defined
   %% #1: M
   %% #2: K
-  %% #3: vec: number of elements in a group
+  %% #3: vecInBytes: number of bytes in a group
 
-  \pgfmathsetmacro{\numVecK}{\K/\vec}
-  \pgfmathsetmacro{\maxVecId}{16*\numVecK-1}
-  \pgfmathsetmacro{\drawM}{20}
+  \pgfmathsetmacro{\groups}{64/\mfmaNonKDim}
+  \pgfmathsetmacro{\maxGpId}{\groups-1}
+  \pgfmathsetmacro{\maxRowId}{\mfmaNonKDim-1}
+  \pgfmathsetmacro{\elemsPerVec}{\vec}
 
-  %% Draw the tensor, but only draw 32 rows
-  \draw (TL) rectangle ++(\K*\elem, -\drawM*\elem);
-  %% Draw detailed vec view of the tensor
-  \foreach \vecId in {0,...,\maxVecId}{
+  \pgfmathsetmacro{\vecInK}{\K/\elemsPerVec}
+  \pgfmathsetmacro{\maxKVecId}{\vecInK-1}
 
-    \pgfmathsetmacro{\vecCoordM}{int(\vecId/\numVecK)}
-    \pgfmathsetmacro{\vecCoordK}{mod(\vecId,\numVecK)}
-    \coordinate (vec TL) at ($(TL)+(\vecCoordK*\vec*\elem, -\vecCoordM*\elem)$);
-
-    \pgfmathsetmacro{\colorIdxK}{int(mod(\vecCoordK,16))}
-    \pgfmathsetmacro{\colorIdxM}{mod(\vecCoordM,16)}
-    \pgfmathsetmacro{\vecColor}{\Colors[\colorIdxK]}
-    \pgfmathsetmacro{\ratio}{100-floor(\vecCoordK/16)*40}
-
-    \draw [ultra thin, fill=\vecColor!\ratio!white] (vec TL) rectangle ++(\vec*\elem, -\elem)
-    node [pos=.5, scale=.6*\scale, white] {m\vecCoordM};
-
+  \foreach \gp in {0,...,\maxKVecId}{
+    \pgfmathsetmacro{\gpCol}{int(mod(\gp, 16))}
+    \pgfmathsetmacro{\vecColor}{\Colors[\gpCol]}
+    \pgfmathsetmacro{\kStart}{int(\gp*\elemsPerVec)}
+    \pgfmathsetmacro{\kEnd}{int(\kStart+\elemsPerVec-1)}
+    \foreach \row in {0,...,\maxRowId}{
+      \coordinate (vec TL) at ($(TL)+(\gp*\vecInBytes*\bsize, -\row*\elemH)$);
+      \draw [ultra thin, fill=\vecColor] (vec TL) rectangle ++(\vecInBytes*\bsize, -\elemH)
+      node [pos=.5, scale=.6*\bankLabelScale*\scale, white] {m\row,k\kStart:\kEnd};
+    }
   }
-  %% M and K dim
-  \node [scale=\scale, rotate=90, above] at ($(TL)+(0, -.5*\drawM*\elem-8*\elem)$) {M=\M};
-  \node [scale=.8*\scale, left] at ($(TL)+(0, -.5*16*\elem)$) {16};
-  \node [scale=\scale, above] at ($(TL)+(.5*\K*\elem, 0)$) {K=\K};
-  %% label for vecSize
-  \def\vecR{1.5}
-  \coordinate (vec TL) at ($(TL)+(-.25*\vec*\elem, 3*\elem*\vecR)$);
-  \pgfmathsetmacro{\maxVec}{\vec-1}
-  \foreach \vecId in {0,...,\maxVec}{
-    \draw ($(vec TL)+(\vecId*\elem*\vecR, 0)$) rectangle ++(\elem*\vecR, -\elem*\vecR);
-  }
-  \draw [densely dotted] (TL) -- ($(vec TL)+(0, -\elem*\vecR)$);
-  \draw [densely dotted] ($(TL)+(\vec*\elem, 0)$) -- ($(vec TL)+(\vec*\elem*\vecR, -\elem*\vecR)$);
-  \node [scale=.8*\scale, above] at ($(vec TL)+(.5*\vec*\elem*\vecR, 0)$) {vec=\vec};
+  %%  M and K dim
+  \def\gap{3}
+  \pgfmathsetmacro{\drawM}{\mfmaNonKDim*\elemH+\gap*\elemH}
+  \pgfmathsetmacro{\drawK}{\vecInK*\vecInBytes*\bsize}
+  \draw [ultra thick] (TL) rectangle ++(\drawK, -\drawM);
+  %\node [scale=\scale, rotate=90, above] at ($(TL)+(0, -.5*\drawM)$) {BLOCK\_M=\M};
+  \node [scale=\scale, above] at ($(TL)+(.5*\drawK, 0)$) {Tile:\M$\times$\K$\times$\dtype};
+  \node [scale=\scale, rotate=90] at ($(TL)+(0.5*\K*\bytesPerElem*\bsize, -\drawM+.5*\gap*\elemH)$) {$\ldots$};
+  %\node [scale=\scale, below] at ($(TL)+(0.5*\drawK, -\drawM)$) {Tile:\M$\times$\K$\times$\dtype};
 }
 
 
+\newcommand{\drawLDSDiagram}[1]{
+  %%
+  %% Draw the diagram of LDS without any data
+  %%
+  %% Pre-defined variables
+  %% TL: top-left coordinates of first elements in LDSaccess
+  %% bsize: size of a byte
+  %% mfmaNonKDim
+  %% K
+  %% bytesPerElem
+  %%
+  %% #1: number of banks
 
-\newcommand{\drawLDSLayoutTritonSwizzling}[2]{
+  \pgfmathsetmacro{\banks}{#1}
+  \pgfmathsetmacro{\maxBankId}{\banks-1}
+  \pgfmathsetmacro{\tensorHeight}{\mfmaNonKDim*\K*\bytesPerElem/4/\banks*\elemH}
+  \def\gapT{4}
+  \def\gapB{2}
+  \pgfmathsetmacro{\LDSHeight}{\tensorHeight+\gapT*\elemH+\gapB*\elemH}
+  \coordinate (LDS TL) at ($(TL)+(0, \gapT*\elemH)$);
+  \foreach \bank in {0,...,\maxBankId}{
+    \coordinate (bank TL) at ($(LDS TL)+(\bank*4*\bsize, 0)$);
+    \draw [ultra thick] (bank TL) rectangle ++(4*\bsize, -\LDSHeight)
+    node [scale=.6*\bankLabelScale*\scale, pos=0, below right, align=center] {bank\\\bank};
+    \node [scale=0.8*\bankLabelScale*\scale, rotate=90] at ($(TL)+(2*\bsize+\bank*4*\bsize, -\tensorHeight-0.5*\gapB*\elemH)$) {$\ldots$};
+  }
+  \node [scale=\scale, above] at ($(TL)+(0.5*\banks*4*\bsize, 4*\elemH)$) {LDS \banks\ banks};
+}
+
+
+\newcommand{\drawLDSLayoutTritonSwizzling}[3]{
   %%
   %% Draw tensor layout in LDS with swizzling
   %%
@@ -119,6 +141,7 @@
   %%                 1 means optimal swizzling
   %%                 2 means padding
   %% #2: access mode, 0 means draw nothing, 1 means ds_read, 2 means ds_write
+  %% #3: number of banks
   %% For ds_write access, the following variables are assumed to be pre defined
   %% \sizePerThreadK
   %% \sizePerThreadM
@@ -127,25 +150,19 @@
   \pgfmathsetmacro{\hasSwizzle}{#1}
   \pgfmathsetmacro{\accessMode}{#2}
   \pgfmathsetmacro{\numVecK}{\K/\vec}
+  \pgfmathsetmacro{\banks}{#3}
+
+  \drawLDSDiagram{#3}
 
   %% Assuming fp16 data type
-  \pgfmathsetmacro{\LDSK}{64}
+  \pgfmathsetmacro{\LDSK}{int(\banks*4/\bytesPerElem)}
   \pgfmathsetmacro{\numLDSVec}{\LDSK/\vec}
   \pgfmathsetmacro{\swizzleK}{max(\LDSK, \K)}
   \pgfmathsetmacro{\LDSM}{int(\M/\LDSK*\K)}
-
-  \ifthenelse{\accessMode = 2}{
-    %% \accessMode == 2, draw 8 rows
-    \pgfmathsetmacro{\maxVecId}{8*\numVecK-1}
-    \pgfmathsetmacro{\drawM}{8*\K/\LDSK+4}
-  }{
-    %% \accessMode == 0 or 1, draw 16 rows
-    \pgfmathsetmacro{\maxVecId}{16*\numVecK-1}
-    \pgfmathsetmacro{\drawM}{16*\K/\LDSK+4}
-  }
+  \pgfmathsetmacro{\maxKVecId}{\K/\vec-1}
 
   %% Parameters used for swizzling
-  \pgfmathsetmacro{\numVecSwizzleK}{\swizzleK/\vec}
+
   %% perPhase = ceil(LDSK / K)
   %% The number of the rows of the tensor that can share the same swizzling pattern
   \pgfmathsetmacro{\perPhase}{ceil(\LDSK/\K)}
@@ -156,12 +173,49 @@
   }{
     %% When vec is small enough, we want 16/perPhase different swizzling patterns
     %% When vec is large, we can only have 64 / \vec different swizzling pattern at most
-    \pgfmathsetmacro{\maxPhase}{min(16/\perPhase,64/\vec)}
+    \pgfmathsetmacro{\maxPhase}{min(16/\perPhase,\banks*4/\bytesPerElem/\vec)}
   }
 
-  %% Draw the LDS
-  \draw (TL) rectangle ++(\LDSK*\elem, -\drawM*\elem);
+  %% Draw the vectors according to the swizzling pattern
+  \foreach \gp in {0,...,\maxKVecId}{
+    \pgfmathsetmacro{\gpCol}{int(mod(\gp, 16))}
+    \pgfmathsetmacro{\vecColor}{\Colors[\gpCol]}
+    \pgfmathsetmacro{\kStart}{int(\gp*\elemsPerVec)}
+    \pgfmathsetmacro{\kEnd}{int(\kStart+\elemsPerVec-1)}
+    \foreach \row in {0,...,\maxRowId}{
+      %% Compute some info of the current vec
+      \pgfmathsetmacro{\offVec}{\row*\K/\vec+\gp} %% global offset in unit of vec
+      \pgfmathsetmacro{\LDSRow}{int(\offVec/\numLDSVec)} %% which row of LDS
+      \pgfmathsetmacro{\LDSVecRaw}{int(mod(\offVec,\numLDSVec))} %% offset in the current LDS row in the unit of vec
+      \pgfmathsetmacro{\phaseRaw}{int(\row/\perPhase)}
+      \pgfmathsetmacro{\phase}{int(mod(\phaseRaw, \maxPhase))}
+      \pgfmathsetmacro{\LDSVec}{\bitwiseXor{\LDSVecRaw}{\phase}}
 
+      \coordinate (vec TL) at ($(TL)+(\LDSVec*\vecInBytes*\bsize, -\LDSRow*\elemH)$);
+      \draw [ultra thin, fill=\vecColor] (vec TL) rectangle ++(\vecInBytes*\bsize, -\elemH)
+      node [pos=.5, scale=.6*\bankLabelScale*\scale, white] {m\row,k\kStart:\kEnd};
+
+      %% draw phase of each LDS row
+      \pgfmathsetmacro{\lastVecId}{\numLDSVec-1}
+      \ifthenelse{\LDSVec=\lastVecId}{
+        \draw [ultra thin] ($(vec TL)+(\vec*\bytesPerElem*\bsize, -.5*\bsize)$) -- ++(\elemH, 0)
+        node [scale=0.6*\bankLabelScale*\scale, right] {\phase};
+      }{}
+    }
+  }
+  \node [scale=0.6*\bankLabelScale*\scale, above right] at($(TL)+(\banks*4*\bsize, 0)$) {phase};
+
+  %% Start old code
+  \ifthenelse{\accessMode = 2}{
+    %% \accessMode == 2, draw 8 rows
+    \pgfmathsetmacro{\maxVecId}{8*\numVecK-1}
+    \pgfmathsetmacro{\drawM}{8*\K/\LDSK+4}
+  }{
+    %% \accessMode == 0 or 1, draw 16 rows
+    \pgfmathsetmacro{\maxVecId}{16*\numVecK-1}
+    \pgfmathsetmacro{\drawM}{16*\K/\LDSK+4}
+  }
+  \pgfmathsetmacro{\numVecSwizzleK}{\swizzleK/\vec}
   %% Draw detailed vec view of LDS
   \foreach \vecId in {0,...,\maxVecId}{
     \pgfmathsetmacro{\vecCoordM}{int(\vecId/\numVecK)}
@@ -206,17 +260,17 @@
       \pgfmathsetmacro{\tailBankId}{0}
     }
 
-    \ifthenelse{\hasSwizzle = 2 \AND \tailBankId > 31}{
-      \pgfmathsetmacro{\nextBanks}{\tailBankId-31}
-      \pgfmathsetmacro{\leftBanks}{\vec/2 - \nextBanks}
-      \draw [ultra thin, fill=\vecColor!\ratio!white] (new vec TL) rectangle ++(\leftBanks*2*\elem, -\elem)
-      node [pos=.5, scale=.6*\scale, white] {m\vecCoordM};
-      \draw [ultra thin, fill=\vecColor!\ratio!white] ($(TL)+(0, -\vecPadM*\elem-\elem)$)
-      rectangle ++(\nextBanks*2*\elem, -\elem) node [pos=.5, scale=.6*\scale, white] {m\vecCoordM};
-    }{
-      \draw [ultra thin, fill=\vecColor!\ratio!white] (new vec TL) rectangle ++(\vec*\elem, -\elem)
-      node [pos=.5, scale=.6*\scale, white] {m\vecCoordM};
-    }
+    %\ifthenelse{\hasSwizzle = 2 \AND \tailBankId > 31}{
+    %  \pgfmathsetmacro{\nextBanks}{\tailBankId-31}
+    %  \pgfmathsetmacro{\leftBanks}{\vec/2 - \nextBanks}
+    %  \draw [ultra thin, fill=\vecColor!\ratio!white] (new vec TL) rectangle ++(\leftBanks*2*\elem, -\elem)
+    %  node [pos=.5, scale=.6*\scale, white] {m\vecCoordM};
+    %  \draw [ultra thin, fill=\vecColor!\ratio!white] ($(TL)+(0, -\vecPadM*\elem-\elem)$)
+    %  rectangle ++(\nextBanks*2*\elem, -\elem) node [pos=.5, scale=.6*\scale, white] {m\vecCoordM};
+    %}{
+    %  \draw [ultra thin, fill=\vecColor!\ratio!white] (new vec TL) rectangle ++(\vec*\elem, -\elem)
+    %  node [pos=.5, scale=.6*\scale, white] {m\vecCoordM};
+    %}
 
     %% ds_read
     %% Highlight the elements the first 16 threads access in the first cycle
@@ -246,29 +300,29 @@
     }{}
 
     %% Label the phase of each line if swizzling is used
-    \ifthenelse{\hasSwizzle = 2}{}{
-      \pgfmathsetmacro{\lastVecId}{int(64/\vec)-1}
-      \ifthenelse{\vecLDSKSwizzled = \lastVecId}{
-        \draw [ultra thin] ($(new vec TL)+(\vec*\elem, -.5*\elem)$) -- ++(\elem, 0)
-        node [scale=.6*\scale, right] {\phase};
-      }{}
-    }
+    %\ifthenelse{\hasSwizzle = 2}{}{
+    %  \pgfmathsetmacro{\lastVecId}{int(64/\vec)-1}
+    %  \ifthenelse{\vecLDSKSwizzled = \lastVecId}{
+    %    \draw [ultra thin] ($(new vec TL)+(\vec*\elem, -.5*\elem)$) -- ++(\elem, 0)
+    %    node [scale=.6*\scale, right] {\phase};
+    %  }{}
+    %}
   }
 
   %% Draw boundary of 32 banks
   %% Assume fp16 data type
-  \foreach \bank in {0,...,31}{
-    \draw [ultra thin, gray] ($(TL)+(\bank*2*\elem, 0)$) -- ++(0, 2*\elem)
-    node [scale=.6*\scale, right, black] {\bank};
-  }
-  \draw [ultra thin, gray] ($(TL)+(32*2*\elem, 0)$) -- ++(0, 2*\elem);
-  \node [scale=.6*\scale, left, black] at ($(TL)+(0, 2*\elem)$) {bank id};
-
-  \node [scale=\scale, above] at ($(TL)+(.5*\LDSK*\elem, 3*\elem)$) {LDS 32 banks};
-  \node [scale=\scale, rotate=90, above] at ($(TL)+(0, -.5*\drawM*\elem)$) {LDSM=\LDSM};
+  %\foreach \bank in {0,...,31}{
+  %  \draw [ultra thin, gray] ($(TL)+(\bank*2*\elem, 0)$) -- ++(0, 2*\elem)
+  %  node [scale=.6*\scale, right, black] {\bank};
+  %}
+  %\draw [ultra thin, gray] ($(TL)+(32*2*\elem, 0)$) -- ++(0, 2*\elem);
+  %\node [scale=.6*\scale, left, black] at ($(TL)+(0, 2*\elem)$) {bank id};
+%
+  %\node [scale=\scale, above] at ($(TL)+(.5*\LDSK*\elem, 3*\elem)$) {LDS \banks banks};
+  %\node [scale=\scale, rotate=90, above] at ($(TL)+(0, -.5*\drawM*\elem)$) {LDSM=\LDSM};
 
   %% label phase if swizzling is used
-  \ifthenelse{\hasSwizzle = 2}{}{
-    \node [scale=.6*\scale, above right] at($(TL)+(32*2*\elem, 0)$) {phase};
-  }
+  %\ifthenelse{\hasSwizzle = 2}{}{
+  %  \node [scale=.6*\scale, above right] at($(TL)+(32*2*\elem, 0)$) {phase};
+  %}
 }

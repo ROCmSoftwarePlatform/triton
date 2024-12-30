@@ -83,7 +83,30 @@ def draw_blocked_layout_cmd(dim0, dim1, dim0Name, dim1Name, sizePerThread, threa
 \\end{{document}}'''
 
 
-def draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp):
+def typeToBytes(dtype):
+    if dtype == 'bf16' or dtype == 'fp16':
+        return 2
+    if dtype == 'bf8' or dtype == 'fp8' or dtype == 'i8':
+        return 1
+    if dtype == 'f4':
+        return 0.5
+    if dtype == 'fp6' or dtype == 'bf6':
+        return 0.75
+
+
+def maxKDimInBytes(dtype, mfmaNonKDim, kWidth):
+    groups = 64 / mfmaNonKDim
+    if (dtype == 'bf8' or dtype == 'fp8') and kWidth == 16:
+        groups *= 2
+    return groups * kWidth * typeToBytes(dtype)
+
+
+def calcPerPhase(banks, dtype, K):
+    bytesPerBank = 4
+    return max(banks * bytesPerBank / (K * typeToBytes(dtype)), 1)
+
+
+def draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp, dtype, mfmaNonKDim, banks):
     if ldsLayout == 'swizzle':
         hasSwizzle = 1
     elif ldsLayout == 'padding':
@@ -98,24 +121,41 @@ def draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threa
     else:
         accessMode = 0
 
+    elemTypeInBytes = typeToBytes(dtype)
+    dimKInBytes = K * elemTypeInBytes
+    mfmaKDimInBytes = min(dimKInBytes, maxKDimInBytes(dtype, mfmaNonKDim, kWidth))
+    vecInBytes = kWidth * elemTypeInBytes
+
+    bsize = 0.12
+    bankLabelScale = bsize / 0.15
+
     return f'''\\begin{{document}}
   \\begin{{tikzpicture}}
     \\def\\scale{{1}}
     \\def\\M{{{M}}}
     \\def\\K{{{K}}}
+    \\def\\mfmaK{{{mfmaKDimInBytes}}}
     \\def\\vec{{{kWidth}}}
+    \\def\\vecInBytes{{{vecInBytes}}}
+    \\def\\bytesPerElem{{{elemTypeInBytes}}}
     \\def\\hasSwizzle{{{hasSwizzle}}}
     \\def\\accessMode{{{accessMode}}}
+    \\def\\mfmaNonKDim{{{mfmaNonKDim}}}
+    \\def\\dtype{{{dtype}}}
+
 
     \\def\\sizePerThreadK{{{sizePerThread[1]}}}
     \\def\\sizePerThreadM{{{sizePerThread[0]}}}
     \\def\\threadsPerWarpK{{{threadsPerWarp[1]}}}
 
+    \\def\\elemH{{0.18}}
     \\def\\elem{{0.18}}
+    \\def\\bsize{{{bsize}}}
+    \\def\\bankLabelScale{{{bankLabelScale}}}
     \\coordinate (TL) at (0,0);
     \\drawTensorLayoutGlobalMem
-    \\coordinate (TL) at ($(TL)+(0, -24*\\elem-10*\\elem)$);
-    \\drawLDSLayoutTritonSwizzling{{\\hasSwizzle}}{{\\accessMode}}
+    \\coordinate (TL) at ($(TL)+(0, -\drawM-8*\\elemH)$);
+    \\drawLDSLayoutTritonSwizzling{{\\hasSwizzle}}{{\\accessMode}}{{{banks}}}
   \\end{{tikzpicture}}
 \\end{{document}}'''
 
@@ -295,6 +335,7 @@ def parse_args():
     parser.add_argument("-scale", action='store_true', default=False,
                         help='If set, plot the scale tensor for mfma_f8f6f4 instructions')
     ## LDS access parameters
+    parser.add_argument("-banks", type=int, default=32, choices=[32, 64], help='choose the number of banks in LDS')
     parser.add_argument("-lds_layout", type=str, default="none", choices=['swizzle', 'padding', 'none'],
                         help='choose the LDS data layout')
     parser.add_argument("-lds_access", type=str, default="none", choices=['read', 'write', 'none'],
@@ -334,6 +375,7 @@ def main():
 
     ldsLayout = args.lds_layout
     ldsAccess = args.lds_access
+    banks = args.banks
 
     waveSize = args.wave_size
 
@@ -397,7 +439,7 @@ def main():
             print("")
 
     if plot_mode == 'lds':
-        print(f"Plotting LDS access for tensor M={M},K={K} with vec={kWidth}")
+        print(f"Plotting LDS access for tensor M={dim0},K={dim1} with vec={kWidth}")
         if ldsAccess == 'write':
             print(f"sizePerThread={sizePerThread}, threadsPerWarp={threadsPerWarp}")
 
@@ -405,27 +447,24 @@ def main():
         with open("preamble.tex") as file:
             preamble = file.read()
 
-        draw_blockedLayout_str = draw_blocked_layout_cmd(dim0, dim1, dim0Name, dim1Name, sizePerThread, threadsPerWarp,
-                                                         warpsPerCTA, order)
-
-        draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup, dtype_a,
-                                                 dtype_b, mfma_inst_str, kpack, isMixed864, plot_scale)
-
-        draw_lds_str = draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp)
-
-        draw_wmma_str = draw_wmma_instr_cmd(waveSize)
-
         f_plot.write(preamble)
         if plot_mode == 'blocked':
+            draw_blockedLayout_str = draw_blocked_layout_cmd(dim0, dim1, dim0Name, dim1Name, sizePerThread,
+                                                             threadsPerWarp, warpsPerCTA, order)
             f_plot.write("\input{blockedLayout}\n")
             f_plot.write(draw_blockedLayout_str)
         elif plot_mode == 'dot':
+            draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup, dtype_a,
+                                                     dtype_b, mfma_inst_str, kpack, isMixed864, plot_scale)
             f_plot.write("\input{dotLayout}\n")
             f_plot.write(draw_dotLayout_str)
         elif plot_mode == 'lds':
+            draw_lds_str = draw_lds_access_cmd(dim0, dim1, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp,
+                                               dtype_a, mfmaNonKDim, banks)
             f_plot.write("\input{ldsLayout}\n")
             f_plot.write(draw_lds_str)
         elif plot_mode == 'wmma':
+            draw_wmma_str = draw_wmma_instr_cmd(waveSize)
             f_plot.write("\input{wmmaLayout}\n")
             f_plot.write(draw_wmma_str)
 

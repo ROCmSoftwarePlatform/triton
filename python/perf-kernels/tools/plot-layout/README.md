@@ -7,7 +7,7 @@ Here is the help info from the script.
 >$ python3 plot_layout.py -h
 usage: Draw triton layouts [-h] [-tensorShape TENSORSHAPE TENSORSHAPE] [-dotShape DOTSHAPE DOTSHAPE DOTSHAPE] [-plot {blocked,dot,wmma,lds}] [-dim0 DIM0] [-dim1 DIM1] [-sizePerThread SIZEPERTHREAD SIZEPERTHREAD] [-threadsPerWarp THREADSPERWARP THREADSPERWARP]
                            [-warpsPerCTA WARPSPERCTA WARPSPERCTA] [-order ORDER ORDER] [-nonKDim {16,32}] [-kWidth {4,8,16,32}] [-kGroup {1,2}] [-dtype_a {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}] [-dtype_b {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}] [-mfmaTrans] [-scale]
-                           [-lds_layout {swizzle,padding,none}] [-lds_access {read,write,none}] [-wave_size {32,64}] [-o O] [-keep]
+                           [-banks {32,64}] [-lds_layout {swizzle,padding,none}] [-lds_access {read,write,none}] [-wave_size {32,64}] [-o O] [-keep]
 
 options:
   -h, --help            show this help message and exit
@@ -32,6 +32,7 @@ options:
                         element type of operand B
   -mfmaTrans            If set, then use mfma.trans layout
   -scale                If set, plot the scale tensor for mfma_f8f6f4 instructions
+  -banks {32,64}        choose the number of banks in LDS
   -lds_layout {swizzle,padding,none}
                         choose the LDS data layout
   -lds_access {read,write,none}
@@ -121,20 +122,21 @@ Notes
 
 Examples:
 ```bash
-python3 plot_layout.py -plot lds -lds_layout none -lds_access none -shape 128 128 64 -kWidth 8
+python3 plot_layout.py -plot lds -lds_layout none -lds_access none -tensorShape 128 128 -kWidth 8
+python3 plot_layout.py -plot lds -lds_layout none -lds_access none -tensorShape 128 128 -kWidth 32 -dtype_a f4
+python3 plot_layout.py -plot lds -lds_layout none -lds_access none -tensorShape 128 128 -kWidth 16 -dtype_a fp8 -banks 64
+python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access none -tensorShape 128 128 -kWidth 16 -dtype_a fp8 -banks 64
 ```
 
 Knobs
-- `kWidth` here means the vector size when accessing LDS
+- `kWidth`: the vector size (in unit of elements) when accessing LDS
+- `banks`: the number of banks in LDS. (64 for gfx950, 32 for pre-gfx950)
 - Three options for `-lds_layout`:
   - `none`: no swizzling, no padding
-  - `padding`: padding at every 128B
-  - `swizzling`: apply the swizzling pattern, which is derived from tensor shape and kWidth.
+  - `swizzle`: apply the swizzling pattern, which is derived from tensor shape and kWidth.
+  - `padding`: tbd
 - Three options for `-lds_access`:
   - `none`: do not plot access pattern
   - `read`: plot accessed elements during ds_read
-  - `write`: plot accessed elements during ds_write. Note that this needs some infomation from
+  - `write`: plot accessed elements during ds_write. Note that this needs some information from
     global load. Therefore, we need to provide `-sizePerThread` and `-threadsPerWarp`.
-
-Notes
-- This mode is rarely used. If you have any questions, please contact Lixun Zhang directly.
