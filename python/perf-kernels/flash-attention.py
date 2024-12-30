@@ -257,20 +257,12 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
             # We can use the same offsets as k, just with dims transposed.
             v = load_fn(v_ptrs, k_offs_n, k_offs_k, actual_seqlen_k, ACTUAL_BLOCK_DMODEL)
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-
         if IS_CAUSAL:
             causal_boundary = start_n + offs_n_causal
             causal_mask = OFFS_M[:, None] >= causal_boundary[None, :]
             qk = tl.where(causal_mask, qk, float("-inf"))
-        # -- compute qk ----
-        if INT8_GEMM:
-            qk += ((((tl.dot(q, k).to(tl.float32) * q_descale)) * k_descale) * QK_SCALE)
-        else:
-            if INT8_KV:
-                k = (k * k_descale).to(q.type.element_ty)
-            qk += tl.dot(q, k) * QK_SCALE
 
-        # TODO: moving mask steps after the qk computation passes the bias test, investigate why
+        # TODO: moving MASK_STEPS after IS_CAUSAL passes the bias test, investigate why.
         # We start from end of seqlen_k so only the first iteration would need
         # to be checked for padding if it is not a multiple of block_n
         # TODO: This can be optimized to only be true for the padded block.
@@ -285,6 +277,13 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
                 size_n = start_n + OFFS_N[None, :]
                 mask = size_n < boundary_m[:, None]
                 qk = tl.where(mask, qk, float("-inf"))
+        # -- compute qk ----
+        if INT8_GEMM:
+            qk += ((((tl.dot(q, k).to(tl.float32) * q_descale)) * k_descale) * QK_SCALE)
+        else:
+            if INT8_KV:
+                k = (k * k_descale).to(q.type.element_ty)
+            qk += tl.dot(q, k) * QK_SCALE
 
         if bias_ptrs is not None:
             bias_offs_n = start_n + tl.arange(0, BLOCK_N) if MASK_STEPS else None
