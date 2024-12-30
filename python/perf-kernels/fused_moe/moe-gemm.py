@@ -8,7 +8,7 @@ import json
 import functools
 import argparse
 import sys
-
+from benchmark_utils import get_tuning_configs, get_config_dtype_str, get_config_file_name, update_configs
 
 @triton.jit
 def moe_gemm_kernel(
@@ -193,10 +193,6 @@ def moe_align_block_size(topk_ids: torch.Tensor, block_size: int,
     return sorted_ids, expert_ids, num_tokens_post_pad
 
 
-def get_config_file_name(E: int, N: int, dtype: Optional[str]) -> str:
-    device_name = torch.cuda.get_device_name(0).replace(" ", "_")
-    dtype_selector = "" if not dtype else f",dtype={dtype}"
-    return f"E={E},N={N},device_name={device_name}{dtype_selector}.json"
 
 
 @functools.lru_cache
@@ -261,23 +257,10 @@ def try_get_optimal_moe_config(
     return config
 
 
-def get_config_dtype_str(dtype: torch.dtype, use_int8_w8a16: Optional[bool] = False,
-                         use_fp8_w8a8: Optional[bool] = False):
-    if use_fp8_w8a8:
-        return "fp8_w8a8"
-    elif use_int8_w8a16:
-        return "int8_w8a16"
-    elif dtype == torch.float:
-        # avoiding cases where kernel fails when float32 MoE
-        # use fp16/bfloat16 configs
-        return "float32"
-    return None
-
-
 def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
              sorted_token_ids: torch.Tensor, expert_ids: torch.Tensor, num_tokens_post_padded: torch.Tensor,
              config) -> None:
-
+    # TODO shard M dim
     _, top_k = topk_ids.shape
 
     EM = num_tokens_post_padded.item()
@@ -352,22 +335,21 @@ def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: 
 
 def get_configs():
     configs = [
-        {"M": 1024, "K": 128, "N": 256, "E": 8, "top_k": 2},
-        {"M": 1024, "K": 1024, "N": 1792, "E": 8, "top_k": 2},
+        {"M": 64, "K": 128, "N": 256, "E": 8, "top_k": 2},
+        {"M": 64, "K": 1024, "N": 1792, "E": 8, "top_k": 2},
         {"M": 1024, "K": 4096, "N": 7168, "E": 8, "top_k": 2},
-        {"M": 4096, "K": 4096, "N": 7168, "E": 8, "top_k": 1},
         {"M": 4096, "K": 4096, "N": 7168, "E": 8, "top_k": 2},
         {"M": 1024, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 4096, "K": 4096, "N": 14336, "E": 8, "top_k": 1},
         {"M": 4096, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
     ]
     return configs
-
 
 def run_benchmark(custom, args):
     print_time = args.return_time
     routed_weight = args.routed_weight
     dtype = arg_to_torch_dtype[args.dtype]
+    use_fp16 = args.dtype == 'fp16'
+    tune = args.tune
     if custom:
         assert args.M and args.K and args.N and args.E and args.top_k, \
             "Please provide M, K, N, E, top_k for custom runs."
@@ -380,13 +362,13 @@ def run_benchmark(custom, args):
 
     line_names = 'Time (ms)' if print_time else 'TFLOPS'
 
-    benchmark = triton.testing.Benchmark(
-        x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'], line_names=[line_names],
-        styles=[('red', '-'), ('blue', '-')], ylabel='ms', plot_name='moe-gemm-benchmark',
-        args={'dtype': dtype, 'print_time': print_time, 'routed_weight': routed_weight})
+    benchmark = triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'],
+                                         line_names=[line_names], styles=[('red', '-'), ('blue', '-')], ylabel='ms',
+                                         plot_name='moe-gemm-benchmark',
+                                         args={'dtype': dtype, 'use_fp16': use_fp16, 'tune': tune, 'print_time': print_time, 'routed_weight': routed_weight})
 
     @triton.testing.perf_report([benchmark])
-    def bench_moe_gemm(M, K, N, E, top_k, dtype, routed_weight, print_time, provider):
+    def bench_moe_gemm(M, K, N, E, top_k, dtype, use_fp16, routed_weight, tune, print_time, provider):
         a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
             M, K, N, top_k, E, routed_weight=routed_weight, dtype=dtype)
 
@@ -394,9 +376,28 @@ def run_benchmark(custom, args):
         if routed_weight:
             flops += M * top_k * N
 
-        fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
+        if tune:
+            configs = get_tuning_configs(M, N, K, use_fp16)
+            print(f"Tuning start with {len(configs)} configs")
+
+            min_ms = None
+            best_config = None
+            for config in configs:
+                print(config)
+                fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
                               config)
-        ms = triton.testing.do_bench(fn)
+                ms = triton.testing.do_bench(fn)
+                print(ms)
+                c = torch.zeros((M, top_k, N), dtype=dtype, device='cuda')
+                if min_ms is None or ms < min_ms:
+                    min_ms = ms
+                    best_config = config
+
+            update_configs(M, best_config, E, N, K, top_k, dtype, False, False)
+        else:
+            fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
+                                config)
+            ms = triton.testing.do_bench(fn)
 
         if print_time:
             return ms
@@ -418,6 +419,7 @@ def parse_args():
     parser.add_argument("-E", type=int, default=0, help="Number of experts")
     parser.add_argument("-top_k", type=int, default=0, help="top_k experts per token")
     parser.add_argument("-routed_weight", action='store_true', default=False)
+    parser.add_argument("-tune", action='store_true', default=False)
     parser.add_argument("-dtype", default='fp16')
     parser.add_argument("-return_time", action='store_true', default=False, help='Return time instead of TFLOPs')
     args = parser.parse_args()
