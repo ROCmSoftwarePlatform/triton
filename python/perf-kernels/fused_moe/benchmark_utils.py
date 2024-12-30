@@ -1,8 +1,9 @@
-from typing import Dict, TypedDict, List, Optional
+from typing import TypedDict, List, Optional
 from itertools import product
 import json
 import torch
 import os
+
 
 def get_config_dtype_str(dtype: torch.dtype, use_int8_w8a16: Optional[bool] = False,
                          use_fp8_w8a8: Optional[bool] = False):
@@ -16,10 +17,12 @@ def get_config_dtype_str(dtype: torch.dtype, use_int8_w8a16: Optional[bool] = Fa
         return "float32"
     return None
 
+
 def get_config_file_name(E: int, N: int, dtype: Optional[str]) -> str:
     device_name = torch.cuda.get_device_name(0).replace(" ", "_")
     dtype_selector = "" if not dtype else f",dtype={dtype}"
     return f"E={E},N={N},device_name={device_name}{dtype_selector}.json"
+
 
 class BenchmarkConfig(TypedDict):
     BLOCK_SIZE_M: int
@@ -29,8 +32,10 @@ class BenchmarkConfig(TypedDict):
     num_warps: int
     num_stages: int
 
+
 def need_split_k(SIZE_M, SIZE_N, SIZE_K):
     return (SIZE_M < 64 or SIZE_N < 64) and SIZE_K > 1024
+
 
 def get_tuning_space(use_fp16):
     block_mn_range = [16, 32, 64, 128, 256]
@@ -92,14 +97,11 @@ def prune_configs(M, N, K, configs, is_fp16=True):
         SPLIT_K = config.get("SPLIT_K", 1)
         GROUP_M = config.get("GROUP_SIZE_M")
         if is_fp16:
-            if (matrix_instr_nonkdim > BLOCK_SIZE_M
-                    or matrix_instr_nonkdim > BLOCK_SIZE_N):
+            if (matrix_instr_nonkdim > BLOCK_SIZE_M or matrix_instr_nonkdim > BLOCK_SIZE_N):
                 continue
-            if (matrix_instr_nonkdim >= M
-                    and matrix_instr_nonkdim != BLOCK_SIZE_M):
+            if (matrix_instr_nonkdim >= M and matrix_instr_nonkdim != BLOCK_SIZE_M):
                 continue
-            if (matrix_instr_nonkdim >= N
-                    and matrix_instr_nonkdim != BLOCK_SIZE_N):
+            if (matrix_instr_nonkdim >= N and matrix_instr_nonkdim != BLOCK_SIZE_N):
                 continue
         # Skip BLOCK_SIZE that is too large compare to M/N
         # unless BLOCK_SIZE is already small enough
@@ -120,8 +122,7 @@ def prune_configs(M, N, K, configs, is_fp16=True):
             continue
         # out of shared memory resource
         # TODO (zhanglx): This does not consider the LDS usage in the epilogue
-        LDS = (BLOCK_SIZE_K * BLOCK_SIZE_M * elemBytes_a +
-               BLOCK_SIZE_K * BLOCK_SIZE_N * elemBytes_b)
+        LDS = (BLOCK_SIZE_K * BLOCK_SIZE_M * elemBytes_a + BLOCK_SIZE_K * BLOCK_SIZE_N * elemBytes_b)
         if LDS > 65536:
             continue
         # Skip small block sizes and num_warps for large gemm
@@ -138,6 +139,7 @@ def prune_configs(M, N, K, configs, is_fp16=True):
 
     return pruned_configs
 
+
 def merge_unique_dicts(list1, list2):
     result = []
     combined_list = list1.copy()
@@ -147,25 +149,21 @@ def merge_unique_dicts(list1, list2):
             result.append(dictionary)
     return result
 
-def prune_search_space(num_tokens, shard_intermediate_size, hidden_size,
-                       search_space, is_fp16):
+
+def prune_search_space(num_tokens, shard_intermediate_size, hidden_size, search_space, is_fp16):
     N1, K1 = shard_intermediate_size, hidden_size
 
-    pruned_space_1 = prune_configs(num_tokens * 2, N1, K1, search_space,
-                                   is_fp16)
+    pruned_space_1 = prune_configs(num_tokens * 2, N1, K1, search_space, is_fp16)
     # NOTE, we are only tunning thr gemm here so only one pass of moe
     # pruned_space_2 = prune_configs(num_tokens * 8, N2, K2, search_space,
     #                                is_fp16)
     # search_space = merge_unique_dicts(pruned_space_1, pruned_space_2)
     return pruned_space_1
 
-def update_configs(M: int, config: BenchmarkConfig, num_experts: int,
-                 shard_intermediate_size: int, hidden_size: int, topk: int,
-                 dtype: torch.dtype, use_fp8_w8a8: bool,
-                 use_int8_w8a16: bool) -> None:
-    dtype_str = get_config_dtype_str(dtype,
-                                     use_int8_w8a16=use_int8_w8a16,
-                                     use_fp8_w8a8=use_fp8_w8a8)
+
+def update_configs(M: int, config: BenchmarkConfig, num_experts: int, shard_intermediate_size: int, hidden_size: int,
+                   topk: int, dtype: torch.dtype, use_fp8_w8a8: bool, use_int8_w8a16: bool) -> None:
+    dtype_str = get_config_dtype_str(dtype, use_int8_w8a16=use_int8_w8a16, use_fp8_w8a8=use_fp8_w8a8)
 
     # NOTE(woosuk): The current naming convention uses w2.shape[2], which
     # is the intermediate size after silu_and_mul.
@@ -173,8 +171,7 @@ def update_configs(M: int, config: BenchmarkConfig, num_experts: int,
     # filename = get_config_file_name(num_experts, shard_intermediate_size // 2,
     #                                 dtype_str)
 
-    filename = get_config_file_name(num_experts, shard_intermediate_size,
-                                    dtype_str)
+    filename = get_config_file_name(num_experts, shard_intermediate_size, dtype_str)
     print(f"Best config: {config}")
     print(f"Writing best config to {filename}...")
 
@@ -199,6 +196,7 @@ def update_configs(M: int, config: BenchmarkConfig, num_experts: int,
         json.dump(old_configs, f, indent=2)
         f.write("\n")
 
+
 def get_tuning_configs(M, N, K, use_fp16):
     param_ranges = get_tuning_space(use_fp16)
     configs: List[BenchmarkConfig] = []
@@ -209,10 +207,7 @@ def get_tuning_configs(M, N, K, use_fp16):
         configs.append(config)
 
     # TODO is shard_intermediate_size=N why shard and //
-    configs = prune_search_space(num_tokens=M,
-        shard_intermediate_size=N,
-        hidden_size=K,
-        search_space=configs,
-        is_fp16=use_fp16)
+    configs = prune_search_space(num_tokens=M, shard_intermediate_size=N, hidden_size=K, search_space=configs,
+                                 is_fp16=use_fp16)
 
     return configs

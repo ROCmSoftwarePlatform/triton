@@ -8,7 +8,8 @@ import json
 import functools
 import argparse
 import sys
-from benchmark_utils import get_tuning_configs, get_config_dtype_str, get_config_file_name, update_configs
+from benchmark_utils import get_tuning_configs, get_config_file_name, update_configs
+
 
 @triton.jit
 def moe_gemm_kernel(
@@ -193,8 +194,6 @@ def moe_align_block_size(topk_ids: torch.Tensor, block_size: int,
     return sorted_ids, expert_ids, num_tokens_post_pad
 
 
-
-
 @functools.lru_cache
 def get_moe_configs(E: int, N: int, dtype: Optional[str]) -> Optional[Dict[int, Any]]:
     """
@@ -344,6 +343,7 @@ def get_configs():
     ]
     return configs
 
+
 def run_benchmark(custom, args):
     print_time = args.return_time
     routed_weight = args.routed_weight
@@ -362,10 +362,11 @@ def run_benchmark(custom, args):
 
     line_names = 'Time (ms)' if print_time else 'TFLOPS'
 
-    benchmark = triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'],
-                                         line_names=[line_names], styles=[('red', '-'), ('blue', '-')], ylabel='ms',
-                                         plot_name='moe-gemm-benchmark',
-                                         args={'dtype': dtype, 'use_fp16': use_fp16, 'tune': tune, 'print_time': print_time, 'routed_weight': routed_weight})
+    benchmark = triton.testing.Benchmark(
+        x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'], line_names=[line_names],
+        styles=[('red', '-'), ('blue', '-')], ylabel='ms', plot_name='moe-gemm-benchmark', args={
+            'dtype': dtype, 'use_fp16': use_fp16, 'tune': tune, 'print_time': print_time, 'routed_weight': routed_weight
+        })
 
     @triton.testing.perf_report([benchmark])
     def bench_moe_gemm(M, K, N, E, top_k, dtype, use_fp16, routed_weight, tune, print_time, provider):
@@ -384,8 +385,8 @@ def run_benchmark(custom, args):
             best_config = None
             for config in configs:
                 print(config)
-                fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
-                              config)
+                fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids,
+                                      num_tokens_post_padded, config)
                 ms = triton.testing.do_bench(fn)
                 print(ms)
                 c = torch.zeros((M, top_k, N), dtype=dtype, device='cuda')
@@ -396,7 +397,7 @@ def run_benchmark(custom, args):
             update_configs(M, best_config, E, N, K, top_k, dtype, False, False)
         else:
             fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
-                                config)
+                                  config)
             ms = triton.testing.do_bench(fn)
 
         if print_time:
