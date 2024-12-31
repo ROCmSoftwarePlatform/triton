@@ -18,7 +18,7 @@ def infer_mnk(model_name, batch_size, seq_len, config_file='model_configs.json')
 
     # Infer M, N, K based on the feedforward network (FFN) dimensions
     M = batch_size * seq_len  # Total tokens in a batch
-    K = config["model_dimension"]  # head dimension * num heads
+    K = config["hidden_size"]  # head dimension * num heads
     N = config["FFN_dimension"]  # size of the intermediate layer of FFN
 
     return M, N, K
@@ -64,12 +64,12 @@ def get_available_models(config_file='model_configs.json'):
     return list(configs.keys())
 
 
-def get_FA_configs(batch_size=1, seq_len=None, model_name=None, config_file='model_configs.json'):
+def get_FA_configs(args, config_file='model_configs.json'):
     """
     Retrieve Flash Attention configurations.
     Args:
-        batch_size: Batch size for the configurations.
-        model_name: Name of the model. If None, return all models.
+        b: Batch size for the configurations.
+        model: Name of the model. If all, return all models.
         config_file: Path to the model configuration file.
     Returns:
         List of Flash Attention configurations as tuples: (BATCH, HQ, HK, N_CTX_Q, N_CTX_K)
@@ -77,7 +77,9 @@ def get_FA_configs(batch_size=1, seq_len=None, model_name=None, config_file='mod
     configs = load_model_config(config_file)
     fa_configs = []
 
-    if model_name:
+    model_name = args.model
+
+    if model_name != "all":
         # Check if the model exists
         if model_name not in configs:
             raise ValueError(f"Model '{model_name}' not found in {config_file}")
@@ -87,7 +89,10 @@ def get_FA_configs(batch_size=1, seq_len=None, model_name=None, config_file='mod
         HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"]
 
         max_ctx_len = config["max_ctx_len"]
-        N_CTX_Q = N_CTX_K = max_ctx_len if seq_len is None else seq_len
+        N_CTX_Q = args.sq if args.sq else max_ctx_len
+        N_CTX_K = args.sk if args.sk else max_ctx_len
+        batch_size = args.b if args.b else 1
+
         fa_configs.append((batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
     else:
         # Handle all models
@@ -95,7 +100,9 @@ def get_FA_configs(batch_size=1, seq_len=None, model_name=None, config_file='mod
             HQ = config["num_attention_heads"]
             HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"]
             max_ctx_len = config["max_ctx_len"]
-            N_CTX_Q = N_CTX_K = max_ctx_len if seq_len is None else seq_len
+            N_CTX_Q = args.sq if args.sq else max_ctx_len
+            N_CTX_K = args.sk if args.sk else max_ctx_len
+            batch_size = args.b if args.b else 1
             fa_configs.append((batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
 
     return fa_configs

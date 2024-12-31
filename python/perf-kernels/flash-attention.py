@@ -1874,14 +1874,9 @@ def varlen_benchmark_configs():
     return configs
 
 
-def model_benchmark_configs(batch_size, seq_len, model="all"):
+def model_benchmark_configs(args):
     config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json")
-    b = batch_size if batch_size else 1
-    sl = seq_len if seq_len else None
-    model_name = None  # no specified model by default, runs all
-    if model != "all":
-        model_name = model
-    return model_benchmarking.get_FA_configs(batch_size=b, seq_len=sl, config_file=config_file, model_name=model_name)
+    return model_benchmarking.get_FA_configs(args, config_file=config_file)
 
 
 def run_benchmark(custom, args):
@@ -1907,7 +1902,7 @@ def run_benchmark(custom, args):
             x_vals_list = nonvarlen_benchmark_configs()
 
         if args.model:
-            x_vals_list = model_benchmark_configs(batch_size=args.b, seq_len=args.sq, model=args.model)
+            x_vals_list = model_benchmark_configs(args)
 
     print_time = args.return_time
     line_names = 'Time (ms)' if print_time else 'TFLOPS'
@@ -2028,12 +2023,16 @@ def main():
     custom_config = False
     assert args.layout == 'thd' or not args.equal_seqlens, \
            "Equal sequence lengths arg must be used with the thd layout."
-    if args.hq or args.hk or args.sq or args.sk or args.d:
+    if args.hq or args.hk or args.d:
         custom_config = True
         assert args.b and args.hq and args.sq and args.d, \
                "If custom config is specified, please provide \
                 all of batch, number of Q heads, Q sequence length \
                 and head size."
+
+    if args.model:
+        assert not (args.hq or args.hk or args.d), \
+                "Specifying model fixes hq, hk and d already. Do not provide them!"
 
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
