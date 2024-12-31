@@ -101,4 +101,4 @@ Kernel that implements RMS Norm over a row of tensor.
 Kernel that implements Layer Normalization over a row on tensor
 
 ## `fused_moe/moe-gemm.py`
-Kernel that implements moe gemm
+Kernel that implements moe gemm. You can tune the gemm config in the benchmark with the -tune option
