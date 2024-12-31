@@ -6,7 +6,6 @@ import argparse
 import pytest
 import re
 
-import model_benchmarking
 import os
 
 
@@ -314,13 +313,15 @@ def parse_args():
     )
 
     parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
+
     def get_available_models(config_file='model_configs.json'):
-        import os, json
+        import json
         """Load model names from the configuration file."""
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config_file)
         with open(config_path, 'r') as f:
             configs = json.load(f)
         return list(configs.keys())
+
     available_models = get_available_models()  # Dynamically load model names
     model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
                   "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
@@ -330,7 +331,7 @@ def parse_args():
     parser.add_argument(
         '-sl', type=int, default=0,
         help="Sequence length used together with model. Defaults to max_seq_len from model config if not provided.")
-    
+
     parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
     parser.add_argument("-M", type=int, default=0)
     parser.add_argument("-N", type=int, default=0)
@@ -354,15 +355,12 @@ def main():
         import json
         # If user did not provide an absolute path, resolve relative path from script directory
         if not os.path.isabs(args.model_configs):
-            config_file = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                args.model_configs
-            )
+            config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.model_configs)
         else:
             config_file = args.model_configs
 
         with open(config_file, 'r') as f:
-            configs=json.load(f)
+            configs = json.load(f)
         mnk_list = []
 
         if args.model != "all":

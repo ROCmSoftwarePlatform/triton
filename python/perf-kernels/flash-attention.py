@@ -29,6 +29,7 @@ import torch
 import triton
 import triton.language as tl
 
+
 class MetaData():
     cu_seqlens_q = None
     cu_seqlens_k = None
@@ -1876,17 +1877,14 @@ def model_benchmark_configs(args):
     import json
     # If user did not provide an absolute path, resolve relative path from script directory
     if not os.path.isabs(args.model_configs):
-        config_file = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            args.model_configs
-        )
+        config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.model_configs)
     else:
         config_file = args.model_configs
 
     with open(config_file, 'r') as f:
-        configs=json.load(f)
+        configs = json.load(f)
     fa_configs = []
-    
+
     if args.model != "all":
         # Check if the model exists
         model_name = args.model
@@ -1952,7 +1950,8 @@ def run_benchmark(custom, args):
                                  args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode}))
 
     @triton.testing.perf_report(configs)
-    def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda", model=None):
+    def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda",
+                              model=None):
         assert mode in ["fwd", "bwd"]
         assert not (int8_kv and quantize_p)
         warmup = 25
@@ -2028,13 +2027,16 @@ def parse_args():
         allow_abbrev=False,
     )
     parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
+
     def get_available_models(config_file='model_configs.json'):
-        import os, json
+        import os
+        import json
         """Load model names from the configuration file."""
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config_file)
         with open(config_path, 'r') as f:
             configs = json.load(f)
         return list(configs.keys())
+
     available_models = get_available_models()  # Dynamically load model names
     model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
                   "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")

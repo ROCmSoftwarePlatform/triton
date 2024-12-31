@@ -175,15 +175,12 @@ def model_benchmark_configs(args):
     import json
     # If user did not provide an absolute path, resolve relative path from script directory
     if not os.path.isabs(args.model_configs):
-        config_file = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            args.model_configs
-        )
+        config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.model_configs)
     else:
         config_file = args.model_configs
 
     with open(config_file, 'r') as f:
-        configs=json.load(f)
+        configs = json.load(f)
 
     x_vals_list = []
     batch_size = args.b if args.b else 1
@@ -280,13 +277,16 @@ def parse_args():
         allow_abbrev=False,
     )
     parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
+
     def get_available_models(config_file='model_configs.json'):
-        import os, json
+        import os
+        import json
         """Load model names from the configuration file."""
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config_file)
         with open(config_path, 'r') as f:
             configs = json.load(f)
         return list(configs.keys())
+
     available_models = get_available_models()  # Dynamically load model names
     model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
                   "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
@@ -295,7 +295,7 @@ def parse_args():
                         help="Batch size used together with model. Defaults to 1 if not provided.")
     parser.add_argument(
         '-sl', type=int, default=0,
-        help="Sequence length used together with model. Defaults to max_seq_len from model config if not provided.")    
+        help="Sequence length used together with model. Defaults to max_seq_len from model config if not provided.")
     parser.add_argument('-M', "--M_start", default="1", type=int)
     parser.add_argument('-Ms', "--M_step", default="2", type=int)  #This is multiplicative step
     parser.add_argument('-Me', "--M_end", default="512", type=int)
