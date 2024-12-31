@@ -45,7 +45,6 @@ def get_tuning_space(use_fp16):
     num_warps_range = [1, 2, 4, 8]
     group_m_range = [1, 4, 8, 16, 32]
     num_stage_range = [1, 2]
-    # TODO check this
     waves_per_eu_range = [0]
     matrix_instr_nonkdim_range = [16, 32] if use_fp16 else []
     kpack_range = [1, 2] if use_fp16 else []
@@ -206,7 +205,6 @@ def get_tuning_configs(M, N, K, use_fp16):
         config = dict(zip(keys, config_values))
         configs.append(config)
 
-    # TODO is shard_intermediate_size=N why shard and //
     configs = prune_search_space(num_tokens=M, shard_intermediate_size=N, hidden_size=K, search_space=configs,
                                  is_fp16=use_fp16)
 

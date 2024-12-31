@@ -298,7 +298,6 @@ def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool
     return a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config
 
 
-# TODO assert the input shape
 @pytest.mark.parametrize("M, K, N, top_k, E", [
     (64, 4096, 14336, 2, 8),
     (16, 1, 14336, 2, 4),
@@ -316,7 +315,6 @@ def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: 
     a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
         M, K, N, top_k, E, routed_weight=routed_weight, dtype=dtype)
 
-    # TODO Quantization support
     tri_out = moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config)
 
     ref_out = torch.empty_like(c)
