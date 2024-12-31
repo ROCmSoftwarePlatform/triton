@@ -1929,6 +1929,7 @@ def run_benchmark(custom, args):
     int8_kv = args.int8_kv and int8
     varlen = args.layout == 'thd'
     configs = []
+    plot_name = f'fused-attention-{mode}-d{head_size}-layout{args.layout}'
     if custom:
         x_vals_list = [(args.b, args.hq, hk, args.sq, sk)]
     else:
@@ -1940,13 +1941,14 @@ def run_benchmark(custom, args):
         if args.model:
             x_vals_list = model_benchmark_configs(args)
             x_names = ['model', 'BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K']
+            plot_name = f'fused-attention-{mode}-layout{args.layout}'
 
     print_time = args.return_time
-    line_names = 'Time (ms)' if print_time else 'TFLOPS'
+    line_vals = ['triton', 'torch']  # 'Time (ms)' if print_time else 'TFLOPS'
     configs.append(
-        triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'],
-                                 line_names=[line_names], styles=[('red', '-')], ylabel='ms',
-                                 plot_name=f'fused-attention-{mode}-d{head_size}-layout{args.layout}',
+        triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
+                                 line_names=line_vals, styles=[('red', '-'),
+                                                               ('green', '-')], ylabel='ms', plot_name=plot_name,
                                  args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode}))
 
     @triton.testing.perf_report(configs)
@@ -1992,6 +1994,17 @@ def run_benchmark(custom, args):
             o, _ = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
+
+        if "torch" in provider:
+            if HQ != HK:
+                k = k.view(k.shape[0], k.shape[1], -1, k.shape[2],
+                           k.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
+                v = v.view(v.shape[0], v.shape[1], -1, v.shape[2],
+                           v.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
+
+            fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
+                                                                          is_causal=causal, scale=None)
+
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         total_flops = 2 * flops_per_matmul
         if causal:
@@ -2009,7 +2022,7 @@ def run_benchmark(custom, args):
         else:
             return total_flops / ms * 1e-9
 
-    bench_flash_attention.run(save_path=".", print_data=True)
+    bench_flash_attention.run(save_path=".", print_data=True, show_plots=True)
 
 
 def supported_layouts():
