@@ -28,9 +28,6 @@ import torch
 
 import triton
 import triton.language as tl
-import model_benchmarking
-import os
-
 
 class MetaData():
     cu_seqlens_q = None
@@ -1875,8 +1872,49 @@ def varlen_benchmark_configs():
 
 
 def model_benchmark_configs(args):
-    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json")
-    return model_benchmarking.get_FA_configs(args, config_file=config_file)
+    import os
+    import json
+    # If user did not provide an absolute path, resolve relative path from script directory
+    if not os.path.isabs(args.model_configs):
+        config_file = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            args.model_configs
+        )
+    else:
+        config_file = args.model_configs
+
+    with open(config_file, 'r') as f:
+        configs=json.load(f)
+    fa_configs = []
+    
+    if args.model != "all":
+        # Check if the model exists
+        model_name = args.model
+        if model_name not in configs:
+            raise ValueError(f"Model '{model_name}' not found in {config_file}")
+        # Handle a specific model
+        config = configs[model_name]
+        HQ = config["num_attention_heads"]
+        HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"]
+
+        max_ctx_len = config["max_ctx_len"]
+        N_CTX_Q = args.sq if args.sq else max_ctx_len
+        N_CTX_K = args.sk if args.sk else max_ctx_len
+        batch_size = args.b if args.b else 1
+
+        fa_configs.append((model_name, batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
+    else:
+        # Handle all models
+        for model_name, config in configs.items():
+            HQ = config["num_attention_heads"]
+            HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"]
+            max_ctx_len = config["max_ctx_len"]
+            N_CTX_Q = args.sq if args.sq else max_ctx_len
+            N_CTX_K = args.sk if args.sk else max_ctx_len
+            batch_size = args.b if args.b else 1
+            fa_configs.append((model_name, batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
+
+    return fa_configs
 
 
 def run_benchmark(custom, args):
@@ -1903,6 +1941,7 @@ def run_benchmark(custom, args):
 
         if args.model:
             x_vals_list = model_benchmark_configs(args)
+            x_names = ['model', 'BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K']
 
     print_time = args.return_time
     line_names = 'Time (ms)' if print_time else 'TFLOPS'
@@ -1913,7 +1952,7 @@ def run_benchmark(custom, args):
                                  args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode}))
 
     @triton.testing.perf_report(configs)
-    def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda"):
+    def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda", model=None):
         assert mode in ["fwd", "bwd"]
         assert not (int8_kv and quantize_p)
         warmup = 25
@@ -1988,11 +2027,18 @@ def parse_args():
         prog="Benchmark FlashAttention",
         allow_abbrev=False,
     )
-
-    available_models = model_benchmarking.get_available_models()  # Dynamically load model names
+    parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
+    def get_available_models(config_file='model_configs.json'):
+        import os, json
+        """Load model names from the configuration file."""
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config_file)
+        with open(config_path, 'r') as f:
+            configs = json.load(f)
+        return list(configs.keys())
+    available_models = get_available_models()  # Dynamically load model names
     model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
                   "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
-    parser.add_argument("-model", type=str, default=None, help=model_help)
+    parser.add_argument('-model', type=str, default=None, help=model_help)
     parser.add_argument("-b", type=int, default=0)
     parser.add_argument("-hq", type=int, default=0)
     parser.add_argument("-hk", type=int, default=0)

@@ -278,7 +278,7 @@ def get_type(provider):
         plot_name="matmul-performance",
         args={},
     ))
-def benchmark(M, N, K, provider):
+def benchmark(M, N, K, provider, model=None):
     in_dtype = name_to_torch_types[get_type(provider)]
     out_dtype = in_dtype
 
@@ -313,14 +313,25 @@ def parse_args():
         allow_abbrev=False,
     )
 
-    available_models = model_benchmarking.get_available_models()  # Dynamically load model names
+    parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
+    def get_available_models(config_file='model_configs.json'):
+        import os, json
+        """Load model names from the configuration file."""
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config_file)
+        with open(config_path, 'r') as f:
+            configs = json.load(f)
+        return list(configs.keys())
+    available_models = get_available_models()  # Dynamically load model names
     model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
                   "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
-
+    parser.add_argument('-model', type=str, default=None, help=model_help)
+    parser.add_argument('-b', type=int, default=0,
+                        help="Batch size used together with model. Defaults to 1 if not provided.")
+    parser.add_argument(
+        '-sl', type=int, default=0,
+        help="Sequence length used together with model. Defaults to max_seq_len from model config if not provided.")
+    
     parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
-    parser.add_argument("-b", type=int, default=None, help="Batch size")
-    parser.add_argument("-sl", type=int, default=None, help="Sequence length")
-    parser.add_argument("-model", type=str, default=None, help=model_help)
     parser.add_argument("-M", type=int, default=0)
     parser.add_argument("-N", type=int, default=0)
     parser.add_argument("-K", type=int, default=0)
@@ -338,16 +349,41 @@ def main():
     verbose = args.v
 
     if args.model:
-        batch_size = args.b if args.b is not None else 1
-        config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_configs.json")
-        if args.model.lower() == "all":
-            # Benchmark all models
-            x_vals = model_benchmarking.get_mnk(batch_size=batch_size, seq_len=args.sl, config_file=config_file)
+        batch_size = args.b if args.b else 1
+        import os
+        import json
+        # If user did not provide an absolute path, resolve relative path from script directory
+        if not os.path.isabs(args.model_configs):
+            config_file = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                args.model_configs
+            )
         else:
-            # Benchmark a specific model
-            x_vals = model_benchmarking.get_mnk(batch_size=batch_size, config_file=config_file, seq_len=args.sl,
-                                                model_name=args.model)
-        benchmark.benchmarks.x_vals = x_vals
+            config_file = args.model_configs
+
+        with open(config_file, 'r') as f:
+            configs=json.load(f)
+        mnk_list = []
+
+        if args.model != "all":
+            model_name = args.model
+            # Check if the model exists
+            if model_name not in configs:
+                raise ValueError(f"Model '{model_name}' not found in {config_file}")
+            # Handle a specific model
+            config = configs[model_name]
+            seq_len = args.sl if args.sl else config["max_ctx_len"]
+            M, N, K = batch_size * seq_len, config["hidden_size"], config["intermediate_size"]
+            mnk_list.append((model_name, M, N, K))
+        else:
+            # Handle all models
+            for model_name, config in configs.items():
+                seq_len = args.sl if args.sl else config["max_ctx_len"]
+                M, N, K = batch_size * seq_len, config["hidden_size"], config["intermediate_size"]
+                mnk_list.append((model_name, M, N, K))
+
+        benchmark.benchmarks.x_names = ['model', 'M', 'N', 'K']
+        benchmark.benchmarks.x_vals = mnk_list
 
     if args.M or args.N or args.K:
         assert args.model is None, "Providing both -model and -M/N/K is not compatible! -model already fixes -M/N/K."
