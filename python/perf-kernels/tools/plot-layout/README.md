@@ -127,6 +127,7 @@ python3 plot_layout.py -plot lds -lds_layout none -lds_access none -tensorShape 
 python3 plot_layout.py -plot lds -lds_layout none -lds_access none -tensorShape 128 128 -kWidth 16 -dtype_a fp8 -banks 64
 python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access none -tensorShape 128 128 -kWidth 16 -dtype_a fp8 -banks 64
 python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access read -tensorShape 128 128 -kWidth 16 -dtype_a bf8 -banks 64
+python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access write -tensorShape 128 128 -kWidth 16 -dtype_a f4 -banks 32
 ```
 
 Knobs
@@ -139,5 +140,5 @@ Knobs
 - Three options for `-lds_access`:
   - `none`: do not plot access pattern
   - `read`: plot accessed elements at the first cycle of ds_read
-  - `write`: plot accessed elements during ds_write. Note that this needs some information from
-    global load. Therefore, we need to provide `-sizePerThread` and `-threadsPerWarp`.
+  - `write`: plot accessed elements during ds_write. For global load access, we assume
+    a fully coalesced dwordx4 access pattern along the K dim.

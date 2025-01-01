@@ -126,8 +126,8 @@ def draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threa
     mfmaKDimInBytes = min(dimKInBytes, maxKDimInBytes(dtype, mfmaNonKDim, kWidth))
     vecInBytes = kWidth * elemTypeInBytes
 
-    bsize = 0.12
-    bankLabelScale = bsize / 0.15
+    bankLabelScale = 0.8
+    bsize = 0.15
 
     return f'''\\begin{{document}}
   \\begin{{tikzpicture}}
@@ -152,7 +152,8 @@ def draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threa
     \\def\\elem{{0.18}}
     \\def\\bsize{{{bsize}}}
     \\def\\bankLabelScale{{{bankLabelScale}}}
-    \\coordinate (TL) at (0,0);
+    \\coordinate (tile TL) at (0,0);
+    \\coordinate (TL) at (tile TL);
     \\drawTensorLayoutGlobalMem
     \\coordinate (TL) at ($(TL)+(0, -\drawM-8*\\elemH)$);
     \\drawLDSLayoutAndAccess{{\\hasSwizzle}}{{\\accessMode}}{{{banks}}}
@@ -440,8 +441,6 @@ def main():
 
     if plot_mode == 'lds':
         print(f"Plotting LDS access for tensor M={dim0},K={dim1} with vec={kWidth}")
-        if ldsAccess == 'write':
-            print(f"sizePerThread={sizePerThread}, threadsPerWarp={threadsPerWarp}")
 
     with open("myplot.tex", 'w') as f_plot:
         with open("preamble.tex") as file:

@@ -123,6 +123,62 @@
   \node [scale=\scale, above] at ($(TL)+(0.5*\banks*4*\bsize, 4*\elemH)$) {LDS \banks\ banks};
 }
 
+\newcommand{\drawHighlightedAccess}[3]{
+  %% Highlight the vectors if \tid < \threshold
+  %%
+  %% Predefined variables
+  %% vec TL: top-left of the current vector
+  %% elemH, bsize, vecInBytes, bankLabelScale
+  %%
+  %% #1: tid
+  %% #2: threshold
+  %% #3: label in vector
+
+  \pgfmathsetmacro{\tid}{#1}
+  \pgfmathsetmacro{\threshold}{#2}
+  \def\bWidth{0.02}
+
+  \ifthenelse{\tid < \threshold}{
+    \ifthenelse{\vecInBits=128}{\def\ratio{0.5}}{\def\ratio{1}}
+    \draw [thick, draw=white, fill=\vecColor] ($(vec TL)+(\bWidth, -\bWidth)$) rectangle ++(\vecInBytes*\bsize-2*\bWidth, -\elemH+2*\bWidth);
+    \ifthenelse{\vecInBits=128}{
+      \node [scale=.6*\bankLabelScale*\scale, white] at ($(vec TL)+(\ratio*\vecInBytes*\bsize, -0.5*\elemH)$) {#3};
+    }{
+      \node [scale=.6*\bankLabelScale*\scale, white, left] at ($(vec TL)+(\ratio*\vecInBytes*\bsize, -0.5*\elemH)$) {#3};
+    }
+    \node [scale=.5*\bankLabelScale*\scale, right] at ($(vec TL)+(0, -0.5*\elemH)$) {\textbf{t\tid}};
+  }{}
+}
+
+\newcommand{\drawCoalescedGRAccess}[3]{
+  %% Highlight the vectors in original tile if \tid < \threshold
+  %%
+  %% Predefined variables
+  %% tile TL: top-left of the original tile
+  %% gp: vector group id along K dim
+  %% row: row index
+  %% elemH, bsize, vecInBytes, bankLabelScale
+  %%
+  %% #1: tid
+  %% #2: threshold
+  %% #3: label in vector
+
+  \pgfmathsetmacro{\tid}{#1}
+  \pgfmathsetmacro{\threshold}{#2}
+  \def\bWidth{0.02}
+
+  \ifthenelse{\tid < \threshold}{
+    \ifthenelse{\vecInBits=128}{\def\ratio{0.5}}{\def\ratio{1}}
+    \coordinate (tile vec TL) at ($(tile TL)+(\gp*\vecInBytes*\bsize, -\row*\elemH)$);
+    \draw [thick, draw=white, fill=\vecColor] ($(tile vec TL)+(\bWidth, -\bWidth)$) rectangle ++(\vecInBytes*\bsize-2*\bWidth, -\elemH+2*\bWidth);
+    \ifthenelse{\vecInBits=128}{
+      \node [scale=.6*\bankLabelScale*\scale, white] at ($(tile vec TL)+(\ratio*\vecInBytes*\bsize, -0.5*\elemH)$) {#3};
+    }{
+      \node [scale=.6*\bankLabelScale*\scale, white, left] at ($(tile vec TL)+(\ratio*\vecInBytes*\bsize, -0.5*\elemH)$) {#3};
+    }
+    \node [scale=.5*\bankLabelScale*\scale, right] at ($(tile vec TL)+(0, -0.5*\elemH)$) {\textbf{t\tid}};
+  }{}
+}
 
 \newcommand{\drawLDSLayoutAndAccess}[3]{
   %%
@@ -202,34 +258,46 @@
       \draw [ultra thin, fill=\vecColor] (vec TL) rectangle ++(\vecInBytes*\bsize, -\elemH)
       node [pos=.5, scale=.6*\bankLabelScale*\scale, white] {m\row,k\kStart:\kEnd};
 
-      %% Draw ds_read
-      \ifthenelse{\accessMode=1}{
-        % compute thread id for current vec
-        \pgfmathsetmacro{\tid}{int(\gp*\mfmaNonKDim+\row)}
-        % highlight vector of the threads that will access LDS at the same cycle
-        \ifthenelse{\tid < \numThreadsSameCycle}{
-          \ifthenelse{\vecInBits=128}{\def\ratio{0.5}}{\def\ratio{1}}
-          \draw [ultra thick, draw=white, fill=\vecColor] (vec TL) rectangle ++(\vecInBytes*\bsize, -\elemH);
-          \ifthenelse{\vecInBits=128}{
-            \node [scale=.6*\bankLabelScale*\scale, white] at ($(vec TL)+(\ratio*\vecInBytes*\bsize, -0.5*\elemH)$)
-            {m\row,k\kStart:\kEnd};}{
-            \node [scale=.6*\bankLabelScale*\scale, white, left] at ($(vec TL)+(\ratio*\vecInBytes*\bsize, -0.5*\elemH)$)
-            {m\row,k\kStart:\kEnd};
-          }
-          \node [scale=.5*\bankLabelScale*\scale, red, right] at ($(vec TL)+(0, -0.5*\elemH)$) {t\tid};
-        }{}
-        % draw ds_read instruction name
-        \ifthenelse{\tid=0}{
-          \node [scale=\scale, above right] at ($(TL)+(0, \gapT*\elemH)$)
-          {ds\_read\_b\vecInBits\ (t0$\sim$t\maxTid)};}{}
-      }{}
-
       %% draw phase of each LDS row
       \pgfmathsetmacro{\lastVecId}{\numLDSVec-1}
       \ifthenelse{\LDSVec=\lastVecId}{
         \draw [ultra thin] ($(vec TL)+(\vec*\bytesPerElem*\bsize, -.5*\bsize)$) -- ++(\elemH, 0)
         node [scale=0.6*\bankLabelScale*\scale, right] {\phase};
       }{}
+
+      %% For ds_read/write access patterns, we first decide the thread id that owns
+      %% the current vector. And then we decide if the current vector is accessed
+      %% at the first cycle according to thread id and access width
+      %% Draw ds_read
+      \ifthenelse{\accessMode=1}{
+        % compute thread id for current vec
+        \pgfmathsetmacro{\tid}{int(\gp*\mfmaNonKDim+\row)}
+        % draw ds_read instruction name
+        \ifthenelse{\tid=0}{
+          \node [scale=\scale, above right] at ($(TL)+(0, \gapT*\elemH)$)
+          {ds\_read\_b\vecInBits\ (t0$\sim$t\maxTid)};}{}
+      }{} %% End draw ds_read
+
+      %% Draw ds_write
+      \ifthenelse{\accessMode=2}{
+        % compute thread id for current vec
+        % Here we assume the following global load pattern:
+        % - global/buffer_load_dwordx4, i.e. sizePerThread[1] = 128-bit
+        % - CTA coverage will always cover all elements along the K dim first, i.e.
+        %   sizePerThread[1]*threadsPerWarp[1] == K or
+        %   (sizePerThread[1]*threadsPerWarp[1] < K and threadsPerWarp[0] == 1)
+        \pgfmathsetmacro{\offBytes}{int(\row*\K*\bytesPerElem+\gp*\vecInBytes)}
+        \pgfmathsetmacro{\tidRaw}{int(\offBytes/16)}
+        \pgfmathsetmacro{\remTid}{int(mod(\offBytes,16))}
+        \drawCoalescedGRAccess{\tidRaw}{\numThreadsSameCycle}{m\row,k\kStart:\kEnd}
+        \ifthenelse{\remTid>0}{\pgfmathsetmacro{\tid}{int(\tidRaw+32)}}{\pgfmathsetmacro{\tid}{\tidRaw}}
+        % draw ds_write instruction name
+        \ifthenelse{\tid=0}{
+          \node [scale=\scale, above right] at ($(TL)+(0, \gapT*\elemH)$)
+          {ds\_write\_b\vecInBits\ (t0$\sim$t\maxTid)};}{}
+      }{}
+      % highlight vector of the threads that will access LDS at the same cycle
+      \drawHighlightedAccess{\tid}{\numThreadsSameCycle}{m\row,k\kStart:\kEnd}
     }
   }
   \node [scale=0.6*\bankLabelScale*\scale, above right] at($(TL)+(\banks*4*\bsize, 0)$) {phase};
@@ -303,38 +371,5 @@
     %  \draw [ultra thin, fill=\vecColor!\ratio!white] (new vec TL) rectangle ++(\vec*\elem, -\elem)
     %  node [pos=.5, scale=.6*\scale, white] {m\vecCoordM};
     %}
-
-    %% Draw ds_write pattern
-    \ifthenelse{\accessMode = 2}{
-      %% First compute the coverage of the first 16 threads
-      \pgfmathsetmacro{\covK}{min(16, \threadsPerWarpK)*\sizePerThreadK/\vec}
-      \pgfmathsetmacro{\covM}{ceil(16/\threadsPerWarpK)*\sizePerThreadM}
-      %% Check conditions for the first 16 threads
-      \pgfmathsetmacro{\vecInThread}{int(mod(\vecCoordK, \sizePerThreadK/\vec))}
-      \ifthenelse{\vecInThread=0}{
-        \ifthenelse{\vecCoordK<\covK \AND \vecCoordM<\covM}{
-          \draw [fill=white]  (new vec TL) rectangle ++(\elem, -\elem);
-          \draw (new vec TL) -- ++(\elem, -\elem);
-          \draw ($(new vec TL)+(0, -\elem)$) -- ++(\elem, \elem);
-        }{}
-      }{}
-    }{}
   }
-
-  %% Draw boundary of 32 banks
-  %% Assume fp16 data type
-  %\foreach \bank in {0,...,31}{
-  %  \draw [ultra thin, gray] ($(TL)+(\bank*2*\elem, 0)$) -- ++(0, 2*\elem)
-  %  node [scale=.6*\scale, right, black] {\bank};
-  %}
-  %\draw [ultra thin, gray] ($(TL)+(32*2*\elem, 0)$) -- ++(0, 2*\elem);
-  %\node [scale=.6*\scale, left, black] at ($(TL)+(0, 2*\elem)$) {bank id};
-%
-  %\node [scale=\scale, above] at ($(TL)+(.5*\LDSK*\elem, 3*\elem)$) {LDS \banks banks};
-  %\node [scale=\scale, rotate=90, above] at ($(TL)+(0, -.5*\drawM*\elem)$) {LDSM=\LDSM};
-
-  %% label phase if swizzling is used
-  %\ifthenelse{\hasSwizzle = 2}{}{
-  %  \node [scale=.6*\scale, above right] at($(TL)+(32*2*\elem, 0)$) {phase};
-  %}
 }
