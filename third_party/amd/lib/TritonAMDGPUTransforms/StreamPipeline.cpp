@@ -34,8 +34,8 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
 static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
-                                    Value pred, bool guard) {
-  if (guard) {
+                                    Value pred, bool guardEpilogue) {
+  if (guardEpilogue) {
     // The epilogue peeling generates a select for the stage output. This causes
     // too much register pressure with the loop result and the epilogue-dot in
     // regs for the select. Conditionally executing the dot will allow the backend
@@ -53,7 +53,7 @@ static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
       return op;
     }
   }
-  return tt::predicateOp(rewriter, op, pred, guard);
+  return tt::predicateOp(rewriter, op, pred, guardEpilogue);
 }
 
 namespace {
@@ -128,6 +128,8 @@ private:
   void createStreamCopy(tt::LoadOp loadOp, Value alloc, Value extractIdx);
   void createStreamOps();
 
+  void checkComputeOp(Operation *op);
+
   // Define categories of scheduling details per Operation types.
   // The StreamPipeliner schedules 5 types of operations:
   // 1. GLOBAL_LOAD: tt.load
@@ -194,6 +196,14 @@ private:
 };
 
 } // namespace
+
+void StreamPipeliner::checkComputeOp(Operation *op) {
+  if (!mlir::isMemoryEffectFree(op))
+    mustGuardEpilogue = true;
+  // ops that return non-zero
+  if (!isa<tt::DotOp>(op))
+    mustGuardEpilogue = true;
+}
 
 // Init Schedule Config based on settings and loop characteristics.
 // Create clusters in order of ops in loop. This can interleave ops
@@ -534,6 +544,7 @@ LogicalResult StreamPipeliner::scheduleLoads(DenseSet<Operation *> &rootUsers) {
   for (auto &[loadOp, dist, use] : loadOpToIndLevelAndUse) {
     // Non-LoadOp(s) are the (final) root uses of all LoadOp(s).
     if (!isa<tt::LoadOp>(use)) {
+      checkComputeOp(use);
       scheduleOp(use, SCHED_COMPUTE);
       rootUsers.insert(use);
     }
