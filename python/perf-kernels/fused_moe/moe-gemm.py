@@ -8,7 +8,7 @@ import json
 import functools
 import argparse
 import sys
-from benchmark_utils import get_tuning_configs, get_config_file_name, update_configs
+from benchmark_utils import get_tuning_configs, get_config_file_name, update_configs, get_config_dtype_str
 from quantization_utils import quantize_fp8, quantize_int8
 
 class MetaData():
@@ -23,19 +23,19 @@ class MetaData():
         self.num_tokens_post_padded = num_tokens_post_padded
         self.config = config
 
-    def set_use_fp8_w8a8(self, a_descale, b_descale):
+    def set_use_fp8_w8a8(self, a_descale, b_descale, fp8_type):
         self.use_fp8_w8a8 = True
         self.a_descale = a_descale
         self.b_descale = b_descale
+        self.fp8_type = fp8_type
 
-    def set_use_int8_w8a16(self, b_descale, fp8_type):
+    def set_use_int8_w8a16(self, b_descale):
         self.use_int8_w8a16 = True
         self.b_descale = b_descale
         self.a_descale = None
-        self.fp8_type = fp8_type
 
     def check_args(self, a, b, o):
-        assert a.dim()[-1] == b.dim()[-1] and b.dim()[1] == o.dim()[-1]
+        assert a.shape[-1] == b.shape[-1] and b.shape[1] == o.shape[-1]
 
         assert not (self.use_fp8_w8a8 and self.use_int8_w8a16)
 
@@ -120,8 +120,10 @@ def moe_gemm_kernel(
     b_ptrs = B + off_experts * stride_be + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     if use_int8_w8a16:
-        b_scale_ptrs = B_scale + off_experts * stride_bse + offs_bn[
-            None, :] * stride_bsn
+        # TODO why this
+        # b_scale_ptrs = B_scale + off_experts * stride_bse + offs_bn[
+        #     None, :] * stride_bsn
+        b_scale_ptrs = B_scale + off_experts
         b_scale = tl.load(b_scale_ptrs)
 
     if use_fp8_w8a8:
@@ -140,7 +142,7 @@ def moe_gemm_kernel(
         elif use_fp8_w8a8:
             accumulator = tl.dot(a, b, acc=accumulator)
         else:
-            accumulator += tl.dot(a, b)
+            accumulator = tl.dot(a, b, acc=accumulator)
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
@@ -314,13 +316,20 @@ def try_get_optimal_moe_config(
 
 def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaData) -> None:
     # TODO shard M dim
+
+    metadata.check_args(a, b, c)
+
     topk_ids, num_tokens_post_padded, topk_weights, sorted_token_ids, expert_ids, config = metadata.topk_ids, metadata.num_tokens_post_padded, metadata.topk_weights, metadata.sorted_token_ids, metadata.expert_ids, metadata.config
 
     use_fp8_w8a8, use_int8_w8a16 = metadata.use_fp8_w8a8, metadata.use_int8_w8a16
     if metadata.use_fp8_w8a8 or metadata.use_int8_w8a16:
         a_descale, b_descale = metadata.a_descale, metadata.b_descale
+        stride_bse = b_descale.stride(0)
+        stride_bsn = b_descale.stride(1)
     else:
         a_descale, b_descale = None, None
+        stride_bse = None
+        stride_bsn = None
 
     _, top_k = topk_ids.shape
 
@@ -328,8 +337,10 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaDa
     _, N, K = b.shape
     grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
 
-    moe_gemm_kernel[grid](a, b, c, a_descale, b_descale, a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2), b.stride(0), b.stride(1), c.stride(1),
-                          c.stride(2), top_k, topk_weights, sorted_token_ids, expert_ids, EM, N, K,
+
+
+    moe_gemm_kernel[grid](a, b, c, a_descale, b_descale, a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2),  c.stride(1),
+                          c.stride(2),stride_bse, stride_bsn, top_k, topk_weights, sorted_token_ids, expert_ids, EM, N, K,
                           MUL_ROUTED_WEIGHT=topk_weights is not None, use_fp8_w8a8=use_fp8_w8a8, use_int8_w8a16=use_int8_w8a16, **config)
     return c
 
@@ -341,16 +352,16 @@ def quantiza_input(a, b, use_fp8_w8a8: tl.constexpr, use_int8_w8a16: tl.constexp
     if use_fp8_w8a8:
         a_quantized, _, a_descale = quantize_fp8(a, fp8_type=fp8_type)
         b_quantized, _, b_descale = quantize_fp8(b, dim=0, fp8_type=fp8_type)
-        metatdata.set_use_fp8_w8a8(a_descale, b_descale)
+        metatdata.set_use_fp8_w8a8(a_descale, b_descale, fp8_type)
         return a_quantized, b_quantized
 
     if use_int8_w8a16:
-        b_quantized, _, b_descale = quantize_int8(b, dim=0, fp8_type=fp8_type)
-        metatdata.set_use_int8_w8a16(b_descale, fp8_type)
+        b_quantized, _, b_descale = quantize_int8(b, dim=0)
+        metatdata.set_use_int8_w8a16(b_descale)
         return a, b_quantized
 
 
-def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool, dtype):
+def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool, use_fp8_w8a8: bool, use_int8_w8a16: bool, fp8_type, dtype):
     a = torch.randn((M, K), dtype=dtype, device='cuda')
     b = torch.randn((E, N, K), dtype=dtype, device='cuda')
     c = torch.zeros((M, top_k, N), dtype=dtype, device='cuda')
@@ -360,7 +371,9 @@ def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool
     softmax_vals = torch.softmax(values, dim=1)
     topk_weights, topk_ids = torch.topk(softmax_vals, k=top_k, dim=1)
 
-    config_dtype = None
+    config_dtype = get_config_dtype_str(use_fp8_w8a8=use_fp8_w8a8,
+                                        use_int8_w8a16=use_int8_w8a16,
+                                        dtype=dtype)
     get_config_func = functools.partial(
         try_get_optimal_moe_config,
         b.shape,
@@ -370,11 +383,10 @@ def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool
     config = get_config_func(M)
     sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size(topk_ids, config['BLOCK_SIZE_M'], E)
 
-    if not routed_weight:
-        metadata = MetaData(None, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config)
-        return a, b, c, metadata
+    metadata = MetaData(topk_weights if routed_weight else None, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config)
 
-    metadata = MetaData(topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config)
+    if use_fp8_w8a8 or use_int8_w8a16:
+        a, b = quantiza_input(a, b, use_fp8_w8a8, use_int8_w8a16, metadata, fp8_type)
 
     return a, b, c, metadata
 
@@ -394,7 +406,7 @@ def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool
 def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool, dtype=torch.float16):
     torch.manual_seed(20)
     a, b, c, metadata = input_helper(
-        M, K, N, top_k, E, routed_weight=routed_weight, dtype=dtype)
+        M, K, N, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=False, use_int8_w8a16=False, fp8_type=None, dtype=dtype)
 
     tri_out = moe_gemm(a, b, c, metadata)
 
@@ -412,6 +424,84 @@ def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: 
     # Validate correctness
     torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=1e-2)
 
+
+@pytest.mark.parametrize("M, K, N, top_k, E", [
+    (64, 4096, 14336, 2, 8),
+    (16, 1, 14336, 2, 4),
+    (1, 128, 14336, 2, 4),
+    (16, 128, 14336, 1, 4),
+    (16, 128, 14336, 1, 1),
+    (64, 128, 7186, 2, 8),
+    (64, 128, 3584, 2, 8),
+    (64, 128, 1792, 2, 8),
+    (64, 128, 64, 2, 8),
+])
+@pytest.mark.parametrize('routed_weight', [True, False])
+@pytest.mark.parametrize('use_fp8_w8a8', [True])
+# triton does not support torch.float8_e4m3fn
+@pytest.mark.parametrize('fp8_type', [torch.float8_e5m2, torch.float8_e5m2fnuz])
+def test_correctness_fp8(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool, use_fp8_w8a8, fp8_type, dtype=torch.float16):
+    torch.manual_seed(20)
+    a, b, c, metadata = input_helper(
+        M, K, N, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=use_fp8_w8a8, use_int8_w8a16=False, fp8_type=fp8_type, dtype=dtype)
+
+    tri_out = moe_gemm(a, b, c, metadata)
+
+    topk_ids = metadata.topk_ids
+    topk_weights = metadata.topk_weights
+    ref_out = torch.empty_like(c)
+    # Repeat a -> (M, top_k, K)
+    a_expanded = a.unsqueeze(1).repeat(1, top_k, 1)
+    # (M, top_k, N, K)
+    b_indexed = b.half()[topk_ids]
+    ref_out = torch.einsum("mek,menk->men", a_expanded.float(), b_indexed.float())
+
+    if routed_weight:
+        ref_out *= topk_weights.unsqueeze(-1)
+
+    ref_out = ref_out * metadata.b_descale.squeeze(-1).squeeze(-1)[topk_ids].unsqueeze(-1)
+    ref_out = ref_out * metadata.a_descale
+    ref_out = ref_out.to(dtype)
+
+    # Validate correctness
+    torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=1e-2)
+
+@pytest.mark.parametrize("M, K, N, top_k, E", [
+    (64, 4096, 14336, 2, 8),
+    (16, 1, 14336, 2, 4),
+    (1, 128, 14336, 2, 4),
+    (16, 128, 14336, 1, 4),
+    (16, 128, 14336, 1, 1),
+    (64, 128, 7186, 2, 8),
+    (64, 128, 3584, 2, 8),
+    (64, 128, 1792, 2, 8),
+    (64, 128, 64, 2, 8),
+])
+@pytest.mark.parametrize('routed_weight', [True, False])
+@pytest.mark.parametrize('use_int8_w8a16', [True])
+def test_correctness_int8(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool, use_int8_w8a16, dtype=torch.float16):
+    torch.manual_seed(20)
+    a, b, c, metadata = input_helper(
+        M, K, N, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=False, use_int8_w8a16=use_int8_w8a16, fp8_type=None, dtype=dtype)
+
+    tri_out = moe_gemm(a, b, c, metadata)
+
+    topk_ids = metadata.topk_ids
+    topk_weights = metadata.topk_weights
+    ref_out = torch.empty_like(c)
+    # Repeat a -> (M, top_k, K)
+    a_expanded = a.unsqueeze(1).repeat(1, top_k, 1)
+    # (M, top_k, N, K)
+    b_indexed = b[topk_ids]
+    ref_out = torch.einsum("mek,menk->men", a_expanded.to(torch.float32), b_indexed.to(torch.float32))
+    if routed_weight:
+        ref_out *= topk_weights.unsqueeze(-1)
+
+    ref_out = ref_out * metadata.b_descale.squeeze(-1).squeeze(-1)[topk_ids].unsqueeze(-1)
+    ref_out = ref_out.to(dtype)
+
+    # Validate correctness
+    torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=1e-2)
 
 def get_configs():
     configs = [
@@ -473,7 +563,7 @@ def run_benchmark(custom, args):
                     min_ms = ms
                     best_config = config
 
-            update_configs(M, best_config, E, N, K, top_k, dtype, False, False)
+            update_configs(M, best_config, E, N, K, top_k, dtype, metadata.use_fp8_w8a8, metadata.use_int8_w8a16)
         else:
             fn = lambda: moe_gemm(a, b, c, metadata)
             ms = triton.testing.do_bench(fn)
