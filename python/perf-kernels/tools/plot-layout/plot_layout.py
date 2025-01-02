@@ -106,7 +106,8 @@ def calcPerPhase(banks, dtype, K):
     return max(banks * bytesPerBank / (K * typeToBytes(dtype)), 1)
 
 
-def draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp, dtype, mfmaNonKDim, banks):
+def draw_lds_access_cmd(dim0, dim1, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp, dtype, mfmaNonKDim,
+                        banks, mnContig, mfmaTransLD):
     if ldsLayout == 'swizzle':
         hasSwizzle = 1
     elif ldsLayout == 'padding':
@@ -122,19 +123,34 @@ def draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threa
         accessMode = 0
 
     elemTypeInBytes = typeToBytes(dtype)
-    dimKInBytes = K * elemTypeInBytes
-    mfmaKDimInBytes = min(dimKInBytes, maxKDimInBytes(dtype, mfmaNonKDim, kWidth))
-    vecInBytes = kWidth * elemTypeInBytes
+    dimKInBytes = dim1 * elemTypeInBytes
 
     bankLabelScale = 0.8
     bsize = 0.15
 
+    trans = 1 if mnContig else 0
+    if trans:
+        dim0Name = 'k'
+        dim1Name = 'n'
+    else:
+        dim0Name = 'm'
+        dim1Name = 'k'
+    dim0Size = dim0
+    dim1Size = dim1
+
+    useMfmaTransLD = 1 if mfmaTransLD else 0
+
+    mfmaKWidth = kWidth
+    if trans == 1 and useMfmaTransLD == 0:
+        kWidth = 16 / elemTypeInBytes
+    vecInBytes = kWidth * elemTypeInBytes
+
     return f'''\\begin{{document}}
   \\begin{{tikzpicture}}
     \\def\\scale{{1}}
-    \\def\\M{{{M}}}
-    \\def\\K{{{K}}}
-    \\def\\mfmaK{{{mfmaKDimInBytes}}}
+    \\def\\M{{{dim0}}}
+    \\def\\K{{{dim1}}}
+    \\def\\mfmaKWidth{{{mfmaKWidth}}}
     \\def\\vec{{{kWidth}}}
     \\def\\vecInBytes{{{vecInBytes}}}
     \\def\\bytesPerElem{{{elemTypeInBytes}}}
@@ -142,6 +158,8 @@ def draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threa
     \\def\\accessMode{{{accessMode}}}
     \\def\\mfmaNonKDim{{{mfmaNonKDim}}}
     \\def\\dtype{{{dtype}}}
+    \\def\\trans{{{trans}}}
+    \\def\\useMfmaTransLD{{{useMfmaTransLD}}}
 
 
     \\def\\sizePerThreadK{{{sizePerThread[1]}}}
@@ -154,9 +172,9 @@ def draw_lds_access_cmd(M, K, kWidth, ldsLayout, ldsAccess, sizePerThread, threa
     \\def\\bankLabelScale{{{bankLabelScale}}}
     \\coordinate (tile TL) at (0,0);
     \\coordinate (TL) at (tile TL);
-    \\drawTensorLayoutGlobalMem
-    \\coordinate (TL) at ($(TL)+(0, -\drawM-8*\\elemH)$);
-    \\drawLDSLayoutAndAccess{{\\hasSwizzle}}{{\\accessMode}}{{{banks}}}
+    \\drawTensorLayoutGlobalMem{{{dim0Name}}}{{{dim1Name}}}{{{dim0Size}}}{{{dim1Size}}}
+    \\coordinate (TL) at ($(TL)+(0, -\drawRow-8*\\elemH)$);
+    \\drawLDSLayoutAndAccess{{\\hasSwizzle}}{{\\accessMode}}{{{banks}}}{{{dim0Name}}}{{{dim1Name}}}{{{dim1Size}}}
   \\end{{tikzpicture}}
 \\end{{document}}'''
 
@@ -341,6 +359,10 @@ def parse_args():
                         help='choose the LDS data layout')
     parser.add_argument("-lds_access", type=str, default="none", choices=['read', 'write', 'none'],
                         help='choose LDS access mode')
+    parser.add_argument("-mnContig", action='store_true', default=False,
+                        help='If set, the tensor is K x N and n-contig')
+    parser.add_argument("-mfma_trans_load", action='store_true', default=False,
+                        help='If set, use MFMA transpose load instructions')
     ## wmma instruction layout parameter
     parser.add_argument("-wave_size", type=int, default=32, choices=[32, 64], help='choose the wmma instruction mode')
     parser.add_argument("-o", type=str, default="myplot", help='output pdf file name (without surfix)')
@@ -377,6 +399,8 @@ def main():
     ldsLayout = args.lds_layout
     ldsAccess = args.lds_access
     banks = args.banks
+    mnContig = args.mnContig
+    mfmaTransLD = args.mfma_trans_load
 
     waveSize = args.wave_size
 
@@ -459,7 +483,7 @@ def main():
             f_plot.write(draw_dotLayout_str)
         elif plot_mode == 'lds':
             draw_lds_str = draw_lds_access_cmd(dim0, dim1, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp,
-                                               dtype_a, mfmaNonKDim, banks)
+                                               dtype_a, mfmaNonKDim, banks, mnContig, mfmaTransLD)
             f_plot.write("\input{ldsLayout}\n")
             f_plot.write(draw_lds_str)
         elif plot_mode == 'wmma':

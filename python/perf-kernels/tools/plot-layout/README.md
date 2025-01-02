@@ -7,7 +7,7 @@ Here is the help info from the script.
 >$ python3 plot_layout.py -h
 usage: Draw triton layouts [-h] [-tensorShape TENSORSHAPE TENSORSHAPE] [-dotShape DOTSHAPE DOTSHAPE DOTSHAPE] [-plot {blocked,dot,wmma,lds}] [-dim0 DIM0] [-dim1 DIM1] [-sizePerThread SIZEPERTHREAD SIZEPERTHREAD] [-threadsPerWarp THREADSPERWARP THREADSPERWARP]
                            [-warpsPerCTA WARPSPERCTA WARPSPERCTA] [-order ORDER ORDER] [-nonKDim {16,32}] [-kWidth {4,8,16,32}] [-kGroup {1,2}] [-dtype_a {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}] [-dtype_b {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}] [-mfmaTrans] [-scale]
-                           [-banks {32,64}] [-lds_layout {swizzle,padding,none}] [-lds_access {read,write,none}] [-wave_size {32,64}] [-o O] [-keep]
+                           [-banks {32,64}] [-lds_layout {swizzle,padding,none}] [-lds_access {read,write,none}] [-mnContig] [-mfma_trans_load] [-wave_size {32,64}] [-o O] [-keep]
 
 options:
   -h, --help            show this help message and exit
@@ -37,6 +37,8 @@ options:
                         choose the LDS data layout
   -lds_access {read,write,none}
                         choose LDS access mode
+  -mnContig             If set, the tensor is K x N and n-contig
+  -mfma_trans_load      If set, use MFMA transpose load instructions
   -wave_size {32,64}    choose the wmma instruction mode
   -o O                  output pdf file name (without surfix)
   -keep                 If set, keep the generated .tex file
@@ -128,6 +130,7 @@ python3 plot_layout.py -plot lds -lds_layout none -lds_access none -tensorShape 
 python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access none -tensorShape 128 128 -kWidth 16 -dtype_a fp8 -banks 64
 python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access read -tensorShape 128 128 -kWidth 16 -dtype_a bf8 -banks 64
 python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access write -tensorShape 128 128 -kWidth 16 -dtype_a f4 -banks 32
+python3 plot_layout.py -plot lds -lds_layout none -lds_access read -tensorShape 128 32 -kWidth 4 -dtype_a fp16 -banks 64 -mnContig
 ```
 
 Knobs
@@ -142,3 +145,5 @@ Knobs
   - `read`: plot accessed elements at the first cycle of ds_read
   - `write`: plot accessed elements during ds_write. For global load access, we assume
     a fully coalesced dwordx4 access pattern along the K dim.
+- `mnContig` If set, the tile is stored in mn-contig layout. In this layout, elements along
+  the M/N dim are contiguous in both global memory and LDS. And swizzling is disabled.
