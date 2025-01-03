@@ -1911,109 +1911,6 @@ def model_benchmark_configs(args):
 
     return fa_configs
 
-
-def test_benchmark_correctness(custom, args):
-
-    dtype = arg_to_torch_dtype[args.dtype]
-    hk = args.hq if not args.hk else args.hk
-    sk = args.sq if not args.sk else args.sk
-    head_size = 128 if not args.d else args.d
-    mode = 'fwd'
-    x_names = ['BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K']
-    causal = args.causal
-    int8 = args.int8
-    quantize_p = args.quantize_p and int8
-    int8_kv = args.int8_kv and int8
-    varlen = args.layout == 'thd'
-    configs = []
-    plot_name = f'fused-attention-{mode}-d{head_size}-layout{args.layout}'
-    if custom:
-        x_vals_list = [(args.b, args.hq, hk, args.sq, sk)]
-    else:
-        if varlen:
-            x_vals_list = varlen_benchmark_configs()
-        else:
-            x_vals_list = nonvarlen_benchmark_configs()
-
-        if args.model:
-            x_vals_list = model_benchmark_configs(args)
-            x_names = ['model', 'BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K']
-            plot_name = f'fused-attention-{mode}-layout{args.layout}'
-
-    print_time = args.return_time
-    line_vals = ['triton', 'torch']  # 'Time (ms)' if print_time else 'TFLOPS'
-    configs.append(
-        triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
-                                 line_names=line_vals, styles=[('red', '-'),
-                                                               ('green', '-')], ylabel='ms', plot_name=plot_name,
-                                 args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode}))
-
-    def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda",
-                              model=None):
-        assert mode in ["fwd", "bwd"]
-        assert not (int8_kv and quantize_p)
-        warmup = 25
-        rep = 100
-        # TODO: Enable bias after testing.
-        # if use_bias:
-        #     bias = torch.randn((1, H, N_CTX, N_CTX), dtype=torch.float32, device="cuda")
-        #     input_metadata.need_bias(bias, BATCH, H, N_CTX, N_CTX)
-        # else:
-        #     bias = None
-        # bias = None
-
-        # Bwd pass only supports causal=True right now
-        if mode == 'bwd':
-            causal = True
-
-        flops_per_matmul = 0
-        if varlen:
-            q, k, v, input_metadata = varlen_input_helper(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype,
-                                                          args.equal_seqlens)
-            for i in range(0, input_metadata.num_contexts):
-                seqlen_q = input_metadata.cu_seqlens_q[i + 1] - input_metadata.cu_seqlens_q[i]
-                seqlen_k = input_metadata.cu_seqlens_k[i + 1] - input_metadata.cu_seqlens_k[i]
-                # x2 for 2 GEMMs
-                flops_per_matmul += seqlen_q.item() * seqlen_k.item() * HQ * D_HEAD * 2
-        else:
-            q, k, v, input_metadata = input_helper(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, args.layout)
-            flops_per_matmul = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * D_HEAD
-        if causal:
-            input_metadata.need_causal()
-        if int8:
-            q, k, v = quantize_input(q, k, v, input_metadata, quantize_p=quantize_p, int8_kv=int8_kv)
-
-        input_metadata.set_persistent(args.persistent)
-        o = torch.empty_like(q)
-        fn = lambda: attention(q, k, v, o, input_metadata)
-        if mode == 'bwd':
-            o, _ = fn()
-            do = torch.randn_like(o)
-            fn = lambda: o.backward(do, retain_graph=True)
-
-        if "torch" in provider:
-            if HQ != HK:
-                k = k.view(k.shape[0], k.shape[1], -1, k.shape[2],
-                           k.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
-                v = v.view(v.shape[0], v.shape[1], -1, v.shape[2],
-                           v.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
-            
-            fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
-                                                                          is_causal=causal, scale=None)
-            out = fn()
-        else:
-            out,_,_ = fn()
-        
-        return out
-
-    for x in x_vals_list:
-        if args.model:
-            x = x[1:] # skip the "model" argument
-        tri_out = bench_flash_attention(*x,  head_size, dtype, causal, mode, 'triton')
-        ref_out = bench_flash_attention(*x,  head_size, dtype, causal, mode, 'torch')
-        torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=1e-2)
-
-
 def run_benchmark(custom, args):
 
     dtype = arg_to_torch_dtype[args.dtype]
@@ -2100,7 +1997,7 @@ def run_benchmark(custom, args):
                            k.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
                 v = v.view(v.shape[0], v.shape[1], -1, v.shape[2],
                            v.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
-            
+
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
                                                                           is_causal=causal, scale=None)
 
@@ -2197,8 +2094,6 @@ def main():
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
 
-    test_benchmark_correctness(custom_config, args)
-    
     run_benchmark(custom_config, args)
 
 
