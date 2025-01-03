@@ -1911,6 +1911,7 @@ def model_benchmark_configs(args):
 
     return fa_configs
 
+
 def run_benchmark(custom, args):
 
     dtype = arg_to_torch_dtype[args.dtype]
