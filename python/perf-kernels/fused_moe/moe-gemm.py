@@ -2,7 +2,7 @@ import triton
 import torch
 import triton.language as tl
 import pytest
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 import os
 import json
 import functools
@@ -10,6 +10,7 @@ import argparse
 import sys
 
 M_THRESHOLD = 1024
+
 
 @triton.jit
 def moe_gemm_kernel(
@@ -373,9 +374,8 @@ def run_benchmark(custom, args):
 
     benchmark = triton.testing.Benchmark(
         x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'], line_names=[line_names],
-        styles=[('red', '-'), ('blue', '-')], ylabel='ms', plot_name='moe-gemm-benchmark', args={
-            'dtype': dtype, 'use_fp16': use_fp16, 'print_time': print_time, 'routed_weight': routed_weight
-        })
+        styles=[('red', '-'), ('blue', '-')], ylabel='ms', plot_name='moe-gemm-benchmark',
+        args={'dtype': dtype, 'use_fp16': use_fp16, 'print_time': print_time, 'routed_weight': routed_weight})
 
     @triton.testing.perf_report([benchmark])
     def bench_moe_gemm(M, K, N, E, top_k, dtype, use_fp16, routed_weight, print_time, provider):
@@ -387,7 +387,7 @@ def run_benchmark(custom, args):
             flops += M * top_k * N
 
         fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
-                                config)
+                              config)
         ms = triton.testing.do_bench(fn)
 
         if print_time:
