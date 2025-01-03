@@ -9,7 +9,6 @@ import functools
 import argparse
 import sys
 from benchmark_utils import get_tuning_configs, get_config_file_name, update_configs, get_config_dtype_str
-from quantization_utils import quantize_fp8, quantize_int8
 
 class MetaData():
     use_fp8_w8a8 = False
@@ -120,10 +119,8 @@ def moe_gemm_kernel(
     b_ptrs = B + off_experts * stride_be + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     if use_int8_w8a16:
-        # TODO why this
-        # b_scale_ptrs = B_scale + off_experts * stride_bse + offs_bn[
-        #     None, :] * stride_bsn
-        b_scale_ptrs = B_scale + off_experts
+        b_scale_ptrs = B_scale + off_experts * stride_bse + offs_bn[
+            None, :] * stride_bsn
         b_scale = tl.load(b_scale_ptrs)
 
     if use_fp8_w8a8:
@@ -140,7 +137,7 @@ def moe_gemm_kernel(
         if use_int8_w8a16:
             accumulator = tl.dot(a, b.to(Out.dtype.element_ty), acc=accumulator)
         elif use_fp8_w8a8:
-            accumulator = tl.dot(a, b, acc=accumulator)
+            accumulator+= tl.dot(a, b)
         else:
             accumulator = tl.dot(a, b, acc=accumulator)
         a_ptrs += BLOCK_SIZE_K * stride_ak
@@ -322,14 +319,15 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaDa
     topk_ids, num_tokens_post_padded, topk_weights, sorted_token_ids, expert_ids, config = metadata.topk_ids, metadata.num_tokens_post_padded, metadata.topk_weights, metadata.sorted_token_ids, metadata.expert_ids, metadata.config
 
     use_fp8_w8a8, use_int8_w8a16 = metadata.use_fp8_w8a8, metadata.use_int8_w8a16
-    if metadata.use_fp8_w8a8 or metadata.use_int8_w8a16:
+    a_descale, b_descale = None, None
+    stride_bse = None
+    stride_bsn = None
+    if use_fp8_w8a8 or use_int8_w8a16:
         a_descale, b_descale = metadata.a_descale, metadata.b_descale
-        stride_bse = b_descale.stride(0)
-        stride_bsn = b_descale.stride(1)
-    else:
-        a_descale, b_descale = None, None
-        stride_bse = None
-        stride_bsn = None
+        if use_int8_w8a16:
+            stride_bse = b_descale.stride(0)
+            stride_bsn = b_descale.stride(1)
+
 
     _, top_k = topk_ids.shape
 
@@ -345,18 +343,40 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaDa
     return c
 
 
-def quantiza_input(a, b, use_fp8_w8a8: tl.constexpr, use_int8_w8a16: tl.constexpr, metatdata: MetaData, fp8_type = None):
+quantization_max_repr_val = {torch.int8: 127, torch.float8_e4m3fnuz: 240.0, torch.float8_e4m3fn: 448.0, torch.float8_e5m2fnuz: 57344.0, torch.float8_e5m2: 57344.0}
+
+def quantize_tensor(tensor: torch.Tensor, dtype, dim=()) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    quantize_dim = [i for i in range(tensor.dim()) if i not in dim]
+    max_vals = tensor.abs().amax(dim=quantize_dim, keepdim=True)
+    max_repr_val = quantization_max_repr_val[dtype]
+    # Avoid division by zero
+    max_vals[max_vals == 0] = 1e-8
+
+    # Compute scale factors for each channel
+    scale:torch.Tensor = max_repr_val / max_vals.to(torch.float32)
+
+    # Quantize the tensor
+    tensor = tensor * scale
+    tensor = tensor.round_()
+    tensor.clamp_(-max_repr_val, max_repr_val)
+    tensor_quantized = tensor.to(torch.int8)
+
+    scale = scale.squeeze(dim=quantize_dim)
+
+    return tensor_quantized, scale, 1 / scale
+
+def quantize_input(a, b, use_fp8_w8a8: tl.constexpr, use_int8_w8a16: tl.constexpr, metatdata: MetaData, fp8_type = None):
     assert not (use_fp8_w8a8 and use_int8_w8a16)
     assert not (use_fp8_w8a8 and fp8_type is None)
 
     if use_fp8_w8a8:
-        a_quantized, _, a_descale = quantize_fp8(a, fp8_type=fp8_type)
-        b_quantized, _, b_descale = quantize_fp8(b, dim=0, fp8_type=fp8_type)
+        a_quantized, _, a_descale = quantize_tensor(a, dtype=fp8_type)
+        b_quantized, _, b_descale = quantize_tensor(b, dim=(0,), dtype=fp8_type)
         metatdata.set_use_fp8_w8a8(a_descale, b_descale, fp8_type)
         return a_quantized, b_quantized
 
     if use_int8_w8a16:
-        b_quantized, _, b_descale = quantize_int8(b, dim=0)
+        b_quantized, _, b_descale = quantize_tensor(b, dim=(0 , 1), dtype=torch.int8)
         metatdata.set_use_int8_w8a16(b_descale)
         return a, b_quantized
 
@@ -386,7 +406,7 @@ def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool
     metadata = MetaData(topk_weights if routed_weight else None, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config)
 
     if use_fp8_w8a8 or use_int8_w8a16:
-        a, b = quantiza_input(a, b, use_fp8_w8a8, use_int8_w8a16, metadata, fp8_type)
+        a, b = quantize_input(a, b, use_fp8_w8a8, use_int8_w8a16, metadata, fp8_type)
 
     return a, b, c, metadata
 
@@ -459,7 +479,7 @@ def test_correctness_fp8(M: int, K: int, N: int, top_k: int, E: int, routed_weig
     if routed_weight:
         ref_out *= topk_weights.unsqueeze(-1)
 
-    ref_out = ref_out * metadata.b_descale.squeeze(-1).squeeze(-1)[topk_ids].unsqueeze(-1)
+    ref_out = ref_out * metadata.b_descale[topk_ids].unsqueeze(-1)
     ref_out = ref_out * metadata.a_descale
     ref_out = ref_out.to(dtype)
 
@@ -497,7 +517,7 @@ def test_correctness_int8(M: int, K: int, N: int, top_k: int, E: int, routed_wei
     if routed_weight:
         ref_out *= topk_weights.unsqueeze(-1)
 
-    ref_out = ref_out * metadata.b_descale.squeeze(-1).squeeze(-1)[topk_ids].unsqueeze(-1)
+    ref_out = ref_out * metadata.b_descale[topk_ids, :]
     ref_out = ref_out.to(dtype)
 
     # Validate correctness
