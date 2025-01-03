@@ -8,8 +8,8 @@ import json
 import functools
 import argparse
 import sys
-from benchmark_utils import get_tuning_configs, get_config_file_name, update_configs
 
+M_THRESHOLD = 1024
 
 @triton.jit
 def moe_gemm_kernel(
@@ -194,8 +194,27 @@ def moe_align_block_size(topk_ids: torch.Tensor, block_size: int,
     return sorted_ids, expert_ids, num_tokens_post_pad
 
 
+def get_config_dtype_str(dtype: torch.dtype, use_int8_w8a16: Optional[bool] = False,
+                         use_fp8_w8a8: Optional[bool] = False):
+    if use_fp8_w8a8:
+        return "fp8_w8a8"
+    elif use_int8_w8a16:
+        return "int8_w8a16"
+    elif dtype == torch.float:
+        # avoiding cases where kernel fails when float32 MoE
+        # use fp16/bfloat16 configs
+        return "float32"
+    return None
+
+
+def get_config_file_name(dtype: Optional[str]) -> str:
+    device_name = torch.cuda.get_device_name(0).replace(" ", "_")
+    dtype_selector = "" if not dtype else f",dtype={dtype}"
+    return f"device_name={device_name}{dtype_selector}.json"
+
+
 @functools.lru_cache
-def get_moe_configs(E: int, N: int, dtype: Optional[str]) -> Optional[Dict[int, Any]]:
+def get_moe_configs(dtype: Optional[str]) -> Optional[Dict[int, Any]]:
     """
     Return optimized configurations for the fused MoE kernel.
 
@@ -206,13 +225,13 @@ def get_moe_configs(E: int, N: int, dtype: Optional[str]) -> Optional[Dict[int, 
     """
     # First look up if an optimized configuration is available in the configs
     # directory
-    json_file_name = get_config_file_name(E, N, dtype)
+    json_file_name = get_config_file_name(dtype)
 
     config_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "configs", json_file_name)
     if os.path.exists(config_file_path):
         with open(config_file_path) as f:
             # If a configuration has been found, return it
-            return {int(key): val for key, val in json.load(f).items()}
+            return {key: val for key, val in json.load(f).items()}
 
     # If no optimized configuration is available, we will use the default
     # configuration
@@ -222,10 +241,6 @@ def get_moe_configs(E: int, N: int, dtype: Optional[str]) -> Optional[Dict[int, 
 def get_default_config(
     M: int,
     E: int,
-    N: int,
-    K: int,
-    topk: int,
-    dtype: Optional[str],
     is_marlin: bool,
 ) -> Dict[str, int]:
     config = {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}
@@ -236,22 +251,20 @@ def get_default_config(
 
 
 def try_get_optimal_moe_config(
-    b_shape: Tuple[int, ...],
-    top_k: int,
+    E: int,
     dtype: Optional[str],
     M: int,
     is_marlin: bool = False,
 ):
-    E, N, K = b_shape
-    configs = get_moe_configs(E, N, dtype)
+    configs = get_moe_configs(dtype)
 
     if configs:
         # If an optimal configuration map has been found, look up the
         # optimal config
-        config = configs[min(configs.keys(), key=lambda x: abs(x - M))]
+        config = configs["small_M" if M < M_THRESHOLD else "large_M"]
     else:
         # Else use the default config
-        config = get_default_config(M, E, N, K, top_k, dtype, is_marlin)
+        config = get_default_config(M, E, is_marlin)
 
     return config
 
@@ -285,8 +298,7 @@ def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool
     config_dtype = None
     get_config_func = functools.partial(
         try_get_optimal_moe_config,
-        b.shape,
-        topk_ids.shape[1],
+        E,
         config_dtype,
     )
     config = get_config_func(M)
@@ -347,7 +359,6 @@ def run_benchmark(custom, args):
     routed_weight = args.routed_weight
     dtype = arg_to_torch_dtype[args.dtype]
     use_fp16 = args.dtype == 'fp16'
-    tune = args.tune
     if custom:
         assert args.M and args.K and args.N and args.E and args.top_k, \
             "Please provide M, K, N, E, top_k for custom runs."
@@ -363,11 +374,11 @@ def run_benchmark(custom, args):
     benchmark = triton.testing.Benchmark(
         x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'], line_names=[line_names],
         styles=[('red', '-'), ('blue', '-')], ylabel='ms', plot_name='moe-gemm-benchmark', args={
-            'dtype': dtype, 'use_fp16': use_fp16, 'tune': tune, 'print_time': print_time, 'routed_weight': routed_weight
+            'dtype': dtype, 'use_fp16': use_fp16, 'print_time': print_time, 'routed_weight': routed_weight
         })
 
     @triton.testing.perf_report([benchmark])
-    def bench_moe_gemm(M, K, N, E, top_k, dtype, use_fp16, routed_weight, tune, print_time, provider):
+    def bench_moe_gemm(M, K, N, E, top_k, dtype, use_fp16, routed_weight, print_time, provider):
         a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
             M, K, N, top_k, E, routed_weight=routed_weight, dtype=dtype)
 
@@ -375,28 +386,9 @@ def run_benchmark(custom, args):
         if routed_weight:
             flops += M * top_k * N
 
-        if tune:
-            configs = get_tuning_configs(M, N, K, use_fp16)
-            print(f"Tuning start with {len(configs)} configs")
-
-            min_ms = None
-            best_config = None
-            for config in configs:
-                print(config)
-                fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids,
-                                      num_tokens_post_padded, config)
-                ms = triton.testing.do_bench(fn)
-                print(ms)
-                c = torch.zeros((M, top_k, N), dtype=dtype, device='cuda')
-                if min_ms is None or ms < min_ms:
-                    min_ms = ms
-                    best_config = config
-
-            update_configs(M, best_config, E, N, K, top_k, dtype, False, False)
-        else:
-            fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
-                                  config)
-            ms = triton.testing.do_bench(fn)
+        fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
+                                config)
+        ms = triton.testing.do_bench(fn)
 
         if print_time:
             return ms
@@ -418,7 +410,6 @@ def parse_args():
     parser.add_argument("-E", type=int, default=0, help="Number of experts")
     parser.add_argument("-top_k", type=int, default=0, help="top_k experts per token")
     parser.add_argument("-routed_weight", action='store_true', default=False)
-    parser.add_argument("-tune", action='store_true', default=False)
     parser.add_argument("-dtype", default='fp16')
     parser.add_argument("-return_time", action='store_true', default=False, help='Return time instead of TFLOPs')
     args = parser.parse_args()
