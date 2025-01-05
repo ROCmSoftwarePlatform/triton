@@ -125,6 +125,15 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
+    if (isBlockedToDotShortcut(srcTy, dstTy)) {
+      auto loc = op.getLoc();
+      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      Value view =
+          packLLElements(loc, getTypeConverter(), vals, rewriter, dstTy);
+      rewriter.replaceOp(op, view);
+      return success();
+    }
+
     if (isa<AMDMfmaEncodingAttr>(srcLayout) &&
         isa<DotOperandEncodingAttr>(dstLayout)) {
       return lowerMfmaToDotOperand(op, adaptor, rewriter);

@@ -58,6 +58,10 @@ public:
             dstDotOp.getParent() == srcMfmaEncoding)
           return;
       }
+      if (isBlockedToDotShortcut(srcType, dstType)) {
+        return;
+      }
+
       auto srcOrder = triton::gpu::getOrder(srcEncoding);
       auto rank = srcOrder.size();
       SmallVector<unsigned> sharedOrder;
