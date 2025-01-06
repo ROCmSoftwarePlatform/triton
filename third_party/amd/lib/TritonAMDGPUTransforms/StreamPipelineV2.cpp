@@ -283,35 +283,42 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
     }
 
     if (use->hasTrait<OpTrait::DotLike>()) {
+      // Heuristic to avoid pipelining loads which result could be used directly
+      // as dot operand
       RankedTensorType oprTy;
       DenseSet<Value> seen;
-      std::function<bool(Value, Value)> findLoad =
-        [&](Value loadOp, Value opr) -> bool {
-          if (loadOp == opr)
-            return true;
-          // Skip previously visited load ops.
-          if (seen.contains(opr))
-            return false;
-          seen.insert(opr);
-
-          if (Operation *op = opr.getDefiningOp()) {
-            for (Value operand : op->getOperands()) {
-              if (findLoad(loadOp, operand))
-                return true;
-            }
-          }
+      std::function<bool(Value, Value)> findLoad = [&](Value loadOp,
+                                                       Value opr) -> bool {
+        if (loadOp == opr)
+          return true;
+        // Skip previously visited load ops.
+        if (seen.contains(opr))
           return false;
-        };
+        seen.insert(opr);
+
+        if (Operation *op = opr.getDefiningOp()) {
+          // skip processing if operand already goes through shared memory
+          // or layout conversion through shared memory inevitable
+          if (!isa<triton::gpu::ConvertLayoutOp>(op) &&
+              !op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() &&
+              !op->hasTrait<OpTrait::Elementwise>())
+            return false;
+          for (Value operand : op->getOperands()) {
+            if (findLoad(loadOp, operand))
+              return true;
+          }
+        }
+        return false;
+      };
       for (Value opr : use->getOperands()) {
         if (findLoad(loadOp.getResult(), opr)) {
           oprTy = dyn_cast<RankedTensorType>(opr.getType());
           break;
         }
       }
-      assert(oprTy);
-      // TODO: Implement cvtNeedsSharedMemory!
-      if (!(isBlockedToDotShortcut(tensorTy, oprTy) ||
-            isMfmaToDotShortcut(tensorTy, oprTy))) {
+      bool foundLDSBypass = oprTy && tensorTy.getShape() == oprTy.getShape() &&
+                            isBlockedToDotShortcut(tensorTy, oprTy);
+      if (!foundLDSBypass) {
         // Only use shared memory when feeding into a dot op.
         loadInfo.usedByDot = true;
         loadInfo.sharedEncoding =
