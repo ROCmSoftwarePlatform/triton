@@ -46,7 +46,17 @@ def get_autotune_config():
 
 @triton.autotune(configs=get_autotune_config(), key=['n_rows', 'n_cols'], use_cuda_graph=True)
 @triton.jit
-def layernorm_kernel(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride, n_rows, n_cols, eps,
+def layernorm_kernel(x_ptr, 
+                     y_ptr, 
+                     w_ptr, 
+                     b_ptr, 
+                     mean_ptr, 
+                     rstd_ptr, 
+                     x_row_stride, 
+                     y_row_stride, 
+                     n_rows, 
+                     n_cols, 
+                     eps,
                      BLOCK_SIZE: tl.constexpr):
 
     #program id
@@ -90,6 +100,10 @@ def layernorm_kernel(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride, n_r
     var = tl.sum(_var, axis=0) / n_cols
     rstd = tl.rsqrt(var + eps)
 
+    # Write mean / rstd
+    tl.store(mean_ptr + row, mean)
+    tl.store(rstd_ptr + row, rstd)
+
     #Normalize and store
     loop_num_l = loop_num
     for b in range(0, loop_num_l):
@@ -112,19 +126,164 @@ def layernorm_kernel(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride, n_r
     tl.store(y_ptr_start + col_offsets, y_block, mask=mask)
 
 
-def layernorm(x, w, b, eps=1e-5):
-    n_rows, n_cols = x.shape
+@triton.jit
+def _layer_norm_bwd_dx_fused(DX,  # pointer to the input gradient
+                             DY,  # pointer to the output gradient
+                             DW,  # pointer to the partial sum of weights gradient
+                             DB,  # pointer to the partial sum of biases gradient
+                             X,  # pointer to the input
+                             W,  # pointer to the weights
+                             Mean,  # pointer to the mean
+                             Rstd,  # pointer to the 1/std
+                             stride,  # how much to increase the pointer when moving by 1 row
+                             N,  # number of columns in X
+                             NUM_ROWS: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
+    # Map the program id to the elements of X, DX, and DY it should compute.
+    pid = tl.program_id(0)
+    tile_num = tl.num_programs(0)
+    rows_per_tile = NUM_ROWS // tile_num
+    if pid < NUM_ROWS % tile_num:
+        rows_per_tile += 1
 
-    MAX_FUSED_SIZE = 65536 // x.element_size()
-    BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
-    y = torch.empty_like(x)
+    cols = tl.arange(0, BLOCK_SIZE_N)
+    mask = cols < N
+    row = pid
+    for _ in range(0, rows_per_tile):
+        x_ptrs = X + row * stride
+        dy_ptrs = DY + row * stride
+        dx_ptrs = DX + row * stride
+        dw_ptrs = DW + pid * N + cols
+        db_ptrs = DB + pid * N + cols
+        # Load data to SRAM
+        x = tl.load(x_ptrs + cols, mask=mask, other=0).to(tl.float32)
+        dy = tl.load(dy_ptrs + cols, mask=mask, other=0).to(tl.float32)
+        w = tl.load(W + cols, mask=mask).to(tl.float32)
+        mean = tl.load(Mean + row)
+        rstd = tl.load(Rstd + row)
+        # Compute dx
+        xhat = (x - mean) * rstd
+        wdy = w * dy
+        xhat = tl.where(mask, xhat, 0.)
+        wdy = tl.where(mask, wdy, 0.)
+        c1 = tl.sum(xhat * wdy, axis=0) / N
+        c2 = tl.sum(wdy, axis=0) / N
+        dx = (wdy - (xhat * c1 + c2)) * rstd
+        # Write dx
+        tl.store(dx_ptrs + cols, dx, mask=mask)
+        # Accumulate partial sums for dw/db
+        partial_dw = (dy * xhat).to(w.dtype)
+        partial_db = (dy).to(w.dtype)
+        partial_dw += tl.load(dw_ptrs, mask=mask)
+        partial_db += tl.load(db_ptrs, mask=mask)
+        tl.store(dw_ptrs, partial_dw, mask=mask)
+        tl.store(db_ptrs, partial_db, mask=mask)
+        row += tile_num
 
-    num_programs = n_rows
 
-    grid = lambda meta: (num_programs, )
-    layernorm_kernel[grid](x, y, w, b, x.stride(0), y.stride(0), n_rows, n_cols, eps, BLOCK_SIZE)
+@triton.jit
+def _layer_norm_bwd_dwdb(DW,  # pointer to the partial sum of weights gradient
+                         DB,  # pointer to the partial sum of biases gradient
+                         FINAL_DW,  # pointer to the weights gradient
+                         FINAL_DB,  # pointer to the biases gradient
+                         M,  # GROUP_SIZE_M
+                         N,  # number of columns
+                         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
+    # Map the program id to the elements of DW and DB it should compute.
+    pid = tl.program_id(0)
+    cols = pid * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    dw = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    db = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    # Iterate through the rows of DW and DB to sum the partial sums.
+    for i in range(0, M, BLOCK_SIZE_M):
+        rows = i + tl.arange(0, BLOCK_SIZE_M)
+        mask = (rows[:, None] < M) & (cols[None, :] < N)
+        offs = rows[:, None] * N + cols[None, :]
+        dw += tl.load(DW + offs, mask=mask, other=0.)
+        db += tl.load(DB + offs, mask=mask, other=0.)
+    # Write the final sum to the output.
+    sum_dw = tl.sum(dw, axis=0)
+    sum_db = tl.sum(db, axis=0)
+    tl.store(FINAL_DW + cols, sum_dw, mask=cols < N)
+    tl.store(FINAL_DB + cols, sum_db, mask=cols < N)
 
-    return y
+
+class LayerNorm(torch.autograd.Function):
+    
+    @staticmethod
+    def forward(ctx, x, weight, bias, eps):
+        y = torch.empty_like(x)
+        x_arg = x.reshape(-1, x.shape[-1])
+        M, N = x.shape
+        mean = torch.empty((M, ), dtype=torch.float32, device=x.device)
+        rstd = torch.empty((M, ), dtype=torch.float32, device=x.device)
+        # Less than 64KB per feature: enqueue fused kernel
+        MAX_FUSED_SIZE = 65536 // x.element_size()
+        BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
+        if N > BLOCK_SIZE:
+            raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
+        # heuristics for number of warps
+        num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
+
+        layernorm_kernel[(M, )](
+            x_arg, y, weight, bias, mean, rstd,
+            x_arg.stride(0), y.stride(0), M, N, eps, BLOCK_SIZE
+        )
+
+        ctx.save_for_backward(x, weight, bias, mean, rstd)
+        ctx.BLOCK_SIZE = BLOCK_SIZE
+        ctx.num_warps = num_warps
+        ctx.eps = eps
+        return y
+
+
+    @staticmethod
+    def backward(ctx, dy):
+        x, w, b, m, v = ctx.saved_tensors
+        N = w.shape[0]
+        x_arg = x.reshape(-1, x.shape[-1])
+        M = x_arg.shape[0]
+        tile_num = min(256, M // 4)
+        # allocate output
+        _dw = torch.zeros((tile_num, N), dtype=x.dtype, device=w.device)
+        _db = torch.zeros((tile_num, N), dtype=x.dtype, device=w.device)
+        dw = torch.empty((N, ), dtype=w.dtype, device=w.device)
+        db = torch.empty((N, ), dtype=w.dtype, device=w.device)
+        dx = torch.empty_like(dy)
+
+        # enqueue kernel using forward pass heuristics
+        # also compute partial sums for DW and DB
+        M, N = x_arg.shape
+        grid_bwd = (tile_num,)
+
+        _layer_norm_bwd_dx_fused[grid_bwd](  #
+            dx, dy, _dw, _db, x, w, m, v,  #
+            x_arg.stride(0), N,  #
+            NUM_ROWS=M,  #
+            BLOCK_SIZE_N=ctx.BLOCK_SIZE,  #
+            num_warps=ctx.num_warps)
+        grid_reduce = lambda meta: [triton.cdiv(N, meta['BLOCK_SIZE_N'])]
+        # accumulate partial sums in separate kernel
+        _layer_norm_bwd_dwdb[grid_reduce](
+            _dw, _db, dw, db, min(tile_num, M), N,  #
+            BLOCK_SIZE_M=32,  #
+            BLOCK_SIZE_N=128, num_ctas=1)
+        return dx, None, dw, db, None
+
+
+layernorm = LayerNorm
+# def layernorm(x, w, b, eps=1e-5):
+#     n_rows, n_cols = x.shape
+
+#     MAX_FUSED_SIZE = 65536 // x.element_size()
+#     BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
+#     y = torch.empty_like(x)
+
+#     num_programs = n_rows
+
+#     grid = lambda meta: (num_programs, )
+#     layernorm_kernel[grid](x, y, w, b, x.stride(0), y.stride(0), n_rows, n_cols, eps, BLOCK_SIZE)
+
+    # return y
 
 
 def torch_layernorm(x, w, b):
