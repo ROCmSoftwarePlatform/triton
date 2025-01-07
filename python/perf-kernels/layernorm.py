@@ -212,21 +212,18 @@ class LayerNorm(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, weight, bias, eps=1e-5):
         y = torch.empty_like(x)
-        x_arg = x.reshape(-1, x.shape[-1])
         M, N = x.shape
         mean = torch.empty((M, ), dtype=torch.float32, device=x.device)
         rstd = torch.empty((M, ), dtype=torch.float32, device=x.device)
         # Less than 64KB per feature: enqueue fused kernel
         MAX_FUSED_SIZE = 65536 // x.element_size()
         BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
-        # if N > BLOCK_SIZE:
-        #     raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
         # heuristics for number of warps
         num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
 
         layernorm_kernel[(M, )](
-            x_arg, y, weight, bias, mean, rstd,
-            x_arg.stride(0), y.stride(0), M, N, eps, BLOCK_SIZE
+            x, y, weight, bias, mean, rstd,
+            x.stride(0), y.stride(0), M, N, eps, BLOCK_SIZE
         )
 
         ctx.save_for_backward(x, weight, bias, mean, rstd)
