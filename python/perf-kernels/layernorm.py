@@ -210,7 +210,7 @@ def _layer_norm_bwd_dwdb(DW,  # pointer to the partial sum of weights gradient
 class LayerNorm(torch.autograd.Function):
     
     @staticmethod
-    def forward(ctx, x, weight, bias, eps):
+    def forward(ctx, x, weight, bias, eps=1e-5):
         y = torch.empty_like(x)
         x_arg = x.reshape(-1, x.shape[-1])
         M, N = x.shape
@@ -270,7 +270,7 @@ class LayerNorm(torch.autograd.Function):
         return dx, None, dw, db, None
 
 
-layernorm = LayerNorm
+layernorm = LayerNorm.apply
 # def layernorm(x, w, b, eps=1e-5):
 #     n_rows, n_cols = x.shape
 
