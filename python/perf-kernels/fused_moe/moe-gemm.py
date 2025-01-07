@@ -8,6 +8,12 @@ import json
 import functools
 import argparse
 import sys
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PARENT_DIR = os.path.dirname(SCRIPT_DIR)  # This goes one level up from fused-moe/
+if PARENT_DIR not in sys.path:
+    sys.path.append(PARENT_DIR)
+
+from utils.benchmark_utils import get_available_models, get_model_configs
 
 M_THRESHOLD = 128
 
@@ -359,20 +365,40 @@ def get_configs():
     return configs
 
 
+def model_benchmark_configs(args):
+    config_file = args.model_configs
+    configs = get_model_configs(config_path=config_file, model_families=["mistral"], model=args.model)
+    fa_configs = []
+    M = args.M if args.M else 1024 # check size
+    # M, K, N, E, top_k
+
+    for model_name, config in configs.items():
+        N = config["intermediate_size"]
+        K = config["hidden_size"]
+
+        E = 8
+        top_k = 2
+        fa_configs.append((model_name, M, K, N, E, top_k))
+
+    return fa_configs
+
 def run_benchmark(custom, args):
     print_time = args.return_time
     routed_weight = args.routed_weight
     dtype = arg_to_torch_dtype[args.dtype]
     use_fp16 = args.dtype == 'fp16'
+    x_names = ['M', 'K', 'N', 'E', 'top_k']
     if custom:
         assert args.M and args.K and args.N and args.E and args.top_k, \
             "Please provide M, K, N, E, top_k for custom runs."
-        configs = [{"M": args.M, "K": args.K, "N": args.N, "E": args.E, "top_k": args.top_k}]
+        x_vals_list = [(args.M, args.K, args.N, args.E, args.top_k)]
     else:
-        configs = get_configs()
-
-    x_names = ['M', 'K', 'N', 'E', 'top_k']
-    x_vals_list = [(cfg['M'], cfg['K'], cfg['N'], cfg['E'], cfg['top_k']) for cfg in configs]
+        if args.model:
+            x_vals_list = model_benchmark_configs(args)
+            x_names = ['model', 'M', 'K', 'N', 'E', 'top_k']
+        else:
+            configs = get_configs()
+            x_vals_list = [(cfg['M'], cfg['K'], cfg['N'], cfg['E'], cfg['top_k']) for cfg in configs]
 
     line_names = 'Time (ms)' if print_time else 'TFLOPS'
 
@@ -382,7 +408,7 @@ def run_benchmark(custom, args):
         args={'dtype': dtype, 'use_fp16': use_fp16, 'print_time': print_time, 'routed_weight': routed_weight})
 
     @triton.testing.perf_report([benchmark])
-    def bench_moe_gemm(M, K, N, E, top_k, dtype, use_fp16, routed_weight, print_time, provider):
+    def bench_moe_gemm(M, K, N, E, top_k, dtype, use_fp16, routed_weight, print_time, provider, model=None):
         a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
             M, K, N, top_k, E, routed_weight=routed_weight, dtype=dtype)
 
@@ -408,6 +434,11 @@ def parse_args():
         prog="Benchmark MoE GEMM",
         allow_abbrev=False,
     )
+    parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
+    available_models = get_available_models(model_families=["mistral"])  # Dynamically load model names
+    model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
+                "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
+    parser.add_argument('-model', type=str, default=None, help=model_help)
     parser.add_argument("-M", type=int, default=0, help="M dimension")
     parser.add_argument("-K", type=int, default=0, help="K dimension")
     parser.add_argument("-N", type=int, default=0, help="N dimension")
