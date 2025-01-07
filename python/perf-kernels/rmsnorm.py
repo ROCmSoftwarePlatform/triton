@@ -8,6 +8,7 @@ import triton
 import triton.language as tl
 from utils.benchmark_utils import get_available_models, get_model_configs
 
+
 def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 

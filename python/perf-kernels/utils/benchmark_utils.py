@@ -4,6 +4,7 @@ import json
 # Base directory where configs are located
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../"))
 
+
 def get_model_configs(config_path='model_configs.json', model_families=["llama3"], model="all"):
     """
     Load model names from the configuration file.
@@ -65,10 +66,6 @@ def get_available_models(config_file='model_configs.json', model_families=["llam
     with open(config_path, 'r') as f:
         configs = json.load(f)
 
-    models = [
-        f"{family}-{model}"
-        for family in model_families if family in configs
-        for model in configs[family]
-    ]
+    models = [f"{family}-{model}" for family in model_families if family in configs for model in configs[family]]
 
     return models

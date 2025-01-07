@@ -30,6 +30,7 @@ import triton
 import triton.language as tl
 from utils.benchmark_utils import get_available_models, get_model_configs
 
+
 class MetaData():
     cu_seqlens_q = None
     cu_seqlens_k = None
