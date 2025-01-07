@@ -35,7 +35,7 @@ import re
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'SPLIT_K': 1, 'GROUP_SIZE_M': 32, 'waves_per_eu': 2},
             num_warps=4, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 256, 'SPLIT_K': 2, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0, 'kpack': 2, 'matrix_instr_nonkdim': 16},
+            {'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 256, 'SPLIT_K': 1, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0, 'kpack': 2, 'matrix_instr_nonkdim': 16},
             num_warps=4, num_stages=2),
     ],
     key=['M', 'N', 'K'],
@@ -49,6 +49,7 @@ def matmul_kernel(
     a_ptr,
     b_ptr,
     c_ptr,
+    c_buf_ptr,
     M,
     N,
     K,
@@ -141,8 +142,43 @@ def matmul_kernel(
     if SPLIT_K == 1:
         tl.store(c_ptrs, c, mask=c_mask)
     else:
-        tl.atomic_add(c_ptrs, c, mask=c_mask)
+        c_buf_ptrs=c_buf_ptr + pid_z * M * N + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+        tl.store(c_buf_ptrs, accumulator, mask=c_mask)
 
+@triton.jit
+def splitK_reduce(
+    c_ptr, c_buf_ptr,
+    M, N, K,
+    stride_cm, stride_cn,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+    SPLIT_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
+    ACTIVATION: tl.constexpr):
+
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + (pid % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+    for k in range(SPLIT_K):
+        c_block_ptrs = c_buf_ptr + k * M * N + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+        partial_result = tl.load(c_block_ptrs, mask=c_mask)
+        accumulator += partial_result
+
+    if ACTIVATION == "leaky_relu":
+        accumulator = leaky_relu(accumulator)
+
+    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
 
 # Activation function.
 @triton.jit
@@ -159,6 +195,7 @@ def matmul(a, b, c, a_scale, b_scale, scale_a8_b8=False, activation=""):
     M, K = a.shape
     K, N = b.shape
     splitk = 1
+    c_buf = torch.zeros((M, N, splitk), device=a.device, dtype=torch.float32)
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
         META['SPLIT_K']
@@ -167,6 +204,7 @@ def matmul(a, b, c, a_scale, b_scale, scale_a8_b8=False, activation=""):
         a,
         b,
         c,
+        c_buf,
         M,
         N,
         K,
@@ -182,6 +220,8 @@ def matmul(a, b, c, a_scale, b_scale, scale_a8_b8=False, activation=""):
         ACTIVATION=activation,
 #        SPLIT_K = splitk,
     )
+    if splitk > 1:
+        c.copy_(torch.sum(c_buf, dim=2))
 
 
 name_to_torch_types = {
