@@ -1872,16 +1872,15 @@ def varlen_benchmark_configs():
 
 def model_benchmark_configs(args):
     config_file = args.model_configs
-    configs = get_model_configs(config_path=config_file, model_families=["llama3"], model=args.model)
+    configs = get_model_configs(config_path=config_file, model_families=["llama3", "mistral"], model=args.model)
     fa_configs = []
     batch_size = args.b if args.b else 1
 
     for model_name, config in configs.items():
         HQ = config["num_attention_heads"]
         HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"]
-        max_ctx_len = config["max_ctx_len"]
-        N_CTX_Q = args.sq if args.sq else max_ctx_len
-        N_CTX_K = args.sk if args.sk else max_ctx_len
+        N_CTX_Q = args.sq
+        N_CTX_K = args.sk if args.sk else N_CTX_Q
         fa_configs.append((model_name, batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
 
     return fa_configs
@@ -1967,15 +1966,17 @@ def run_benchmark(custom, args):
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
 
+        original = torch.backends.cuda.flash_sdp_enabled()
+        
         if "torch" in provider:
             if HQ != HK:
                 k = k.view(k.shape[0], k.shape[1], -1, k.shape[2],
                            k.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
                 v = v.view(v.shape[0], v.shape[1], -1, v.shape[2],
                            v.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
-
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
-                                                                          is_causal=causal, scale=None)
+                                                                        is_causal=causal, scale=None)
+            
 
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         total_flops = 2 * flops_per_matmul
@@ -2013,14 +2014,14 @@ def parse_args():
     )
     parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
 
-    available_models = get_available_models(model_families=["llama3"])  # Dynamically load model names
+    available_models = get_available_models(model_families=["llama3", "mistral"])  # Dynamically load model names
     model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
-                  "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
+                  "]. Use 'all' to benchmark all models. Not providing runs the default benchmark script with custom configs.")
     parser.add_argument('-model', type=str, default=None, help=model_help)
     parser.add_argument("-b", type=int, default=0)
     parser.add_argument("-hq", type=int, default=0)
     parser.add_argument("-hk", type=int, default=0)
-    parser.add_argument("-sq", type=int, default=0)
+    parser.add_argument("-sq", type=int, default=8192)
     parser.add_argument("-sk", type=int, default=0)
     parser.add_argument("-equal_seqlens", action='store_true', default=False,
                         help='If specified, each context within the thd layout' \

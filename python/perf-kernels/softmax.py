@@ -142,7 +142,7 @@ def model_benchmark_configs(args):
     batch_size = args.b if args.b else 1
 
     for model_name, config in configs.items():
-        seq_len = args.sl if args.sl else config["max_ctx_len"]
+        seq_len = args.sl
         x_vals_list.append((model_name, batch_size * seq_len, config["vocab_size"]))
 
     return x_vals_list
@@ -218,13 +218,13 @@ def parse_args():
 
     available_models = get_available_models(model_families=["llama3"])  # Dynamically load model names
     model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
-                  "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
+                  "]. Use 'all' to benchmark all models. Not providing runs the default benchmark script with custom configs.")
     parser.add_argument('-model', type=str, default=None, help=model_help)
     parser.add_argument('-b', type=int, default=0,
                         help="Batch size used together with model. Defaults to 1 if not provided.")
     parser.add_argument(
-        '-sl', type=int, default=0,
-        help="Sequence length used together with model. Defaults to max_seq_len from model config if not provided.")
+        '-sl', type=int, default=8192,
+        help="Sequence length used together with model.")
     parser.add_argument('-M', "--M_start", default="1", type=int)
     parser.add_argument('-Ms', "--M_step", default="2", type=int)
     parser.add_argument('-Me', "--M_end", default="512", type=int)
