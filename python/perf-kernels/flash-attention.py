@@ -1965,7 +1965,7 @@ def run_benchmark(custom, args):
             o, _ = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
-        
+
         if "torch" in provider:
             if HQ != HK:
                 k = k.view(k.shape[0], k.shape[1], -1, k.shape[2],
@@ -1973,8 +1973,7 @@ def run_benchmark(custom, args):
                 v = v.view(v.shape[0], v.shape[1], -1, v.shape[2],
                            v.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
-                                                                        is_causal=causal, scale=None)
-            
+                                                                          is_causal=causal, scale=None)
 
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         total_flops = 2 * flops_per_matmul
@@ -2013,8 +2012,9 @@ def parse_args():
     parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
 
     available_models = get_available_models(model_families=["llama3", "mistral"])  # Dynamically load model names
-    model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
-                  "]. Use 'all' to benchmark all models. Not providing runs the default benchmark script with custom configs.")
+    model_help = (
+        "Model name to benchmark. Select from: [" + ", ".join(available_models) +
+        "]. Use 'all' to benchmark all models. Not providing runs the default benchmark script with custom configs.")
     parser.add_argument('-model', type=str, default=None, help=model_help)
     parser.add_argument("-b", type=int, default=1)
     parser.add_argument("-hq", type=int, default=0)

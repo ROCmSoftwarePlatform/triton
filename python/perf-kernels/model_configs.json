@@ -23,7 +23,7 @@
     }
   },
   "mistral": {
-    "7B":{
+    "7B": {
       "architectures": [
         "MistralForCausalLM"
       ],
