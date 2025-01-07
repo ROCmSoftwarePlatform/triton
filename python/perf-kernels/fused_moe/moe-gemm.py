@@ -14,7 +14,7 @@ PARENT_DIR = os.path.dirname(SCRIPT_DIR)  # This goes one level up from fused-mo
 if PARENT_DIR not in sys.path:
     sys.path.append(PARENT_DIR)
 
-from utils.benchmark_utils import get_available_models, get_model_configs # noqa: E402
+from utils.benchmark_utils import get_available_models, get_model_configs  # noqa: E402
 
 M_THRESHOLD = 128
 
