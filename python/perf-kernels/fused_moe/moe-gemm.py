@@ -8,6 +8,7 @@ import json
 import functools
 import argparse
 import sys
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(SCRIPT_DIR)  # This goes one level up from fused-moe/
 if PARENT_DIR not in sys.path:
@@ -369,7 +370,7 @@ def model_benchmark_configs(args):
     config_file = args.model_configs
     configs = get_model_configs(config_path=config_file, model_families=["mistral"], model=args.model)
     fa_configs = []
-    M = args.M if args.M else 1024 # check size
+    M = args.M if args.M else 1024  # check size
     # M, K, N, E, top_k
 
     for model_name, config in configs.items():
@@ -381,6 +382,7 @@ def model_benchmark_configs(args):
         fa_configs.append((model_name, M, K, N, E, top_k))
 
     return fa_configs
+
 
 def run_benchmark(custom, args):
     print_time = args.return_time
@@ -437,7 +439,7 @@ def parse_args():
     parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
     available_models = get_available_models(model_families=["mistral"])  # Dynamically load model names
     model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
-                "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
+                  "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
     parser.add_argument('-model', type=str, default=None, help=model_help)
     parser.add_argument("-M", type=int, default=0, help="M dimension")
     parser.add_argument("-K", type=int, default=0, help="K dimension")

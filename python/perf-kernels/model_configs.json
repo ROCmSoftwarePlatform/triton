@@ -32,8 +32,7 @@
       "num_attention_heads": 32,
       "num_key_value_heads": 8,
       "vocab_size": 32000
-    }
-    ,
+    },
     "22B": {
       "hidden_size": 6144,
       "intermediate_size": 16384,
