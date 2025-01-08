@@ -5,6 +5,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
+import os
 
 
 def is_cuda():
@@ -428,7 +429,7 @@ def run_benchmark(args):
             gbps = lambda ms: 3 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)  # noqa: F811, E704
             ms = triton.testing.do_bench(lambda: y.backward(dy, retain_graph=True), grad_to_none=[x])
         else:
-            raise f"mode {mode} is not supported!"
+            raise ValueError(f"mode {mode} is not supported!")
 
         return gbps(ms)
 
@@ -454,13 +455,61 @@ def parse_args():
     parser.add_argument('-nb', "--no_benchmark", default=False, type=bool)
     parser.add_argument('-mode', "--mode", default='fwd', type=str, help='run forward or backward or both passes, default is forward')
 
+    # model related inputs
+    parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
+
+    def get_available_models(config_file='model_configs.json'):
+        import json
+        """Load model names from the configuration file."""
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config_file)
+        with open(config_path, 'r') as f:
+            configs = json.load(f)
+        return list(configs.keys())
+
+    available_models = get_available_models()  # Dynamically load model names
+    model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
+                  "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
+    parser.add_argument('-model', type=str, default=None, help=model_help)
+
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    mn_list = []
     if args.no_benchmark:
-        run_layernorm(args.M_start, args.N_start)
+        if args.model:
+            import json
+            # If user did not provide an absolute path, resolve relative path from script directory
+            if not os.path.isabs(args.model_configs):
+                config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.model_configs)
+            else:
+                config_file = args.model_configs
+
+            with open(config_file, 'r') as f:
+                configs = json.load(f)
+
+            if args.model != "all":
+                model_name = args.model
+                # Check if the model exists
+                if model_name not in configs:
+                    raise ValueError(f"Model '{model_name}' not found in {config_file}")
+                # Handle a specific model
+                config = configs[model_name]
+                seq_len = args.sl if args.sl else config["max_ctx_len"]
+                M, N= seq_len, config["hidden_size"]
+                mn_list.append((model_name, M, N))
+            else:
+                # Handle all models
+                for model_name, config in configs.items():
+                    seq_len = args.sl if args.sl else config["max_ctx_len"]
+                    M, N = seq_len, config["hidden_size"]
+                    mn_list.append((model_name, M, N, K))
+        else:
+            mn_list.append((args.M_start, args.N_start))
+
+        for M, N in mn_list:
+            run_layernorm(M, N)
     else:
         run_benchmark(args)
 
