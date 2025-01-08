@@ -2,6 +2,7 @@ import argparse
 import sys
 import os
 import subprocess
+from dataclasses import dataclass
 
 
 def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup, dtype_a, dtype_b, mfma_inst_str,
@@ -106,29 +107,26 @@ def calcPerPhase(banks, dtype, K):
     return max(banks * bytesPerBank / (K * typeToBytes(dtype)), 1)
 
 
-def draw_lds_access_cmd(dim0, dim1, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp, dtype, mfmaNonKDim,
-                        banks, mnContig, mfmaTransLD):
-    if ldsLayout == 'swizzle':
+def draw_lds_access_cmd(dim0, dim1, dtype, mfmaNonKDim, ldsConfig):
+    ldsConfig.print()
+    if ldsConfig.ldsLayout == 'swizzle':
         hasSwizzle = 1
-    elif ldsLayout == 'padding':
+    elif ldsConfig.ldsLayout == 'padding':
         hasSwizzle = 2
     else:
         hasSwizzle = 0
 
-    if ldsAccess == 'read':
+    if ldsConfig.ldsAccess == 'read':
         accessMode = 1
-    elif ldsAccess == 'write':
+    elif ldsConfig.ldsAccess == 'write':
         accessMode = 2
     else:
         accessMode = 0
 
-    elemTypeInBytes = typeToBytes(dtype)
-    dimKInBytes = dim1 * elemTypeInBytes
+    trans = 1 if ldsConfig.mnContig else 0
+    useMfmaTransLD = 1 if ldsConfig.mfmaTransLD else 0
+    banks = ldsConfig.banks
 
-    bankLabelScale = 0.8
-    bsize = 0.15
-
-    trans = 1 if mnContig else 0
     if trans:
         dim0Name = 'k'
         dim1Name = 'n'
@@ -138,20 +136,68 @@ def draw_lds_access_cmd(dim0, dim1, kWidth, ldsLayout, ldsAccess, sizePerThread,
     dim0Size = dim0
     dim1Size = dim1
 
-    useMfmaTransLD = 1 if mfmaTransLD else 0
+    '''
+    Definitions of different vector size
 
-    mfmaKWidth = kWidth
-    if trans == 1 and useMfmaTransLD == 0:
-        kWidth = 16 / elemTypeInBytes
-    vecInBytes = kWidth * elemTypeInBytes
+    swizzleVec: Number of elements that are grouped together when swizzling is enabled.
+                Note that this is all about LDS layout without considering LDS read
+                or write patterns. And this is un-related to K- or MN-contig settings.
+    accessVec:  When reading from or writing to LDS, accessVec is the number of contiguous
+                elements each thread read or write as a vector.
+                This is un-related to K- or MN-contig settings.
+                Note that accessVec <= swizzleVec. accessVec for read and write are not
+                required to be the same.
+    kWidth:     Number of contiguous elements along the k dim that each thread holds
+                right before invoking mfma instruction(s). kWidth can be larger than
+                the required number of contiguous elements along the k dim for a single
+                mfma instruction.
+                Note that kWidth is un-related to swizzleVec or accessVec. kWidth should
+                be set according to datatype and mfmaNonKDim.
+
+    We need to handle the following cases of LDS layout and access patterns:
+
+    case 1: K-contig in both HBM and LDS (default)
+      In most cases, we can set swizzleVec = accessVec = kWidth according to the dtype.
+      However, for mfmaNonKDim = 16, banks = 64, and kWidth = 8B, 32 threads will
+      access LDS at the same cycle. In this case, we need to double swizzleVec = 16B.
+    case 2: MN-contig in both HBM and LDS without using mfma_transpose_ld instructions (-mnContig)
+      In this case, ds_read can only read one element at a time (i.e. accessVec is always 1).
+      Therefore, we can always choose swizzleVec = 16B. kWidth does not matter. accessVec is always 1.
+    case 3: MN-contig in both HBM and LDS using mfma_transpose_ld instructions (-mnContig -mfma_trans_load)
+    case 4: MN-contig in HBM and k-Contig in LDS (-inThreadTrans)
+    '''
+
+    elemTypeInBytes = typeToBytes(dtype)
+
+    bankLabelScale = 0.8
+    bsize = 0.15
+
+    if trans == 0:
+        # case 1
+        swizzleVec = ldsConfig.swizzleVec
+        accessVec = ldsConfig.accessVec
+        vec = kWidth
+    elif useMfmaTransLD == 0:
+        # case 2
+        swizzleVec = 16 / elemTypeInBytes
+        accessVec = 1
+        vec = swizzleVec
+    else:
+        # case 3
+        vec = 8 / elemTypeInBytes
+        swizzleVec = mfmaNonKDim
+
+    kWidth = ldsConfig.kWidth
+    vecInBytes = vec * elemTypeInBytes
 
     return f'''\\begin{{document}}
   \\begin{{tikzpicture}}
     \\def\\scale{{1}}
     \\def\\M{{{dim0}}}
     \\def\\K{{{dim1}}}
-    \\def\\mfmaKWidth{{{mfmaKWidth}}}
-    \\def\\vec{{{kWidth}}}
+    \\def\\mfmaKWidth{{{kWidth}}}
+    \\def\\vec{{{vec}}}
+    \\def\\swizzleVec{{{swizzleVec}}}
     \\def\\vecInBytes{{{vecInBytes}}}
     \\def\\bytesPerElem{{{elemTypeInBytes}}}
     \\def\\hasSwizzle{{{hasSwizzle}}}
@@ -161,10 +207,6 @@ def draw_lds_access_cmd(dim0, dim1, kWidth, ldsLayout, ldsAccess, sizePerThread,
     \\def\\trans{{{trans}}}
     \\def\\useMfmaTransLD{{{useMfmaTransLD}}}
 
-
-    \\def\\sizePerThreadK{{{sizePerThread[1]}}}
-    \\def\\sizePerThreadM{{{sizePerThread[0]}}}
-    \\def\\threadsPerWarpK{{{threadsPerWarp[1]}}}
 
     \\def\\elemH{{0.18}}
     \\def\\elem{{0.18}}
@@ -363,6 +405,8 @@ def parse_args():
                         help='If set, the tensor is K x N and n-contig')
     parser.add_argument("-mfma_trans_load", action='store_true', default=False,
                         help='If set, use MFMA transpose load instructions')
+    parser.add_argument("-swizzleVec", type=int, default=4, choices=[4, 8, 16, 32],
+                        help='number of contiguous elements in a vector to swizzle')
     ## wmma instruction layout parameter
     parser.add_argument("-wave_size", type=int, default=32, choices=[32, 64], help='choose the wmma instruction mode')
     parser.add_argument("-o", type=str, default="myplot", help='output pdf file name (without surfix)')
@@ -371,6 +415,32 @@ def parse_args():
     args = parser.parse_args()
 
     return args
+
+@dataclass
+class LDSConfig:
+    banks: int
+    ldsLayout: str
+    ldsAccess: str
+    mnContig: bool
+    mfmaTransLD: bool
+    swizzleVec: int
+    accessVec: int
+    kWidth: int
+
+    def __init__(self, banks, ldsLayout, ldsAccess, mnContig, mfmaTransLD, swizzleVec, accessVec, kWidth):
+        self.banks = banks
+        self.ldsLayout = ldsLayout
+        self.ldsAccess = ldsAccess
+        self.mnContig = mnContig
+        self.mfmaTransLD = mfmaTransLD
+        self.swizzleVec = swizzleVec
+        self.accessVec = accessVec
+        self.kWidth = kWidth
+        if self.swizzleVec < self.kWidth:
+            self.swizzleVec = self.kWidth
+
+    def print(self):
+        print(f"{self.banks=} {self.ldsLayout=} {self.ldsAccess=} {self.mnContig=} {self.mfmaTransLD=} {self.swizzleVec=} {self.accessVec=} {self.kWidth=}")
 
 
 def main():
@@ -401,6 +471,9 @@ def main():
     banks = args.banks
     mnContig = args.mnContig
     mfmaTransLD = args.mfma_trans_load
+    swizzleVec = args.swizzleVec
+
+    ldsConfig = LDSConfig(banks, ldsLayout, ldsAccess, mnContig, mfmaTransLD, swizzleVec, kWidth, kWidth)
 
     waveSize = args.wave_size
 
@@ -482,8 +555,7 @@ def main():
             f_plot.write("\input{dotLayout}\n")
             f_plot.write(draw_dotLayout_str)
         elif plot_mode == 'lds':
-            draw_lds_str = draw_lds_access_cmd(dim0, dim1, kWidth, ldsLayout, ldsAccess, sizePerThread, threadsPerWarp,
-                                               dtype_a, mfmaNonKDim, banks, mnContig, mfmaTransLD)
+            draw_lds_str = draw_lds_access_cmd(dim0, dim1, dtype_a, mfmaNonKDim, ldsConfig)
             f_plot.write("\input{ldsLayout}\n")
             f_plot.write(draw_lds_str)
         elif plot_mode == 'wmma':

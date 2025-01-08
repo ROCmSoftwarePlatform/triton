@@ -72,8 +72,11 @@
     \pgfmathsetmacro{\maxRowId}{\mfmaNonKDim-1}
   }{
     % trans case
-    \pgfmathsetmacro{\maxRowId}{32/\bytesPerElem-1}
+    \ifthenelse{\useMfmaTransLD=0}
+    {\pgfmathsetmacro{\maxRowId}{32/\bytesPerElem-1}}
+    {\pgfmathsetmacro{\maxRowId}{512/\mfmaNonKDim/\bytesPerElem-1}}
   }
+
   \pgfmathsetmacro{\elemsPerVec}{\vec}
 
   \pgfmathsetmacro{\vecInCol}{\colSize/\elemsPerVec}
@@ -93,11 +96,14 @@
   %% draw dims
   \def\gap{3}
   \pgfmathsetmacro{\drawRow}{\maxRowId*\elemH+\gap*\elemH+\elemH}
+  \pgfmathsetmacro{\diffRow}{int(\maxRowId+1-\rowSize)}
+  \ifthenelse{\diffRow = 0}{\pgfmathsetmacro{\drawRow}{\maxRowId*\elemH+\elemH}}{}
   \pgfmathsetmacro{\drawCol}{\vecInCol*\vecInBytes*\bsize}
   \draw [ultra thick] (TL) rectangle ++(\drawCol, -\drawRow);
   \node [scale=\scale, above, rotate=90] at ($(TL)+(0, -0.5*\drawRow)$) {block\_#1 = \rowSize};
   \node [scale=\scale, above] at ($(TL)+(0.5*\drawCol, 0)$) {block\_#2 = \colSize$\times$\dtype};
-  \node [scale=\scale, rotate=90] at ($(TL)+(0.5*\colSize*\bytesPerElem*\bsize, -\drawRow+.5*\gap*\elemH)$) {$\ldots$};
+  \ifthenelse{\diffRow = 0}{}{
+  \node [scale=\scale, rotate=90] at ($(TL)+(0.5*\colSize*\bytesPerElem*\bsize, -\drawRow+.5*\gap*\elemH)$) {$\ldots$};}
 }
 
 
@@ -151,6 +157,7 @@
 
   \ifthenelse{\tid < \threshold}{
     \ifthenelse{\vecInBits=128}{\def\ratio{0.5}}{\def\ratio{1}}
+    %% Highlight the vector in LDS
     \draw [thick, draw=white, fill=\vecColor] ($(vec TL)+(\bWidth, -\bWidth)$) rectangle ++(\vecInBytes*\bsize-2*\bWidth, -\elemH+2*\bWidth);
     \ifthenelse{\vecInBits=128}{
       \node [scale=.6*\bankLabelScale*\scale, white] at ($(vec TL)+(\ratio*\vecInBytes*\bsize, -0.5*\elemH)$) {#3};
@@ -158,6 +165,37 @@
       \node [scale=.6*\bankLabelScale*\scale, white, left] at ($(vec TL)+(\ratio*\vecInBytes*\bsize, -0.5*\elemH)$) {#3};
     }
     \node [scale=.5*\bankLabelScale*\scale, right] at ($(vec TL)+(0, -0.5*\elemH)$) {\textbf{t\tid}};
+  }{}
+}
+
+
+\newcommand{\drawHighlightedAccessInTile}[3]{
+  %% Highlight the vectors if \tid < \threshold
+  %%
+  %% Predefined variables
+  %% vec TL: top-left of the current vector
+  %% elemH, bsize, vecInBytes, bankLabelScale
+  %%
+  %% #1: tid
+  %% #2: threshold
+  %% #3: label in vector
+
+  \pgfmathsetmacro{\tidRaw}{#1}
+  \pgfmathsetmacro{\threshold}{#2}
+  \def\bWidth{0.02}
+
+  \ifthenelse{\tidRaw < \threshold}{
+    \ifthenelse{\vecInBits=128}{\def\ratio{0.5}}{\def\ratio{1}}
+    %% Highlight the vector in global memory
+    \coordinate (tile vec TL) at ($(tile TL)+(\gp*\vecInBytes*\bsize, -\row*\elemH)$);
+    \draw [thick, draw=white, fill=\vecColor] ($(tile vec TL)+(\bWidth, -\bWidth)$) rectangle ++(\vecInBytes*\bsize-2*\bWidth, -\elemH+2*\bWidth);
+    \ifthenelse{\vecInBits=128}{
+      \node [scale=.6*\bankLabelScale*\scale, white] at ($(tile vec TL)+(\ratio*\vecInBytes*\bsize, -0.5*\elemH)$) {#3};
+    }{
+      \node [scale=.6*\bankLabelScale*\scale, white, left] at ($(tile vec TL)+(\ratio*\vecInBytes*\bsize, -0.5*\elemH)$) {#3};
+    }
+    \pgfmathsetmacro{\colorRatio}{40*mod(int(\row/\kPerGroup), 2)}
+    \node [scale=.5*\bankLabelScale*\scale, right, white!\colorRatio!black] at ($(tile vec TL)+(0, -0.5*\elemH)$) {\textbf{t\tidRaw}};
   }{}
 }
 
@@ -203,6 +241,7 @@
   %% vec: number of elements in a group
   %% trans
   %% useMfmaTransLD
+  %% maxRowId: defined in drawTensorLayoutGlobalMem
   %%
   %% #1: hasSwizzle, 0 means no swizzling and no padding,
   %%                 1 means optimal swizzling
@@ -218,11 +257,12 @@
   \pgfmathsetmacro{\numVecCol}{\colSize/\vec}
   \pgfmathsetmacro{\banks}{#3}
   \pgfmathsetmacro{\colSize}{#6}
+  \pgfmathsetmacro{\rows}{\maxRowId+1}
 
   \ifthenelse{\trans=0}{
-    \drawLDSDiagram{#3}{\mfmaNonKDim}{\colSize}
+    \drawLDSDiagram{#3}{\rows}{\colSize}
   }{
-    \drawLDSDiagram{#3}{32/\bytesPerElem}{\colSize}
+    \drawLDSDiagram{#3}{\rows}{\colSize}
   }
 
   % number of elements per LDS row
@@ -252,7 +292,7 @@
   }{
     %% When vec is small enough, we want 16/perPhase different swizzling patterns
     %% When vec is large, we can only have 64 / \vec different swizzling pattern at most
-    \pgfmathsetmacro{\maxPhase}{min(min(\mfmaNonKDim,\numThreadsSameCycle)/\perPhase,\banks*4/\bytesPerElem/\vec)}
+    \pgfmathsetmacro{\maxPhase}{min(min(\mfmaNonKDim,\numThreadsSameCycle)/\perPhase,\banks*4/\bytesPerElem/\swizzleVec)}
   }
 
   %% Draw the vectors according to the swizzling pattern
@@ -267,11 +307,18 @@
       \pgfmathsetmacro{\offVec}{\row*\colSize/\vec+\gp}
       % which row of LDS
       \pgfmathsetmacro{\LDSRow}{int(\offVec/\vecsPerLDSRow)}
-      % offset in the current LDS row in the unit of vec
-      \pgfmathsetmacro{\LDSVecRaw}{int(mod(\offVec,\vecsPerLDSRow))}
+      % phase
       \pgfmathsetmacro{\phaseRaw}{int(\row/\perPhase)}
       \pgfmathsetmacro{\phase}{int(mod(\phaseRaw, \maxPhase))}
-      \pgfmathsetmacro{\LDSVec}{\bitwiseXor{\LDSVecRaw}{\phase}}
+
+      % vector ID in the current LDS row
+      \pgfmathsetmacro{\vecIdInLDSRow}{int(mod(\offVec,\vecsPerLDSRow))}
+      % number of vec in swizzleVec
+      \pgfmathsetmacro{\vecsPerSwizzleVec}{int(\swizzleVec/\vec)}
+      \pgfmathsetmacro{\swizzleVecIdInLDSRow}{int(\vecIdInLDSRow/\vecsPerSwizzleVec)}
+      \pgfmathsetmacro{\vecIdInSwizzleVec}{int(mod(\vecIdInLDSRow, \vecsPerSwizzleVec))}
+      \pgfmathsetmacro{\newSwizzleVecId}{\bitwiseXor{\swizzleVecIdInLDSRow}{\phase}}
+      \pgfmathsetmacro{\LDSVec}{int(\newSwizzleVecId*\vecsPerSwizzleVec+\vecIdInSwizzleVec)}
 
       \coordinate (vec TL) at ($(TL)+(\LDSVec*\vecInBytes*\bsize, -\LDSRow*\elemH)$);
       \draw [ultra thin, fill=\vecColor] (vec TL) rectangle ++(\vecInBytes*\bsize, -\elemH)
@@ -288,23 +335,46 @@
       %% the current vector. And then we decide if the current vector is accessed
       %% at the first cycle according to thread id and access width
 
-      % Draw ds_read
+      %%%%%%%%%%%%%%%%
+      % Draw ds_read %
+      %%%%%%%%%%%%%%%%
       \ifthenelse{\accessMode=1}{
         \ifthenelse{\trans=0}{
-          %% K-contig case
+          %%%%%%%%%%%%%%%%%%%
+          %% K-contig case %%
+          %%%%%%%%%%%%%%%%%%%
           %%% compute thread id for current vec
           \pgfmathsetmacro{\tid}{int(\gp*\mfmaNonKDim+\row)}
+          \pgfmathsetmacro{\kPerGroup}{\mfmaNonKDim}
+          \drawHighlightedAccessInTile{\tid}{\numThreadsSameCycle}{#4\row,#5\colStart:\colEnd}
           %%% draw ds_read instruction name
           \ifthenelse{\tid=0}{
-            \node [scale=\scale, above right] at ($(TL)+(0, \gapT*\elemH)$)
-            {ds\_read\_b\vecInBits\ (t0$\sim$t\maxTid)};}{}
+            \ifthenelse{\vecInBits=128}{
+              %%% Special thread access pattern for ds_read_b128
+              \ifthenelse{\banks=32}{
+                \node [scale=\scale, above right] at ($(TL)+(0, \gapT*\elemH)$)
+                {ds\_read\_b\vecInBits\ (t0$\sim$t\maxTid\ $\Leftrightarrow$\ t0$\sim$t3, t20$\sim$t23)};
+              }{
+                \node [scale=\scale, above right] at ($(TL)+(0, \gapT*\elemH)$)
+                {ds\_read\_b\vecInBits\ (t0$\sim$t\maxTid\ $\Leftrightarrow$\ t0$\sim$t3, t12$\sim$t15, t23$\sim$t27)};
+              }
+            }{
+              %%% Normal thread access pattern for ds_read_b64
+              \node [scale=\scale, above right] at ($(TL)+(0, \gapT*\elemH)$)
+              {ds\_read\_b\vecInBits\ (t0$\sim$t\maxTid)};
+            }
+           }{}
           %%% highlight vector of the threads that will access LDS at the same cycle
           \drawHighlightedAccess{\tid}{\numThreadsSameCycle}{#4\row,#5\colStart:\colEnd}
         }{
-          %% MN-contig case
+          %%%%%%%%%%%%%%%%%%%%
+          %% MN-contig case %%
+          %%%%%%%%%%%%%%%%%%%%
           %%% This is further diverging according to whether mfma_transpose_load is used
           \ifthenelse{\useMfmaTransLD=0}{
-            %%% Not use mfma_transpose_load instructions
+            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+            %%% Not use mfma_transpose_load instructions %%%
+            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
             %%%% This is the current triton implementation of MN-contig case. We have
             %%%% - Threads can only load one element, i.e. ds_read_b16/b8 are used
             %%%% - 32 threads are accessing LDS at the same cycle
@@ -312,7 +382,6 @@
             %%%%   - if mfmaNonKDim == 16, they will access row 0 and mfmaKWidth
             %%%% - no swizzling used for lds layout
             %%%% - vec is always 16 bytes
-
             \pgfmathsetmacro{\numGp}{\mfmaNonKDim/\vec}
             \pgfmathsetmacro{\maxElId}{\vec-1}
             \pgfmathsetmacro{\hasSecondRow}{int((32-\mfmaNonKDim)/16)}
@@ -323,25 +392,69 @@
               \ifthenelse{\row = 0 \OR \row = \secondRow}{
                 \foreach \el in {0,...,\maxElId}{
                   \pgfmathsetmacro{\tid}{int(\tStart+\el)}
+                  \pgfmathsetmacro{\kNewEnd}{int(\row+\mfmaKWidth-1)}
                   %%%% Draw access in LDS
                   \draw ($(vec TL)+(\el*\bytesPerElem*\bsize, 0)$) rectangle ++(\bytesPerElem*\bsize, -\elemH)
-                  node[scale=0.3*\bankLabelScale, pos=.5] {t\tid};
+                  node[scale=0.4*\bankLabelScale, pos=.5] {t\tid};
                   %%%% Draw access in original tile
-                  \draw [opacity=0.5] ($(tile TL)+(\gp*\vecInBytes*\bsize+\el*\bytesPerElem*\bsize, -\row*\elemH)$) rectangle ++(\bytesPerElem*\bsize, -\elemH*\mfmaKWidth)
-                  node[scale=0.3*\bankLabelScale, pos=0, below right] {t\tid};
-                }
+                  \coordinate (vertical vec TL) at ($(tile TL)+(\gp*\vecInBytes*\bsize+\el*\bytesPerElem*\bsize, -\row*\elemH)$);
+                  \def\bWidth{0.002}
+                  \draw [thick, draw=white, fill=\vecColor, opacity=0.6] ($(vertical vec TL)+(\bWidth, -\bWidth)$)
+                  rectangle ++(\bytesPerElem*\bsize-2*\bWidth, -\elemH*\mfmaKWidth+2*\bWidth);
+                  \node [scale=0.5*\bankLabelScale, left, rotate=90] at ($(vertical vec TL)+(0.5*\bytesPerElem*\bsize, -\bWidth)$) {t\tid};
+                  \node [scale=0.5*\bankLabelScale, right, rotate=90, white] at
+                  ($(vertical vec TL)+(0.5*\bytesPerElem*\bsize, -\elemH*\mfmaKWidth+2*\bWidth)$) {\bfseries{n\el,k\row:\kNewEnd}};
+                } % End \foreach
                 \draw [ultra thin, fill=\vecColor, opacity=0.6] (vec TL) rectangle ++(\vecInBytes*\bsize, -\elemH)
                 node [pos=.5, scale=.6*\bankLabelScale*\scale, white] {#4\row,#5\colStart:\colEnd};
-              }{}
-            }{}
+              }{} % End \ifthenelse{\row = 0 \OR \row = \secondRow}
+            }{} % End \ifthenelse{\gp < \numGp}
             \ifthenelse{\gp = 0 \AND \row = 0}{
               \node [scale=\scale, above right] at ($(TL)+(0, \gapT*\elemH)$)
               {ds\_read\_b\elemInBits\ (t0$\sim$t31)};}{}
           }{
-            %%% Use mfma_transpose_load instructions
-            
-          }
-        }
+            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+            %%% Use mfma_transpose_load instructions %%%
+            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+            %%%% Compute the tid for current vector: tid = f(\gp, \row)
+            %%%% threadsPerGroupM = 16 * bytesPerElem / 8
+            %%%% kPerGroup = 16 / threadsPerGroupM
+            %%%% numGp = mfmaNonKDim / 16
+            %%%% groupId = 32 / mfmaNonKDim
+            %%%% groupRow = groupId // 2
+            %%%% groupCol = groupId % 2
+            \pgfmathsetmacro{\threadsPerGroupM}{int(16*\bytesPerElem/8)}
+            \pgfmathsetmacro{\kPerGroup}{int(16/\threadsPerGroupM)}
+            \ifthenelse{\mfmaNonKDim=16}{
+              % nonKDim = 16
+              \pgfmathsetmacro{\colOff}{int(\gp/\threadsPerGroupM)*32+mod(\gp,\threadsPerGroupM)}
+              \pgfmathsetmacro{\kPerTwoGroups}{int(\kPerGroup*2)}
+              \pgfmathsetmacro{\rowOff}{int(\row/\kPerGroup/2)*16+mod(\row, \kPerTwoGroups)*\threadsPerGroupM}
+              \pgfmathsetmacro{\kGroupId}{int(\row/\kPerGroup)}
+              \ifthenelse{\kGroupId = 1}{\pgfmathsetmacro{\tid}{32}}
+              {\pgfmathsetmacro{\tid}{int(\rowOff+\colOff)}}
+              % draw highlighed vector in tile
+              \pgfmathsetmacro{\rowOffRaw}{int(\row/\kPerGroup/2)*16+mod(\row, \kPerGroup)*\threadsPerGroupM}
+              \pgfmathsetmacro{\tidRaw}{int(\rowOffRaw+\colOff)}
+              \drawHighlightedAccessInTile{\tidRaw}{\numThreadsSameCycle}{#4\row,#5\colStart:\colEnd}
+            }{
+              % nonKDim = 32
+              \pgfmathsetmacro{\colOff}{int(\gp/\threadsPerGroupM)*16+mod(\gp,\threadsPerGroupM)}
+              \pgfmathsetmacro{\rowOff}{int(\row/\kPerGroup)*32+mod(\row, \kPerGroup)*\threadsPerGroupM}
+              \pgfmathsetmacro{\tid}{int(\rowOff+\colOff)}
+              % draw highlighed vector in tile
+              \pgfmathsetmacro{\rowOffRaw}{int(\row/\kPerGroup/2)*32+mod(\row, \kPerGroup)*\threadsPerGroupM}
+              \pgfmathsetmacro{\tidRaw}{int(\rowOffRaw+\colOff)}
+              \drawHighlightedAccessInTile{\tidRaw}{\numThreadsSameCycle}{#4\row,#5\colStart:\colEnd}
+            }
+            %%% draw ds_read instruction name
+            \ifthenelse{\tid=0}{
+              \node [scale=\scale, above right] at ($(TL)+(0, \gapT*\elemH)$)
+              {ds\_read\_b64\_tr\_b\elemInBits\ (t0$\sim$t\maxTid)};}{}
+            %%% highlight vector of the threads that will access LDS at the same cycle
+            \drawHighlightedAccess{\tid}{\numThreadsSameCycle}{#4\row,#5\colStart:\colEnd}
+          } % End of MN-contig case
+        } % End of trans/non-trans case
       }{} %% End draw ds_read
 
       %% Draw ds_write
