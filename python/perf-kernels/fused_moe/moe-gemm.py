@@ -16,7 +16,8 @@ if PARENT_DIR not in sys.path:
 
 from utils.benchmark_utils import get_available_models, get_model_configs  # noqa: E402
 
-M_THRESHOLD = 128
+M_THRESHOLD_SMALL = 256
+M_THRESHOLD_MEDIUM = 1024
 
 
 @triton.jit
@@ -267,9 +268,13 @@ def try_get_optimal_moe_config(
     configs = get_moe_configs(dtype)
 
     if configs:
-        # If an optimal configuration map has been found, look up the
-        # optimal config
-        config = configs["small_M" if M < M_THRESHOLD else "large_M"]
+        if configs:
+            if M < M_THRESHOLD_SMALL:
+                config = configs["small_M"]
+            elif M < M_THRESHOLD_MEDIUM:
+                config = configs["medium_M"]
+            else:
+                config = configs["large_M"]
     else:
         # Else use the default config
         config = get_default_config(M, E, is_marlin)
@@ -360,7 +365,10 @@ def get_configs():
         {"M": 4096, "K": 4096, "N": 7168, "E": 8, "top_k": 2},
         {"M": 64, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
         {"M": 128, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
+        {"M": 256, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
+        {"M": 512, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
         {"M": 1024, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
+        {"M": 2048, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
         {"M": 4096, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
     ]
     return configs
@@ -388,7 +396,6 @@ def run_benchmark(custom, args):
     print_time = args.return_time
     routed_weight = args.routed_weight
     dtype = arg_to_torch_dtype[args.dtype]
-    use_fp16 = args.dtype == 'fp16'
     x_names = ['M', 'K', 'N', 'E', 'top_k']
     if custom:
         assert args.M and args.K and args.N and args.E and args.top_k, \
@@ -402,15 +409,30 @@ def run_benchmark(custom, args):
             configs = get_configs()
             x_vals_list = [(cfg['M'], cfg['K'], cfg['N'], cfg['E'], cfg['top_k']) for cfg in configs]
 
-    line_names = 'Time (ms)' if print_time else 'TFLOPS'
+    line_names = ['Time (ms)', 'Bandwidth (GB/s)'] if print_time else ['TFLOPS', 'Bandwidth (GB/s)']
+
+    if print_time:
+        # We'll have 2 lines: 'time' and 'bandwidth'
+        line_vals = ['time', 'bandwidth']
+        line_names = ['Time (ms)', 'Bandwidth (GB/s)']
+    else:
+        line_vals = ['tflops', 'bandwidth']
+        line_names = ['TFLOPS', 'Bandwidth (GB/s)']
 
     benchmark = triton.testing.Benchmark(
-        x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'], line_names=[line_names],
-        styles=[('red', '-'), ('blue', '-')], ylabel='ms', plot_name='moe-gemm-benchmark',
-        args={'dtype': dtype, 'use_fp16': use_fp16, 'print_time': print_time, 'routed_weight': routed_weight})
-
+        x_names=x_names,
+        x_vals=x_vals_list,
+        line_arg='metric',           # <--- important
+        line_vals=line_vals,         # <--- a list of 2 metrics
+        line_names=line_names,       # <--- matching 2 metrics
+        styles=[('red', '-'), ('blue', '-')],
+        ylabel='ms / TFLOPS / GB/s', # or a more generic label
+        plot_name='moe-gemm-benchmark',
+        args={'dtype': dtype, 'routed_weight': routed_weight}
+    )
     @triton.testing.perf_report([benchmark])
-    def bench_moe_gemm(M, K, N, E, top_k, dtype, use_fp16, routed_weight, print_time, provider, model=None):
+    def bench_moe_gemm(M, K, N, E, top_k, dtype, routed_weight, metric, model=None):
+        # metric will be either 'time'/'tflops' or 'bandwidth'
         a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
             M, K, N, top_k, E, routed_weight=routed_weight, dtype=dtype)
 
@@ -418,15 +440,26 @@ def run_benchmark(custom, args):
         if routed_weight:
             flops += M * top_k * N
 
+        bytes_ = torch.tensor([], dtype=dtype).element_size()
+        mem_read = (M * K + top_k * N * K) * bytes_
+        mem_write = (M * top_k * N) * bytes_
+        mem = mem_read + mem_write
         fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
                               config)
         ms = triton.testing.do_bench(fn)
 
-        if print_time:
+        bandwidth = mem / (ms * 1e-3) * 1e-9  # GB/s
+        tflops = flops / ms * 1e-9
+
+        # Return exactly one scalar depending on which metric is active
+        if metric == 'time':
             return ms
+        elif metric == 'tflops':
+            return tflops
+        elif metric == 'bandwidth':
+            return bandwidth
         else:
-            # Convert flops to TFLOPs
-            return flops / ms * 1e-9
+            raise ValueError("Unknown metric: " + metric)
 
     bench_moe_gemm.run(save_path=".", print_data=True)
 
