@@ -438,7 +438,7 @@ def run_benchmark(custom, args):
             flops += M * top_k * N
 
         bytes_ = torch.tensor([], dtype=dtype).element_size()
-        mem_read = (M * K + top_k * N * K) * bytes_
+        mem_read = (M * K + E * N * K) * bytes_
         mem_write = (M * top_k * N) * bytes_
         mem = mem_read + mem_write
         fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
