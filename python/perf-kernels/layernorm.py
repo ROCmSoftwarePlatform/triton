@@ -137,15 +137,16 @@ def _layer_norm_bwd_dx_fused(DX,  # pointer to the input gradient
                              Rstd,  # pointer to the 1/std
                              stride,  # how much to increase the pointer when moving by 1 row
                              N,  # number of columns in X
-                             NUM_ROWS: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
+                             NUM_ROWS: tl.constexpr, BLOCK_N: tl.constexpr):
     # Map the program id to the elements of X, DX, and DY it should compute.
     pid = tl.program_id(0)
+    pid_n = tl.program_id(1)
     tile_num = tl.num_programs(0)
     rows_per_tile = NUM_ROWS // tile_num
     if pid < NUM_ROWS % tile_num:
         rows_per_tile += 1
 
-    cols = tl.arange(0, BLOCK_SIZE_N)
+    cols = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     mask = cols < N
     row = pid
     for _ in range(0, rows_per_tile):
@@ -210,7 +211,7 @@ def _layer_norm_bwd_dwdb(DW,  # pointer to the partial sum of weights gradient
 class LayerNorm(torch.autograd.Function):
     
     @staticmethod
-    def forward(ctx, x, weight, bias, eps=1e-5):
+    def forward(ctx, x, normalized_shape, weight, bias, eps=1e-5):
         y = torch.empty_like(x)
         M, N = x.shape
         mean = torch.empty((M, ), dtype=torch.float32, device=x.device)
@@ -239,7 +240,7 @@ class LayerNorm(torch.autograd.Function):
         N = w.shape[0]
         x_arg = x.reshape(-1, x.shape[-1])
         M = x_arg.shape[0]
-        tile_num = min(256, M // 4)
+        tile_num = max(min(256, M // 4), 1)
         # allocate output
         _dw = torch.zeros((tile_num, N), dtype=x.dtype, device=w.device)
         _db = torch.zeros((tile_num, N), dtype=x.dtype, device=w.device)
@@ -250,13 +251,14 @@ class LayerNorm(torch.autograd.Function):
         # enqueue kernel using forward pass heuristics
         # also compute partial sums for DW and DB
         M, N = x_arg.shape
-        grid_bwd = (tile_num,)
-
+        # grid_bwd = (tile_num,)
+        grid_bwd = lambda meta: (tile_num, triton.cdiv(N, meta['BLOCK_N']))
+        # print(f"block_size = {ctx.BLOCK_SIZE}")
         _layer_norm_bwd_dx_fused[grid_bwd](  #
             dx, dy, _dw, _db, x, w, m, v,  #
             x_arg.stride(0), N,  #
             NUM_ROWS=M,  #
-            BLOCK_SIZE_N=ctx.BLOCK_SIZE,  #
+            BLOCK_N=ctx.BLOCK_SIZE,  #
             num_warps=ctx.num_warps)
         grid_reduce = lambda meta: [triton.cdiv(N, meta['BLOCK_SIZE_N'])]
         # accumulate partial sums in separate kernel
@@ -290,18 +292,45 @@ def run_layernorm(M, N):
 
 
 #pytest
-@pytest.mark.parametrize('M, N', [(1823, 781), (2, 128), (1, 4), (128, 2), (1, 128), (8192, 8192), (4096, 8192),
-                                  (359, 1), (1, 359), (1, 131072), (1, 89999)])
+@pytest.mark.parametrize('M, N', [(1823, 781), 
+                                  (2, 128), 
+                                  (1, 4), 
+                                  (128, 2), 
+                                  (1, 128), 
+                                  (8192, 8192), 
+                                  (4096, 8192),
+                                  (359, 1), 
+                                  (1, 359), 
+                                  (1, 16385), 
+                                  (1, 131072), 
+                                  (1, 89999)])
 def test_layernorm(M, N, eps=1e-5):
     torch.manual_seed(0)
     x = torch.randn(M, N, device='cuda')
     w_shape = (N, )
-    w = torch.rand(w_shape, device='cuda')
-    b = torch.rand(w_shape, device='cuda')
-    y_triton = layernorm(x, w, b, eps)
-    y_torch = torch.nn.functional.layer_norm(x, w_shape, w, b, eps)
+    w = torch.rand(w_shape, device='cuda', requires_grad=True)
+    b = torch.rand(w_shape, device='cuda', requires_grad=True)
 
-    assert torch.allclose(y_triton, y_torch, rtol=1e-05, atol=1e-06)
+    dy = 0.1 * torch.randn_like(x)
+    x.requires_grad_(True)
+
+    # forward pass
+    y_triton = layernorm(x, w_shape, w, b, eps)
+    y_ref = torch.nn.functional.layer_norm(x, w_shape, w, b, eps)
+
+    # backward pass (triton)
+    y_triton.backward(dy, retain_graph=True)
+    dx_tri, dw_tri, db_tri = [_.grad.clone() for _ in [x, w, b]]
+    x.grad, w.grad, b.grad = None, None, None
+
+    #backward pass (torch)
+    y_ref.backward(dy, retain_graph=True)
+    dx_ref, dw_ref, db_ref = [_.grad.clone() for _ in [x, w, b]]
+
+    assert torch.allclose(y_triton, y_ref, rtol=1e-05, atol=1e-04)
+    assert torch.allclose(dx_tri, dx_ref, rtol=1e-05, atol=1e-03)
+    assert torch.allclose(db_tri, db_ref, rtol=1e-05, atol=1e-03)
+    assert torch.allclose(dw_tri, dw_ref, rtol=1e-05, atol=1e-03)
 
 
 #Benchmark
