@@ -651,7 +651,7 @@ def run_benchmark(custom, args):
         else:
             a_bytes = b_bytes = c_bytes = torch.tensor([], dtype=dtype).element_size()
 
-        mem_read = (M * K) * a_bytes + (top_k * N * K) * b_bytes
+        mem_read = (M * K) * a_bytes + (E * N * K) * b_bytes
         mem_write = (M * top_k * N) * c_bytes
         mem = mem_read + mem_write
         fn = lambda: moe_gemm(a, b, c, metadata)
