@@ -179,6 +179,7 @@ def splitK_reduce(
         accumulator = leaky_relu(accumulator)
 
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    tl.store(c_ptrs, accumulator, mask=c_mask)
 
 # Activation function.
 @triton.jit
@@ -195,7 +196,7 @@ def matmul(a, b, c, a_scale, b_scale, scale_a8_b8=False, activation=""):
     M, K = a.shape
     K, N = b.shape
     splitk = 1
-    c_buf = torch.zeros((M, N, splitk), device=a.device, dtype=torch.float32)
+    c_buf = torch.empty((M, N, splitk), device=a.device, dtype=torch.float32)
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
         META['SPLIT_K']
@@ -318,6 +319,14 @@ def get_type(provider):
     res = re.findall(r'\(.*?\)', provider)
     return res[0][1:-1]
 
+def ms_to_gibps(M: int, N: int, K: int, milliseconds: float) -> float:
+    read_elems: int = M * K + K * N
+    write_elems: int = M * N
+    transf_elems: int = read_elems + write_elems
+    transf_bytes: int = 2 * transf_elems  # times 2 due to fp16
+    transf_gibibytes: float = 2**-30 * transf_bytes
+    seconds: float = 1e-3 * milliseconds
+    return round(transf_gibibytes / seconds, 2)
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
@@ -361,7 +370,9 @@ def benchmark(M, N, K, provider):
                                                      quantiles=quantiles)
         global verbose
         if verbose:
-            print(f'SIZE: {M},{N},{K}   Best tuning config: ({matmul_kernel.best_config()})')
+            gbps = ms_to_gibps(M, N, K, ms)
+#            print(f'SIZE: {M},{N},{K}   Best tuning config: ({matmul_kernel.best_config()})')
+            print(f'SIZE: {M},{N},{K}, gbps: {gbps}')
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
