@@ -131,6 +131,7 @@ python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access none -tensorSha
 python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access read -tensorShape 128 128 -kWidth 16 -dtype_a bf8 -banks 64
 python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access write -tensorShape 128 128 -kWidth 16 -dtype_a f4 -banks 32
 python3 plot_layout.py -plot lds -lds_layout none -lds_access read -tensorShape 128 32 -kWidth 4 -dtype_a fp16 -banks 64 -mnContig
+python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access read -tensorShape 128 32 -kWidth 16 -dtype_a fp8 -banks 64 -mnContig -mfma_trans_load
 ```
 
 Knobs
@@ -145,5 +146,8 @@ Knobs
   - `read`: plot accessed elements at the first cycle of ds_read
   - `write`: plot accessed elements during ds_write. For global load access, we assume
     a fully coalesced dwordx4 access pattern along the K dim.
-- `mnContig` If set, the tile is stored in mn-contig layout. In this layout, elements along
-  the M/N dim are contiguous in both global memory and LDS. And swizzling is disabled.
+- `mnContig`: If set, the tile is stored in mn-contig layout. In this layout, elements along
+  the M/N dim are contiguous in both global memory and LDS.
+- `mfma_trans_load`: This flag only works when `mnContig` is set. When set, `ds_read_b64_tr_bx`
+  instructions are used to read from LDS. Note that current triton LDS layout mechanism will
+  lead to bank conflicts.

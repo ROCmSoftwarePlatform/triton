@@ -5,8 +5,12 @@ import subprocess
 from dataclasses import dataclass
 
 
-def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup, dtype_a, dtype_b, mfma_inst_str,
-                        kpack, isMixed864, plot_scale):
+def draw_dot_layout_cmd(M, N, K, dtype_a, dtype_b, mfma_inst_str, isMixed864, plot_scale, dotConfig):
+    mfmaNonKDim = dotConfig.mfmaNonKDim
+    warpsPerCTA = dotConfig.warpsPerCTA
+    trans = dotConfig.trans
+    kWidth = dotConfig.kWidth
+    kGroup = dotConfig.kGroup
     scaleLabel = 0.7 if (kWidth == 4 or (kWidth == 8 and mfmaNonKDim == 32)) else 1
 
     outType = 'i32' if dtype_a == 'i8' else 'f32'
@@ -71,7 +75,7 @@ def draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup
 \\end{{document}}'''
 
 
-def draw_blocked_layout_cmd(dim0, dim1, dim0Name, dim1Name, sizePerThread, threadsPerWarp, warpsPerCTA, order):
+def draw_blocked_layout_cmd(dim0, dim1, dim0Name, dim1Name, blockedConfig):
     return f'''\\begin{{document}}
   \\begin{{tikzpicture}}
     \\def\\scale{{1}}
@@ -79,7 +83,7 @@ def draw_blocked_layout_cmd(dim0, dim1, dim0Name, dim1Name, sizePerThread, threa
     \\coordinate (TL) at (0,0);
     \\def\\dimColName{{{dim0Name}}}
     \\def\\dimRowName{{{dim1Name}}}
-    \\drawBlockedTensor{{{dim0}}}{{{dim1}}}{{{sizePerThread[0]}}}{{{sizePerThread[1]}}}{{{threadsPerWarp[0]}}}{{{warpsPerCTA[0]}}}{{{warpsPerCTA[1]}}}{{{order[0]}}}
+    \\drawBlockedTensor{{{dim0}}}{{{dim1}}}{{{blockedConfig.sizePerThread[0]}}}{{{blockedConfig.sizePerThread[1]}}}{{{blockedConfig.threadsPerWarp[0]}}}{{{blockedConfig.warpsPerCTA[0]}}}{{{blockedConfig.warpsPerCTA[1]}}}{{{blockedConfig.order[0]}}}
   \\end{{tikzpicture}}
 \\end{{document}}'''
 
@@ -108,7 +112,6 @@ def calcPerPhase(banks, dtype, K):
 
 
 def draw_lds_access_cmd(dim0, dim1, dtype, mfmaNonKDim, ldsConfig):
-    ldsConfig.print()
     if ldsConfig.ldsLayout == 'swizzle':
         hasSwizzle = 1
     elif ldsConfig.ldsLayout == 'padding':
@@ -135,7 +138,6 @@ def draw_lds_access_cmd(dim0, dim1, dtype, mfmaNonKDim, ldsConfig):
         dim1Name = 'k'
     dim0Size = dim0
     dim1Size = dim1
-
     '''
     Definitions of different vector size
 
@@ -176,7 +178,7 @@ def draw_lds_access_cmd(dim0, dim1, dtype, mfmaNonKDim, ldsConfig):
         # case 1
         swizzleVec = ldsConfig.swizzleVec
         accessVec = ldsConfig.accessVec
-        vec = kWidth
+        vec = ldsConfig.kWidth
     elif useMfmaTransLD == 0:
         # case 2
         swizzleVec = 16 / elemTypeInBytes
@@ -186,6 +188,7 @@ def draw_lds_access_cmd(dim0, dim1, dtype, mfmaNonKDim, ldsConfig):
         # case 3
         vec = 8 / elemTypeInBytes
         swizzleVec = mfmaNonKDim
+        accessVec = ldsConfig.accessVec
 
     kWidth = ldsConfig.kWidth
     vecInBytes = vec * elemTypeInBytes
@@ -198,6 +201,7 @@ def draw_lds_access_cmd(dim0, dim1, dtype, mfmaNonKDim, ldsConfig):
     \\def\\mfmaKWidth{{{kWidth}}}
     \\def\\vec{{{vec}}}
     \\def\\swizzleVec{{{swizzleVec}}}
+    \\def\\accessVec{{{accessVec}}}
     \\def\\vecInBytes{{{vecInBytes}}}
     \\def\\bytesPerElem{{{elemTypeInBytes}}}
     \\def\\hasSwizzle{{{hasSwizzle}}}
@@ -416,6 +420,24 @@ def parse_args():
 
     return args
 
+
+@dataclass
+class BlockedConfig:
+    sizePerThread: tuple
+    threadsPerWarp: tuple
+    warpsPerCTA: tuple
+    order: tuple
+
+
+@dataclass
+class DotConfig:
+    mfmaNonKDim: int
+    kWidth: int
+    kGroup: int
+    trans: int
+    warpsPerCTA: tuple
+
+
 @dataclass
 class LDSConfig:
     banks: int
@@ -440,7 +462,9 @@ class LDSConfig:
             self.swizzleVec = self.kWidth
 
     def print(self):
-        print(f"{self.banks=} {self.ldsLayout=} {self.ldsAccess=} {self.mnContig=} {self.mfmaTransLD=} {self.swizzleVec=} {self.accessVec=} {self.kWidth=}")
+        print(
+            f"{self.banks=} {self.ldsLayout=} {self.ldsAccess=} {self.mnContig=} {self.mfmaTransLD=} {self.swizzleVec=} {self.accessVec=} {self.kWidth=}"
+        )
 
 
 def main():
@@ -473,14 +497,16 @@ def main():
     mfmaTransLD = args.mfma_trans_load
     swizzleVec = args.swizzleVec
 
-    ldsConfig = LDSConfig(banks, ldsLayout, ldsAccess, mnContig, mfmaTransLD, swizzleVec, kWidth, kWidth)
-
     waveSize = args.wave_size
 
     sizePerThread = args.sizePerThread
     threadsPerWarp = args.threadsPerWarp
     warpsPerCTA = args.warpsPerCTA
     order = args.order
+
+    blockedConfig = BlockedConfig(sizePerThread, threadsPerWarp, warpsPerCTA, order)
+    dotConfig = DotConfig(mfmaNonKDim, kWidth, kGroup, trans, warpsPerCTA)
+    ldsConfig = LDSConfig(banks, ldsLayout, ldsAccess, mnContig, mfmaTransLD, swizzleVec, kWidth, kWidth)
 
     CTAShape = []
     if plot_mode == 'blocked':
@@ -537,7 +563,7 @@ def main():
             print("")
 
     if plot_mode == 'lds':
-        print(f"Plotting LDS access for tensor M={dim0},K={dim1} with vec={kWidth}")
+        print(f"Plotting LDS access for tensor {dim0}x{dim1} with vec={kWidth}")
 
     with open("myplot.tex", 'w') as f_plot:
         with open("preamble.tex") as file:
@@ -545,13 +571,12 @@ def main():
 
         f_plot.write(preamble)
         if plot_mode == 'blocked':
-            draw_blockedLayout_str = draw_blocked_layout_cmd(dim0, dim1, dim0Name, dim1Name, sizePerThread,
-                                                             threadsPerWarp, warpsPerCTA, order)
+            draw_blockedLayout_str = draw_blocked_layout_cmd(dim0, dim1, dim0Name, dim1Name, blockedConfig)
             f_plot.write("\input{blockedLayout}\n")
             f_plot.write(draw_blockedLayout_str)
         elif plot_mode == 'dot':
-            draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, mfmaNonKDim, warpsPerCTA, trans, kWidth, kGroup, dtype_a,
-                                                     dtype_b, mfma_inst_str, kpack, isMixed864, plot_scale)
+            draw_dotLayout_str = draw_dot_layout_cmd(M, N, K, dtype_a, dtype_b, mfma_inst_str, isMixed864, plot_scale,
+                                                     dotConfig)
             f_plot.write("\input{dotLayout}\n")
             f_plot.write(draw_dotLayout_str)
         elif plot_mode == 'lds':
