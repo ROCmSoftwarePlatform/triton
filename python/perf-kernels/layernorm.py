@@ -359,6 +359,7 @@ def run_benchmark(args):
     dtype = arg_to_torch_dtype[args.dtype]
 
     if args.mode == 'fwd' or args.mode == 'both':
+        fwd_plot_name = plot_name + f"_forward_pass(GBS)"
         mn_args['mode'] = 'forward'
         config.append(
             triton.testing.Benchmark(
@@ -372,11 +373,12 @@ def run_benchmark(args):
                 ],
                 styles=[('blue', '-'), ('green', '-')],
                 ylabel="GB/s",
-                plot_name=plot_name,
+                plot_name=fwd_plot_name,
                 args=mn_args,
             ))
 
     if args.mode == 'bwd' or args.mode == 'both':
+        bwd_plot_name = plot_name + f"_backward_pass(GBS)"
         mn_args['mode'] = 'backward'
         config.append(
             triton.testing.Benchmark(
@@ -390,19 +392,17 @@ def run_benchmark(args):
                 ],
                 styles=[('blue', '-'), ('green', '-')],
                 ylabel="GB/s",
-                plot_name=plot_name,
+                plot_name=bwd_plot_name,
                 args=mn_args,
             ))
-    plot_name += f"_{args.mode}_pass"
 
-    print(plot_name)
     @triton.testing.perf_report(config)
     def benchmark(M, N, provider, mode='forward'):
         x = torch.randn(M, N, device='cuda', dtype=dtype)
         w_shape = (N, )
         w = torch.rand(w_shape, device='cuda', dtype=dtype)
         b = torch.rand(w_shape, device='cuda', dtype=dtype)
-        dy = .1 * x.randn_like(x)
+        dy = .1 * torch.randn_like(x)
         stream = torch.cuda.Stream()
         torch.cuda.set_stream(stream)
 
@@ -412,7 +412,6 @@ def run_benchmark(args):
             if provider == 'torch':
                 return torch_layernorm(x, w_shape, w, b)
 
-
         if mode == 'forward':
             gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
             ms = triton.testing.do_bench(y_fwd)
@@ -420,10 +419,16 @@ def run_benchmark(args):
             #     ms = triton.testing.do_bench(lambda: torch_layernorm(x, w_shape, w, b))
             # if provider == 'triton':
             #     ms = triton.testing.do_bench(lambda: layernorm(x, w_shape, w, b))
-        if mode == 'backward':
+        elif mode == 'backward':
+            x.requires_grad_(True)
+            w.requires_grad_(True)
+            b.requires_grad_(True)
+
             y = y_fwd()
             gbps = lambda ms: 3 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)  # noqa: F811, E704
-            ms = triton.testing.do_bench(lambda: y.backward(dy, retain_graph=True, grad_to_none=[x]))
+            ms = triton.testing.do_bench(lambda: y.backward(dy, retain_graph=True), grad_to_none=[x])
+        else:
+            raise f"mode {mode} is not supported!"
 
         return gbps(ms)
 
