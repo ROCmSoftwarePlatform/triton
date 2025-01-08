@@ -10,33 +10,45 @@ import re
 @triton.autotune(
     configs=[
         triton.Config(
-          {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'SPLIT_K': 1, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
-            num_warps=8, num_stages=2),
-        triton.Config(
             {
-                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'SPLIT_K': 1, 'GROUP_SIZE_M': 8, 'waves_per_eu': 2,
-                'kpack': 2, 'matrix_instr_nonkdim': 16
+                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'SPLIT_K': 1, 'GROUP_SIZE_M': 4,
+                'waves_per_eu': 0
             }, num_warps=8, num_stages=2),
         triton.Config(
             {
-                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'SPLIT_K': 1, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0,
-                'kpack': 1
+                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'SPLIT_K': 1, 'GROUP_SIZE_M': 8,
+                'waves_per_eu': 2, 'kpack': 2, 'matrix_instr_nonkdim': 16
             }, num_warps=8, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'SPLIT_K': 1, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
-            num_warps=8, num_stages=2),
+            {
+                'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'SPLIT_K': 1, 'GROUP_SIZE_M': 1,
+                'waves_per_eu': 0, 'kpack': 1
+            }, num_warps=8, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'SPLIT_K': 1, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2},
-            num_warps=4, num_stages=2),
+            {
+                'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'SPLIT_K': 1, 'GROUP_SIZE_M': 4,
+                'waves_per_eu': 0
+            }, num_warps=8, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'SPLIT_K': 1, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
-            num_warps=8, num_stages=2),
+            {
+                'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'SPLIT_K': 1, 'GROUP_SIZE_M': 4,
+                'waves_per_eu': 2
+            }, num_warps=4, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'SPLIT_K': 1, 'GROUP_SIZE_M': 32, 'waves_per_eu': 2},
-            num_warps=4, num_stages=2),
+            {
+                'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'SPLIT_K': 1, 'GROUP_SIZE_M': 1,
+                'waves_per_eu': 2
+            }, num_warps=8, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 256, 'SPLIT_K': 1, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0, 'kpack': 2, 'matrix_instr_nonkdim': 16},
-            num_warps=4, num_stages=2),
+            {
+                'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'SPLIT_K': 1, 'GROUP_SIZE_M': 32,
+                'waves_per_eu': 2
+            }, num_warps=4, num_stages=2),
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 256, 'SPLIT_K': 1, 'GROUP_SIZE_M': 1,
+                'waves_per_eu': 0, 'kpack': 2, 'matrix_instr_nonkdim': 16
+            }, num_warps=4, num_stages=2),
     ],
     key=['M', 'N', 'K'],
     use_cuda_graph=True,
@@ -142,18 +154,14 @@ def matmul_kernel(
     if SPLIT_K == 1:
         tl.store(c_ptrs, c, mask=c_mask)
     else:
-        c_buf_ptrs=c_buf_ptr + pid_z * M * N + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+        c_buf_ptrs = c_buf_ptr + pid_z * M * N + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
         tl.store(c_buf_ptrs, accumulator, mask=c_mask)
 
+
 @triton.jit
-def splitK_reduce(
-    c_ptr, c_buf_ptr,
-    M, N, K,
-    stride_cm, stride_cn,
-    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
-    SPLIT_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr,
-    ACTIVATION: tl.constexpr):
+def splitK_reduce(c_ptr, c_buf_ptr, M, N, K, stride_cm, stride_cn, BLOCK_SIZE_M: tl.constexpr,
+                  BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, SPLIT_K: tl.constexpr,
+                  GROUP_SIZE_M: tl.constexpr, ACTIVATION: tl.constexpr):
 
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -181,6 +189,7 @@ def splitK_reduce(
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     tl.store(c_ptrs, accumulator, mask=c_mask)
 
+
 # Activation function.
 @triton.jit
 def leaky_relu(x):
@@ -197,10 +206,7 @@ def matmul(a, b, c, a_scale, b_scale, scale_a8_b8=False, activation=""):
     K, N = b.shape
     splitk = 1
     c_buf = torch.empty((M, N, splitk), device=a.device, dtype=torch.float32)
-    grid = lambda META: (
-        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
-        META['SPLIT_K']
-    )
+    grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), META['SPLIT_K'])
     matmul_kernel[grid](
         a,
         b,
@@ -219,7 +225,7 @@ def matmul(a, b, c, a_scale, b_scale, scale_a8_b8=False, activation=""):
         b_scale,
         APPLY_SCALE=scale_a8_b8,
         ACTIVATION=activation,
-#        SPLIT_K = splitk,
+        #        SPLIT_K = splitk,
     )
     if splitk > 1:
         c.copy_(torch.sum(c_buf, dim=2))
@@ -271,9 +277,9 @@ def gen_input(M, N, dtype, needTrans, seed, device='cuda'):
 
 
 def get_x_vals():
-#    x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
+    #    x_vals = [(1024 * v, 1024 * v, 1024 * v) for v in range(1, 9)]
 
-#    x_vals += [(4864, 4096, 8192), (9728, 8192, 65536), (4864, 8192, 4160)]
+    #    x_vals += [(4864, 4096, 8192), (9728, 8192, 65536), (4864, 8192, 4160)]
 
     x_vals = [(1, 8192, 28672)]
 
@@ -319,6 +325,7 @@ def get_type(provider):
     res = re.findall(r'\(.*?\)', provider)
     return res[0][1:-1]
 
+
 def ms_to_gibps(M: int, N: int, K: int, milliseconds: float) -> float:
     read_elems: int = M * K + K * N
     write_elems: int = M * N
@@ -328,18 +335,19 @@ def ms_to_gibps(M: int, N: int, K: int, milliseconds: float) -> float:
     seconds: float = 1e-3 * milliseconds
     return round(transf_gibibytes / seconds, 2)
 
+
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['M', 'N', 'K'],
         x_vals=get_x_vals(),
         line_arg='provider',
         line_vals=[
-#            'rocblas(fp16)', 'rocblas(bf16)', 'triton(fp16)', 'triton(bf16)', 'triton(int8)', 'triton(fp8e4)',
-#            'triton(fp8e5)'
+            #            'rocblas(fp16)', 'rocblas(bf16)', 'triton(fp16)', 'triton(bf16)', 'triton(int8)', 'triton(fp8e4)',
+            #            'triton(fp8e5)'
             'rocblas(fp16)', 'rocblas(bf16)', 'triton(fp16)'
         ],
         line_names=[
-#            "rocBLAS.Fp16", "rocBLAS.Bf16", "Triton.Fp16", "Triton.Bf16", "Triton.Int8", "Triton.Fp8E4", "Triton.Fp8E5"
+            #            "rocBLAS.Fp16", "rocBLAS.Bf16", "Triton.Fp16", "Triton.Bf16", "Triton.Int8", "Triton.Fp8E4", "Triton.Fp8E5"
             "rocBLAS.Fp16", "rocBLAS.Bf16", "Triton.Fp16"
         ],
         ylabel="TFLOPS",
@@ -371,7 +379,7 @@ def benchmark(M, N, K, provider):
         global verbose
         if verbose:
             gbps = ms_to_gibps(M, N, K, ms)
-#            print(f'SIZE: {M},{N},{K}   Best tuning config: ({matmul_kernel.best_config()})')
+            #            print(f'SIZE: {M},{N},{K}   Best tuning config: ({matmul_kernel.best_config()})')
             print(f'SIZE: {M},{N},{K}, gbps: {gbps}')
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
