@@ -137,7 +137,7 @@ def _layer_norm_bwd_dx_fused(DX,  # pointer to the input gradient
                              Rstd,  # pointer to the 1/std
                              stride,  # how much to increase the pointer when moving by 1 row
                              N,  # number of columns in X
-                             NUM_ROWS: tl.constexpr, BLOCK_N: tl.constexpr):
+                             NUM_ROWS: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
     # Map the program id to the elements of X, DX, and DY it should compute.
     pid = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -146,7 +146,7 @@ def _layer_norm_bwd_dx_fused(DX,  # pointer to the input gradient
     if pid < NUM_ROWS % tile_num:
         rows_per_tile += 1
 
-    cols = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    cols = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     mask = cols < N
     row = pid
     for _ in range(0, rows_per_tile):
@@ -252,29 +252,28 @@ class LayerNorm(torch.autograd.Function):
         # also compute partial sums for DW and DB
         M, N = x_arg.shape
         # grid_bwd = (tile_num,)
-        grid_bwd = lambda meta: (tile_num, triton.cdiv(N, meta['BLOCK_N']))
+        grid_bwd = lambda meta: (tile_num, triton.cdiv(N, meta['BLOCK_SIZE_N']))
         # print(f"block_size = {ctx.BLOCK_SIZE}")
         _layer_norm_bwd_dx_fused[grid_bwd](  #
             dx, dy, _dw, _db, x, w, m, v,  #
             x_arg.stride(0), N,  #
             NUM_ROWS=M,  #
-            BLOCK_N=ctx.BLOCK_SIZE,  #
+            BLOCK_SIZE_N=ctx.BLOCK_SIZE,  #
             num_warps=ctx.num_warps)
         grid_reduce = lambda meta: [triton.cdiv(N, meta['BLOCK_SIZE_N'])]
         # accumulate partial sums in separate kernel
         _layer_norm_bwd_dwdb[grid_reduce](
             _dw, _db, dw, db, min(tile_num, M), N,  #
             BLOCK_SIZE_M=32,  #
-            BLOCK_SIZE_N=128, num_ctas=1)
+            BLOCK_SIZE_N=128)
         return dx, None, dw, db, None
 
 
 layernorm = LayerNorm.apply
 
 
-def torch_layernorm(x, w, b):
+def torch_layernorm(x, w_shape, w, b):
     M, N = x.shape
-    w_shape = (N, )
     y_torch = torch.nn.functional.layer_norm(x, w_shape, w, b, eps=1e-5)
     return y_torch
 
@@ -287,6 +286,8 @@ def run_layernorm(M, N):
     w = torch.rand(w_shape, device='cuda')
     b = torch.rand(w_shape, device='cuda')
     y_triton = layernorm(x, w, b)
+
+
 
     return y_triton
 
@@ -327,7 +328,7 @@ def test_layernorm(M, N, eps=1e-5):
     y_ref.backward(dy, retain_graph=True)
     dx_ref, dw_ref, db_ref = [_.grad.clone() for _ in [x, w, b]]
 
-    assert torch.allclose(y_triton, y_ref, rtol=1e-05, atol=1e-04)
+    assert torch.allclose(y_triton, y_ref, rtol=1e-05, atol=1e-06)
     assert torch.allclose(dx_tri, dx_ref, rtol=1e-05, atol=1e-03)
     assert torch.allclose(db_tri, db_ref, rtol=1e-05, atol=1e-03)
     assert torch.allclose(dw_tri, dw_ref, rtol=1e-05, atol=1e-03)
@@ -357,36 +358,73 @@ def run_benchmark(args):
         x_names = ['N']
     dtype = arg_to_torch_dtype[args.dtype]
 
-    print(plot_name)
-    config.append(
-        triton.testing.Benchmark(
-            x_names=x_names,
-            x_vals=x_vals_list,
-            line_arg='provider',
-            line_vals=['triton', 'torch'],
-            line_names=[
-                "Triton",
-                "Torch",
-            ],
-            styles=[('blue', '-'), ('green', '-')],
-            ylabel="GB/s",
-            plot_name=plot_name,
-            args=mn_args,
-        ))
+    if args.mode == 'fwd' or args.mode == 'both':
+        mn_args['mode'] = 'forward'
+        config.append(
+            triton.testing.Benchmark(
+                x_names=x_names,
+                x_vals=x_vals_list,
+                line_arg='provider',
+                line_vals=['triton', 'torch'],
+                line_names=[
+                    "Triton",
+                    "Torch",
+                ],
+                styles=[('blue', '-'), ('green', '-')],
+                ylabel="GB/s",
+                plot_name=plot_name,
+                args=mn_args,
+            ))
 
+    if args.mode == 'bwd' or args.mode == 'both':
+        mn_args['mode'] = 'backward'
+        config.append(
+            triton.testing.Benchmark(
+                x_names=x_names,
+                x_vals=x_vals_list,
+                line_arg='provider',
+                line_vals=['triton', 'torch'],
+                line_names=[
+                    "Triton",
+                    "Torch",
+                ],
+                styles=[('blue', '-'), ('green', '-')],
+                ylabel="GB/s",
+                plot_name=plot_name,
+                args=mn_args,
+            ))
+    plot_name += f"_{args.mode}_pass"
+
+    print(plot_name)
     @triton.testing.perf_report(config)
-    def benchmark(M, N, provider):
+    def benchmark(M, N, provider, mode='forward'):
         x = torch.randn(M, N, device='cuda', dtype=dtype)
         w_shape = (N, )
         w = torch.rand(w_shape, device='cuda', dtype=dtype)
         b = torch.rand(w_shape, device='cuda', dtype=dtype)
+        dy = .1 * x.randn_like(x)
         stream = torch.cuda.Stream()
         torch.cuda.set_stream(stream)
-        if provider == 'torch':
-            ms = triton.testing.do_bench(lambda: torch_layernorm(x, w, b))
-        if provider == 'triton':
-            ms = triton.testing.do_bench(lambda: layernorm(x, w, b))
-        gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
+
+        def y_fwd():
+            if provider == 'triton':
+                return layernorm(x, w_shape, w, b)
+            if provider == 'torch':
+                return torch_layernorm(x, w_shape, w, b)
+
+
+        if mode == 'forward':
+            gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
+            ms = triton.testing.do_bench(y_fwd)
+            # if provider == 'torch':
+            #     ms = triton.testing.do_bench(lambda: torch_layernorm(x, w_shape, w, b))
+            # if provider == 'triton':
+            #     ms = triton.testing.do_bench(lambda: layernorm(x, w_shape, w, b))
+        if mode == 'backward':
+            y = y_fwd()
+            gbps = lambda ms: 3 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)  # noqa: F811, E704
+            ms = triton.testing.do_bench(lambda: y.backward(dy, retain_graph=True, grad_to_none=[x]))
+
         return gbps(ms)
 
     benchmark.run(save_path=".", show_plots=True, print_data=True)
@@ -409,6 +447,7 @@ def parse_args():
 
     parser.add_argument('-d', "--dtype", default="fp16")
     parser.add_argument('-nb', "--no_benchmark", default=False, type=bool)
+    parser.add_argument('-mode', "--mode", default='fwd', type=str, help='run forward or backward or both passes, default is forward')
 
     return parser.parse_args()
 
