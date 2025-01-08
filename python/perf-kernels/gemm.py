@@ -6,6 +6,8 @@ import argparse
 import pytest
 import re
 
+from utils.benchmark_utils import get_available_models, get_model_configs
+
 
 @triton.autotune(
     configs=[
@@ -275,7 +277,7 @@ def get_type(provider):
         plot_name="matmul-performance",
         args={},
     ))
-def benchmark(M, N, K, provider):
+def benchmark(M, N, K, provider, model=None):
     in_dtype = name_to_torch_types[get_type(provider)]
     out_dtype = in_dtype
 
@@ -304,14 +306,29 @@ def benchmark(M, N, K, provider):
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
-# TODO(vgokhale): Add more options to benchmarking
 def parse_args():
     parser = argparse.ArgumentParser(
         prog="GEMM tutorial example",
         allow_abbrev=False,
     )
 
+    parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
+
+    available_models = get_available_models(model_families=["llama3"])  # Dynamically load model names
+    model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
+                  "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
+    parser.add_argument('-model', type=str, default=None, help=model_help)
+    parser.add_argument('-b', type=int, default=0,
+                        help="Batch size used together with model. Defaults to 1 if not provided.")
+    parser.add_argument(
+        '-sl', type=int, default=0,
+        help="Sequence length used together with model. Defaults to max_seq_len from model config if not provided.")
+
     parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
+    parser.add_argument("-M", type=int, default=0)
+    parser.add_argument("-N", type=int, default=0)
+    parser.add_argument("-K", type=int, default=0)
+
     args = parser.parse_args()
 
     return args
@@ -323,6 +340,28 @@ def main():
     global verbose
     args = parse_args()
     verbose = args.v
+
+    if args.model:
+        config_file = args.model_configs
+        configs = get_model_configs(config_path=config_file, model_families=["llama3"], model=args.model)
+        mnk_list = []
+        batch_size = args.b if args.b else 1
+
+        for model_name, config in configs.items():
+            seq_len = args.sl if args.sl else config["max_ctx_len"]
+            M, N, K = batch_size * seq_len, config["hidden_size"], config["intermediate_size"]
+            mnk_list.append((model_name, M, N, K))
+
+        benchmark.benchmarks.x_names = ['model', 'M', 'N', 'K']
+        benchmark.benchmarks.x_vals = mnk_list
+
+    if args.M or args.N or args.K:
+        assert args.model is None, "Providing both -model and -M/N/K is not compatible! -model already fixes -M/N/K."
+
+    if args.M and args.N and args.K:
+        x_vals = [(args.M, args.N, args.K)]
+        benchmark.benchmarks.x_vals = x_vals
+
     benchmark.run(show_plots=True, print_data=True)
 
 
