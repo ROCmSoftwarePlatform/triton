@@ -360,8 +360,6 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaDa
     _, N, K = b.shape
     grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
 
-
-
     moe_gemm_kernel[grid](a, b, c, a_descale, b_descale, a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2),  c.stride(1),
                           c.stride(2),stride_bse, stride_bsn, top_k, topk_weights, sorted_token_ids, expert_ids, EM, N, K,
                           MUL_ROUTED_WEIGHT=topk_weights is not None, use_fp8_w8a8=use_fp8_w8a8, use_int8_w8a16=use_int8_w8a16, **config)
@@ -587,7 +585,11 @@ def model_benchmark_configs(args):
 def run_benchmark(custom, args):
     print_time = args.return_time
     routed_weight = args.routed_weight
+    use_int8_w8a16 = args.int8_w8a16
+    use_fp8_w8a8 = args.fp8_w8a8
     dtype = arg_to_torch_dtype[args.dtype]
+    fp8_type = arg_to_torch_dtype[args.fp8_type]
+
     x_names = ['M', 'K', 'N', 'E', 'top_k']
     if custom:
         assert args.M and args.K and args.N and args.E and args.top_k, \
@@ -611,27 +613,35 @@ def run_benchmark(custom, args):
         line_vals = ['tflops', 'bandwidth']
         line_names = ['TFLOPS', 'Bandwidth (GB/s)']
 
-    benchmark = triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='metric',  # <--- important
-                                         line_vals=line_vals,  # <--- a list of 2 metrics
-                                         line_names=line_names,  # <--- matching 2 metrics
+    benchmark = triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='metric',
+                                         line_vals=line_vals,
+                                         line_names=line_names,
                                          styles=[('red', '-'),
-                                                 ('blue', '-')], ylabel='ms / TFLOPS / GB/s',  # or a more generic label
+                                                 ('blue', '-')], ylabel='ms / TFLOPS / GB/s',
                                          plot_name='moe-gemm-benchmark',
-                                         args={'dtype': dtype, 'routed_weight': routed_weight})
+                                         args={'dtype': dtype, 'routed_weight': routed_weight, 'use_fp8_w8a8':use_fp8_w8a8, 'use_int8_w8a16':use_int8_w8a16, 'fp8_type':fp8_type})
 
     @triton.testing.perf_report([benchmark])
-    def bench_moe_gemm(M, K, N, E, top_k, dtype, routed_weight, metric, model=None):
+    def bench_moe_gemm(M, K, N, E, top_k, dtype, routed_weight, metric, use_fp8_w8a8, use_int8_w8a16, fp8_type, model=None):
         # metric will be either 'time'/'tflops' or 'bandwidth'
         a, b, c, metadata = input_helper(
-            M, K, N, top_k, E, routed_weight=routed_weight, dtype=dtype)
+            M, K, N, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=use_fp8_w8a8, use_int8_w8a16=use_int8_w8a16, fp8_type=fp8_type, dtype=dtype)
 
         flops = 2.0 * M * top_k * K * N
         if routed_weight:
             flops += M * top_k * N
 
-        bytes_ = torch.tensor([], dtype=dtype).element_size()
-        mem_read = (M * K + top_k * N * K) * bytes_
-        mem_write = (M * top_k * N) * bytes_
+        if use_fp8_w8a8:
+            a_bytes = b_bytes = torch.tensor([], dtype=fp8_type).element_size()
+            c_bytes = torch.tensor([], dtype=dtype).element_size()
+        elif use_int8_w8a16:
+            b_bytes = torch.tensor([], dtype=torch.int8).element_size()
+            a_bytes = c_bytes = torch.tensor([], dtype=dtype).element_size()
+        else:
+            a_bytes = b_bytes = c_bytes = torch.tensor([], dtype=dtype).element_size()
+
+        mem_read = (M * K) * a_bytes + (top_k * N * K) * b_bytes
+        mem_write = (M * top_k * N) * c_bytes
         mem = mem_read + mem_write
         fn = lambda: moe_gemm(a, b, c, metadata)
         ms = triton.testing.do_bench(fn)
@@ -668,13 +678,16 @@ def parse_args():
     parser.add_argument("-E", type=int, default=0, help="Number of experts")
     parser.add_argument("-top_k", type=int, default=0, help="top_k experts per token")
     parser.add_argument("-routed_weight", action='store_true', default=False)
+    parser.add_argument("-int8_w8a16", action='store_true', default=False)
+    parser.add_argument("-fp8_w8a8", action='store_true', default=False)
     parser.add_argument("-dtype", default='fp16')
+    parser.add_argument("-fp8_type", default='e5m2')
     parser.add_argument("-return_time", action='store_true', default=False, help='Return time instead of TFLOPs')
     args = parser.parse_args()
     return args
 
 
-arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
+arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32, "e5m2": torch.float8_e5m2, "e5m2fnuz": torch.float8_e5m2fnuz, "e4m3fn": torch.float8_e4m3fn, "e4m3fnuz": torch.float8_e4m3fnuz}
 
 
 def main():
