@@ -81,7 +81,6 @@ def layernorm_kernel(x_ptr,
     col_offsets = loop_num_l * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     x_block = tl.load(x_ptr_start + col_offsets, mask=col_offsets < n_cols, other=0.).to(tl.float32)
     _mean += x_block
-
     mean = tl.sum(_mean, axis=0) / n_cols
 
     #variance
@@ -223,16 +222,15 @@ class LayerNorm(torch.autograd.Function):
         BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
         # heuristics for number of warps
         num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
-
         layernorm_kernel[(M, )](
             x, y, weight, bias, mean, rstd,
             x.stride(0), y.stride(0), M, N, eps, BLOCK_SIZE
         )
-
         ctx.save_for_backward(x, weight, bias, mean, rstd)
         ctx.BLOCK_SIZE = BLOCK_SIZE
         ctx.num_warps = num_warps
         ctx.eps = eps
+
         return y
 
 
@@ -253,9 +251,7 @@ class LayerNorm(torch.autograd.Function):
         # enqueue kernel using forward pass heuristics
         # also compute partial sums for DW and DB
         M, N = x_arg.shape
-        # grid_bwd = (tile_num,)
         grid_bwd = lambda meta: (tile_num, triton.cdiv(N, meta['BLOCK_SIZE_N']))
-        # print(f"block_size = {ctx.BLOCK_SIZE}")
         _layer_norm_bwd_dx_fused[grid_bwd](  #
             dx, dy, _dw, _db, x, w, m, v,  #
             x_arg.stride(0), N,  #
@@ -268,6 +264,7 @@ class LayerNorm(torch.autograd.Function):
             _dw, _db, dw, db, min(tile_num, M), N,  #
             BLOCK_SIZE_M=32,  #
             BLOCK_SIZE_N=128)
+        
         return dx, None, dw, db, None
 
 
@@ -288,8 +285,6 @@ def run_layernorm(M, N):
     w = torch.rand(w_shape, device='cuda')
     b = torch.rand(w_shape, device='cuda')
     y_triton = layernorm(x, w_shape, w, b)
-
-
 
     return y_triton
 
