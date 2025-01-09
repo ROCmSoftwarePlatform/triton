@@ -1,0 +1,7 @@
+adding --use-mask gets rid uf llir having segfaults.
+removing triton_cache changes pass vs fail.
+
+TFlops - Scenario
+596 - default kernel in gemm_sub.py, default compiler.
+586 - mfma_order nosb nomask.
+575 - mfma_order_sb_nomask_orig.ttgir/llir.
