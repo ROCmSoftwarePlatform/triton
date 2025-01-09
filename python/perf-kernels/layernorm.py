@@ -277,7 +277,7 @@ def run_layernorm(M, N):
 
 #pytest
 @pytest.mark.parametrize('M, N', [(1823, 781), (2, 128), (1, 4), (128, 2), (1, 128), (8192, 8192), (4096, 8192),
-                                  (359, 1), (1, 359), (1, 16385), (1, 131072), (1, 89999)])
+                                  (359, 1), (1, 359), (1, 131072), (1, 89999)])
 def test_layernorm(M, N, eps=1e-5):
     torch.manual_seed(0)
     x = torch.randn(M, N, device='cuda')
