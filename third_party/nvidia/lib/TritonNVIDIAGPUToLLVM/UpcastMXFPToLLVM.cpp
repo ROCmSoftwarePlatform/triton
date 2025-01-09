@@ -1,10 +1,12 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 
+#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -12,12 +14,78 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/raw_ostream.h"
 #include <array>
 
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
+
+// Convert 8 fp4 elements packed into a 32bit reg into 8 bf16 elements packed
+// into 4 32bits regs.
+static constexpr const char *ptxAsm =
+    "{\n"
+    ".reg .b32 a<14>;\n"
+    "and.b32  	a0, $4, -2004318072;\n\t"
+    "shr.u32 	a1, a0, 3;\n\t"
+    "and.b32  	a2, $4, 2004318071;\n\t"
+    "shr.u32 	a3, a2, 16;\n\t"
+    "shr.u32 	a4, a0, 19;\n\t"
+    "prmt.b32 a5, -1065353216, -1065336832, a2;\n\t"
+    "prmt.b32 a6, -1065353216, -1065336832, a3;\n\t"
+    "prmt.b32 a7, 1061109504, 1077952576, a2;\n\t"
+    "prmt.b32 a8, 1061109504, 1077952576, a3;\n\t"
+    "prmt.b32 a9, 32768, 0, a1;\n\t"
+    "prmt.b32 a10, 32768, 0, a4;\n\t"
+    "or.b32  	a11, a7, a9;\n\t"
+    "or.b32  	a12, a8, a10;\n\t"
+    "prmt.b32 $0, a5, a11, 20800;\n\t"
+    "prmt.b32 $1, a5, a11, 29538;\n\t"
+    "prmt.b32 $2, a6, a12, 20800;\n\t"
+    "prmt.b32 $3, a6, a12, 29538;\n\t"
+    "}";
+
+static Value createInlineAsmUpcast(Location loc, RewriterBase &rewriter,
+                                   Type retType, Value packedVec) {
+  PTXBuilder builder;
+  SmallVector<PTXBuilder::Operand *> operands;
+  for (int i = 0; i < 4; i++) {
+    operands.push_back(builder.newOperand("=r"));
+  }
+  operands.push_back(builder.newOperand(packedVec, "r"));
+  auto &ptxOp = *builder.create(ptxAsm);
+  ptxOp(operands, /*onlyAttachMLIRArgs=*/true);
+  Value result = builder.launch(rewriter, loc, retType, false);
+  return result;
+}
+
+static SmallVector<Value> convertMxfp4x2ToBf16x2PTX(RewriterBase &rewriter,
+                                                    Location loc,
+                                                    ArrayRef<Value> values) {
+  SmallVector<Value> results;
+  MLIRContext *ctx = rewriter.getContext();
+  assert(values.size() % 4 == 0);
+  for (int i = 0; i < values.size(); i += 4) {
+    Value v0 = values[i];
+    Value v1 = values[i + 1];
+    Value v2 = values[i + 2];
+    Value v3 = values[i + 3];
+    Value packedVec = undef(vec_ty(i8_ty, 4));
+    packedVec = insert_element(packedVec, v0, i32_val(0));
+    packedVec = insert_element(packedVec, v1, i32_val(1));
+    packedVec = insert_element(packedVec, v2, i32_val(2));
+    packedVec = insert_element(packedVec, v3, i32_val(3));
+    SmallVector<Type> rets(4, i32_ty);
+    Type retType = struct_ty(rets);
+    Value ret = createInlineAsmUpcast(loc, rewriter, retType, packedVec);
+    for (int i = 0; i < 4; i++) {
+      Value extractI32 = extract_val(ret, i);
+      Value vecbf16 = bitcast(extractI32, vec_ty(bf16_ty, 2));
+      results.push_back(extract_element(vecbf16, i32_val(0)));
+      results.push_back(extract_element(vecbf16, i32_val(1)));
+    }
+  }
+  return results;
+}
 
 namespace {
 class UpcastMXFPOpPattern : public ConvertOpToLLVMPattern<UpcastMXFPOp> {
@@ -29,60 +97,6 @@ public:
                       const TargetInfoBase &targetInfo, PatternBenefit benefit)
       : ConvertOpToLLVMPattern<UpcastMXFPOp>(typeConverter, benefit),
         targetInfo(targetInfo) {}
-
-  llvm::SmallVector<Value>
-  unpackFP4Elements(Location loc, ConversionPatternRewriter &rewriter,
-                    const llvm::SmallVector<Value> &vals, Value laneId) const {
-    auto fp4x2ToBf16x2 = [&loc, &rewriter](Value v) -> Value {
-      auto em0 = and_(v, i8_val(0x70));
-      auto em1 = and_(v, i8_val(0x7));
-      Value v0 = or_(shl(zext(i16_ty, em0), i16_val(2)),
-                     shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(8)));
-      Value v1 = or_(shl(zext(i16_ty, em1), i16_val(6)),
-                     shl(zext(i16_ty, and_(v, i8_val(0x8))), i16_val(12)));
-
-      // Three cases:
-      // 1) x is normal and non-zero: Correct bias
-      v0 = select(icmp_ne(and_(em0, i8_val(0x60)), i8_val(0)),
-                  add(v0, i16_val((127 - 1) << 7)), v0);
-      v1 = select(icmp_ne(and_(em1, i8_val(0x6)), i8_val(0)),
-                  add(v1, i16_val((127 - 1) << 7)), v1);
-
-      // 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in
-      // bf16
-      v0 = select(icmp_eq(em0, i8_val(0x10)),
-                  or_(i16_val(16128), and_(v0, i16_val(0x8000))), v0);
-      v1 = select(icmp_eq(em1, i8_val(0x1)),
-                  or_(i16_val(16128), and_(v1, i16_val(0x8000))), v1);
-      // 3) x is zero, nothing to do
-
-      // Swap as they come packed in big endian
-      return or_(zext(i32_ty, v0), shl(zext(i32_ty, v1), i32_val(16)));
-    };
-
-    auto fp4x8ToBf16x2 = [&loc, &rewriter, &fp4x2ToBf16x2](
-                             Value v) -> llvm::SmallVector<Value, 4> {
-      llvm::SmallVector<Value, 4> results(4);
-      for (int i = 0; i < 4; ++i) {
-        auto v_i = trunc(i8_ty, lshr(v, i32_val(8 * i)));
-        results[i] = fp4x2ToBf16x2(v_i);
-      }
-      return results;
-    };
-
-    // Split fp4x8 into 4 bf16x2
-    llvm::SmallVector<Value> ret;
-    ret.reserve(vals.size() * 4);
-    for (int i = 0; i < vals.size(); ++i) {
-      auto vs = fp4x8ToBf16x2(vals[i]);
-      assert(vs.size() == 4);
-      for (auto v : vs) {
-        ret.push_back(v);
-      }
-    }
-
-    return ret;
-  }
 
   LogicalResult
   matchAndRewrite(UpcastMXFPOp op, OpAdaptor adaptor,
@@ -103,46 +117,43 @@ public:
     Value warpId = udiv(tid, warpSize);
     Value laneId = urem(tid, warpSize);
 
-    if (fpType == F8F6F4Type::E2M1) {
-      xVals = unpackFP4Elements(loc, rewriter, xVals, laneId);
-    }
+    auto kWidth =
+        cast<DotOperandEncodingAttr>(op.getType().getEncoding()).getKWidth();
 
-    auto scaleBf16x2 = [&loc, &rewriter](Value v, Value s) -> Value {
-      // Split bf16x2 into 2 bf16, scale each of them, and pack them back
-      // TODO Is it true that the bfloats are always packed as bf16x2?
-      auto bf16_0 = bitcast(trunc(i16_ty, v), bf16_ty);
-      auto bf16_1 = bitcast(trunc(i16_ty, lshr(v, i32_val(16))), bf16_ty);
-      auto scaleIsNan = icmp_eq(s, i8_val(0xff));
-      auto scaleBf16 = bitcast(shl(zext(i16_ty, s), i16_val(7)), bf16_ty);
-      auto scaledBf16_0 = fmul(bf16_0, scaleBf16);
-      auto scaledBf16_1 = fmul(bf16_1, scaleBf16);
-      auto i16_0 = bitcast(scaledBf16_0, i16_ty);
-      auto i16_1 = bitcast(scaledBf16_1, i16_ty);
-      auto packed =
-          or_(zext(i32_ty, i16_0), shl(zext(i32_ty, i16_1), i32_val(16)));
-      // Account for NaN in the scale as per the mxfp specification
-      auto packed_nan = select(scaleIsNan, i32_val(0x7fff7fff), packed);
-      return packed_nan;
-    };
+    if (fpType == ScaleDotElemType::E2M1)
+      xVals = convertMxfp4x2ToBf16x2PTX(rewriter, loc, xVals);
 
     // Each thread owns elements of 4 mxfp vectors so we need 4 scales
-    // Letting c = tid / 4 * 2, we need the elements from threads c, c + 1, c +
-    // 16, c + 17
+    // Since we go from a threadShape of 8x4 to 16x2, we let c = tid / 4 * 2
+    // Then, we need elements c and c + 16 for the first two mxfp vectors
+    // and elements c + 1 and c + 17 for the last two mxfp vectors
     auto c = mul(udiv(laneId, i32_val(4)), i32_val(2));
-    std::array<Value, 4> ci = {c, add(c, i32_val(1)), add(c, i32_val(16)),
+    std::array<Value, 4> ci = {c, add(c, i32_val(16)), add(c, i32_val(1)),
                                add(c, i32_val(17))};
 
+    // TODO Move this logic to using LinearLayouts
+    // Each scale in a warp has to be replicated to cover a tile of shape mxk =
+    // 16x64 This 16x64 tile is split into 4 subtiles of shape 8x32, each of
+    // which will have to gather a scale and multiply its relevant part of the
+    // mxfp vector This tile of 8x32 is split in to 8x4 vectors, leaving each
+    // vector with 1x8 mxfp elements as long as kWidth * 4 <= 32
+    assert(kWidth <= 8 &&
+           "NYI for larger kWidth (but we could do it with less shuffles!)");
     for (auto [i, scaleVal] : llvm::enumerate(scaleVals)) {
-      // column major as per the DotOperandEncoding(opidx=0) layout
-      auto si = std::array<Value, 4>{
-          targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[0]),
-          targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[2]),
-          targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[1]),
-          targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[3]),
-      };
-
-      for (int j = 0; j < 16; ++j) {
-        xVals[16 * i + j] = scaleBf16x2(xVals[16 * i + j], si[j / 4]);
+      for (int mxfp = 0; mxfp < 2; ++mxfp) {
+        auto si = std::array<Value, 2>{
+            targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[mxfp * 2 + 0]),
+            targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[mxfp * 2 + 1])};
+        for (int rep = 0; rep < 8 / kWidth; ++rep) {
+          for (int subTile = 0; subTile < 2; ++subTile) {
+            for (int k = 0; k < kWidth; ++k) {
+              auto idx =
+                  32 * i + 16 * mxfp + rep * 2 * kWidth + subTile * kWidth + k;
+              xVals[idx] =
+                  LLVM::mxfpScaleBf16(rewriter, loc, xVals[idx], si[subTile]);
+            }
+          }
+        }
       }
     }
 

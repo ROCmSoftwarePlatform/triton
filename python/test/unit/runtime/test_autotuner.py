@@ -32,7 +32,8 @@ def test_kwargs(use_cuda_graph: bool, device: str):
     assert len(_kernel.cache) == 2
 
 
-def test_restore(device):
+@pytest.mark.parametrize('pass_kwargs_to_kernel', [False, True])
+def test_restore(pass_kwargs_to_kernel, device):
     N = 1024
     src = torch.zeros(N, device=device)
 
@@ -46,7 +47,10 @@ def test_restore(device):
         tl.store(src + offsets, x, mask=offsets < N)
 
     grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
-    _kernel[grid](src, N)
+    if pass_kwargs_to_kernel:
+        _kernel[grid](src=src, N=N)
+    else:
+        _kernel[grid](src, N)
     triton.testing.assert_close(src, torch.ones_like(src))
 
 
@@ -82,7 +86,7 @@ def test_hooks(device):
     _kernel[(1, )](src, N)
 
     # On NVIDIA GPUs:
-    # The tunning knob `num_stages` can be set by users.
+    # The tuning knob `num_stages` can be set by users.
     # This will cause out of resources when N_STAGES = 100
     # shared memory bytes = N_STAGES * BLOCK_SIZE * sizeof(float)
     # On AMD GPUs:

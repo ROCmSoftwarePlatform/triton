@@ -3,7 +3,7 @@ import hashlib
 import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
-from ..backends.compiler import GPUTarget, AttrsDescriptor
+from ..backends.compiler import GPUTarget
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
@@ -25,19 +25,13 @@ import sysconfig
 # - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
 #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
 # - (attributes \{[\S\s]+\})? : optionally match attributes enclosed in braces and capture it as group 3
-mlir_prototype_pattern = r"^\s*tt\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: [\S\s]+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*(attributes \{[\S\s]+\})?\s+\{\s*$"
 ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
 prototype_pattern = {
-    "ttir": mlir_prototype_pattern,
-    "ttgir": mlir_prototype_pattern,
     "ptx": ptx_prototype_pattern,
 }
 
-mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<)]+|<[^>]+>)+(?: {[^}]+})?),?'
 ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
 arg_type_pattern = {
-    "ttir": mlir_arg_type_pattern,
-    "ttgir": mlir_arg_type_pattern,
     "ptx": ptx_arg_type_pattern,
 }
 
@@ -55,46 +49,32 @@ def convert_type_repr(x):
     return x
 
 
-def _get_num_warps_from_ir_str(src: str):
-    ttgir_num_warps_pattern = r'"triton_gpu.num-warps"\s?=\s?(\d+)\s?:'
-    # TODO(jlebar): Using a regex to get num-warps is a hack, and will break if
-    # e.g. someone has an instruction (not module) attribute named "num-warps".
-    num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
-    assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
-    num_warps = int(num_warps_matches[0])
-    return num_warps
-
-
 class ASTSource:
 
-    def __init__(self, fn, signature, constants=None, attrs=None) -> None:
+    def __init__(self, fn, signature, constexprs=None, attrs=None) -> None:
         self.fn = fn
         self.ext = "ttir"
         self.name = fn.__name__
         self.signature = signature
-        self.constants = constants
-        self.attrs = attrs
+        self.constants = dict()
+        if constexprs is not None:
+            for k, v in constexprs.items():
+                k = (fn.arg_names.index(k), ) if isinstance(k, str) else k
+                assert isinstance(k, tuple)
+                self.constants[k] = v
+        self.attrs = attrs or dict()
         if isinstance(self.signature, str):
             self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
         else:
             for k in self.signature.keys():
                 if not isinstance(k, str):
                     raise TypeError("Signature keys must be string")
-        if self.constants is None:
-            self.constants = {}
-        else:
-            for k in self.constants.keys():
-                if not isinstance(k, str):
-                    raise TypeError("Constants keys must be string")
-        if self.attrs is None:
-            self.attrs = AttrsDescriptor()
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
-        # Note - we stringify the keys here to allow sorting to work for cases
-        # where constants have mixed int/str keys.
-        sorted_constants = sorted((str(k), v) for k, v in self.constants.items())
-        key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
+        get_key = lambda x: x.cache_key if hasattr(x, 'cache_key') else str(x)
+        constants_key = '-'.join([get_key(v) for k, v in sorted(self.constants.items())])
+        key = f"{self.fn.cache_key}-{str(self.attrs)}-{sorted_sig}-{constants_key}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
@@ -107,28 +87,42 @@ class ASTSource:
 
 class IRSource:
 
-    def __init__(self, path):
+    def __init__(self, path, context, backend):
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
         self.src = path.read_text()
-        match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
-        self.name = match.group(1)
-        signature = match.group(2)
-        types = re.findall(arg_type_pattern[self.ext], signature)
-        self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
+        ir.load_dialects(context)
+        backend.load_dialects(context)
+
+        # We don't have a easy-to-use PTX parser that we can use, so keep that regex for now.
+        # TODO - replace with a proper parser
+        if self.ext == "ptx":
+            match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
+            self.name = match.group(1)
+            signature = match.group(2)
+            types = re.findall(arg_type_pattern[self.ext], signature)
+            self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
+        else:
+            self.module = ir.parse_mlir_module(self.path, context)
+            fn_name = self.module.get_entry_func_name()
+            self.name = "@" + fn_name
+            funcOp = self.module.get_function(fn_name)
+            func_ty = self.module.get_function_signature(funcOp)
+            self.signature = {k: ty for k, ty in enumerate(func_ty)}
 
     def hash(self):
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
-        module = ir.parse_mlir_module(self.path, context)
-        module.context = context
-        return module
+        self.module.context = context
+        return self.module
 
     def parse_options(self):
         if self.ext == "ttgir":
-            return {'num_warps': _get_num_warps_from_ir_str(self.src)}
+            num_warps = self.module.get_int_attr("ttg.num-warps")
+            assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
+            return {'num_warps': num_warps}
         return dict()
 
 
@@ -153,7 +147,7 @@ def triton_key():
     # backend
     libtriton_hash = hashlib.sha256()
     ext = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
-    with open(os.path.join(TRITON_PATH, f"_C/libtriton.{ext}"), "rb") as f:
+    with open(os.path.join(TRITON_PATH, "_C", f"libtriton.{ext}"), "rb") as f:
         while True:
             chunk = f.read(1024**2)
             if not chunk:
@@ -173,9 +167,9 @@ def parse(full_name, ext, context):
         module = ir.parse_mlir_module(full_name, context)
         module.context = context
         return module
-    if ext == "llir" or ext == "ptx":
+    if ext == "llir" or ext == "ptx" or ext == "amdgcn":
         return Path(full_name).read_text()
-    if ext == "cubin":
+    if ext == "cubin" or ext == "hsaco":
         return Path(full_name).read_bytes()
 
 
@@ -225,7 +219,9 @@ def compile(src, target=None, options=None):
     # create backend
     if ir_source:
         assert isinstance(src, str), "source must be either AST or a filepath"
-        src = IRSource(src)
+        context = ir.context()
+        src = IRSource(src, context, backend)
+
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
@@ -250,7 +246,6 @@ def compile(src, target=None, options=None):
     always_compile = os.environ.get("TRITON_ALWAYS_COMPILE", "0") == "1"
     if not always_compile and metadata_path is not None:
         # cache hit!
-        metadata = json.loads(Path(metadata_path).read_text())
         return CompiledKernel(src, metadata_group, hash)
     # initialize metadata
     metadata = {
@@ -266,16 +261,21 @@ def compile(src, target=None, options=None):
     # when the source is an IR file, don't apply the passes related to this stage. This makes it easier to write IR level tests.
     if ir_source:
         first_stage += 1
-    context = ir.context()
-    ir.load_dialects(context)
-    backend.load_dialects(context)
+
+    # For IRSource, we have already grabbed the context + called both
+    # ir.load_dialects and backend.load_dialects.
+    if not isinstance(src, IRSource):
+        context = ir.context()
+        ir.load_dialects(context)
+        backend.load_dialects(context)
+
     codegen_fns = backend.get_codegen_implementation()
     module_map = backend.get_module_map()
-    try:
-        module = src.make_ir(options, codegen_fns, module_map, context)
-    except Exception as e:
-        filter_traceback(e)
-        raise
+    # try:
+    module = src.make_ir(options, codegen_fns, module_map, context)
+    # except Exception as e:
+    #     filter_traceback(e)
+    #     raise
     use_ir_loc = os.environ.get("USE_IR_LOC", None)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
@@ -300,7 +300,13 @@ def compile(src, target=None, options=None):
     # This is needed to safely finalize threads pool inside context: if current process forks before
     # python GC deletes context object, thread pool in child process will be invalid, which could
     # lead to child crash or hang.
-    context.disable_multithreading()
+    #
+    # However disabling multithreading causes the code to hang if the ASAN pass is enabled
+    # this is likely due to the llvm-symbolizer forking a process
+    # TODO: Reconcile the difference here between the ASAN and non-ASAN path with enabling
+    # multithreading in the MLIR context
+    if not os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+        context.disable_multithreading()
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 
@@ -406,11 +412,8 @@ class CompiledKernel:
         arg_dict = {}
         arg_idx = 0
         for i, arg_name in enumerate(self.src.fn.arg_names):
-            if i in self.src.fn.constexprs:
-                arg_dict[arg_name] = self.src.constants[arg_name]
-            else:
-                arg_dict[arg_name] = args[arg_idx]
-                arg_idx += 1
+            arg_dict[arg_name] = args[arg_idx]
+            arg_idx += 1
         ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
         return ret
 

@@ -42,8 +42,8 @@ static Value createAlloc(scf::ForOp &forOp,
   Attribute sharedMemorySpace =
       triton::gpu::SharedMemorySpaceAttr::get(ty.getContext());
   Type memdescType =
-      tt::MemDescType::get(ty.getShape(), ty.getElementType(), encoding,
-                           sharedMemorySpace, /*mutableMemory*/ true);
+      ttg::MemDescType::get(ty.getShape(), ty.getElementType(), encoding,
+                            sharedMemorySpace, /*mutableMemory*/ true);
   Value alloc = builder.create<ttg::LocalAllocOp>(storeOp->getLoc(),
                                                   memdescType, Value());
   return alloc;
@@ -63,8 +63,10 @@ static void createTMAAsyncCopy(scf::ForOp &forOp,
   builder.create<ttng::TMAStoreWait>(loc, 0);
   builder.create<ttg::LocalStoreOp>(loc, storeOp.getSrc(), alloc);
   builder.create<ttng::FenceAsyncSharedOp>(loc, false);
+  Value tmaPtr = builder.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+      loc, storeOp.getDesc());
   builder.create<ttng::AsyncTMACopyLocalToGlobalOp>(
-      loc, storeOp.getDescPtr(), storeOp.getIndices(), alloc);
+      loc, tmaPtr, storeOp.getIndices(), alloc);
 
   storeOp->erase();
 }
@@ -81,7 +83,7 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
     // Reuse allocations for stores of the same shape and types. This allows
     // saving shared memory usage. It is valid since we have a wait 0 before
     // every local_store. We could pipeline more aggressively if we didn't
-    // re-use but there is a tradeoff with shared memory usage.
+    // reuse but there is a tradeoff with shared memory usage.
     auto key = std::make_pair(op.getSrc().getType().getShape(),
                               op.getSrc().getType().getElementType());
     auto it = allocs.find(key);

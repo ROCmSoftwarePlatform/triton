@@ -22,6 +22,7 @@
  */
 
 #include "../PatternTritonGPUOpToLLVM.h"
+#include "../TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -309,9 +310,15 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
                                i32_val(v * paddedOutputElemSize));
         }
         for (size_t k = 0; k < numRepK; k++) {
-          acc = generateWMMAOp(rewriter, loc, wmmaInstrType, ha[{b, m, k}],
-                               hb[{b, n, k}], acc, aTensorTy.getElementType(),
-                               bTensorTy.getElementType(), dstElemTy, wmmaVer);
+          acc = wmmaLayout.getIsTransposed()
+                    ? generateWMMAOp(
+                          rewriter, loc, wmmaInstrType, hb[{b, n, k}],
+                          ha[{b, m, k}], acc, bTensorTy.getElementType(),
+                          aTensorTy.getElementType(), dstElemTy, wmmaVer)
+                    : generateWMMAOp(
+                          rewriter, loc, wmmaInstrType, ha[{b, m, k}],
+                          hb[{b, n, k}], acc, aTensorTy.getElementType(),
+                          bTensorTy.getElementType(), dstElemTy, wmmaVer);
         }
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
           fc[fcThreadOffIdx + v] = extract_element(
@@ -325,6 +332,10 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   Type structTy = LLVM::LLVMStructType::getLiteral(
       wmmaLayout.getContext(), SmallVector<Type>(fc.size(), dstElemTy));
   Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
+
+  const size_t mmaCount = numRepB * numRepM * numRepN * numRepK;
+  setNumGeneratedMMAs(op, mmaCount, mnkDim[0], mnkDim[1], mnkDim[2], elemTy);
+
   rewriter.replaceOp(op, res);
   return success();
 }
