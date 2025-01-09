@@ -407,7 +407,7 @@ def get_cdna_autotune_configs():
         #               num_stages=1, num_warps=4),
         # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
         #               num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
                       num_stages=1, num_warps=4),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
@@ -485,6 +485,7 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
         num_tiles_total = 1
 
     while tile_id < num_tiles_total:  # loops more than once only if PERSISTENT
+        
         if PERSISTENT:
             # tile id basically tells us the Q block we are handling
             off_z = tile_id // num_tiles_per_sample  # at which batch sample are we
@@ -584,12 +585,14 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
                 # Compute pointers for all the tensors used in this kernel.
                 q_offset = Q + off_z * stride_qz + off_h_q * stride_qh + cu_seqlens_q_start * stride_qm
                 q_ptrs = q_offset + offs_m[:, None] * stride_qm + offs_d[None, :] * stride_qk
+                
                 kv_offset = KV + off_z * stride_kz + off_h_k * stride_kh + cu_seqlens_kv_start * stride_kn
                 kv_ptrs = kv_offset + offs_dc[:, None] * stride_kk + offs_n[None, :] * stride_kn
                 
                 # pointers for position embeddings
                 k_pe_offset = K_PE + off_z * stride_k_pe_z + cu_seqlens_kv_start * stride_k_pe_k
-                k_pe_ptrs = k_pe_offset + offs_n[None, :] * stride_k_pe_k + offs_pe[:, None] * stride_k_pe_n
+                k_pe_ptrs = k_pe_offset + offs_n[None, :] * stride_k_pe_n + offs_pe[:, None] * stride_k_pe_k
+                
                 q_pe_offset = Q_PE + off_z * stride_q_pe_z + off_h_q * stride_q_pe_h
                 q_pe_ptrs = q_pe_offset + offs_m[:, None] * stride_q_pe_m + offs_pe[None, :] * stride_q_pe_k                
 
@@ -651,15 +654,15 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
                 q_ptrs_mask = offs_m[:, None] < seqlen_q
                 if PADDED_HEAD:
                     q_ptrs_mask = q_ptrs_mask & (offs_d[None, :] < ACTUAL_BLOCK_DMODEL)
+                
+                
                 q_nope = tl.load(q_ptrs, mask=q_ptrs_mask, other=0.0)
                 q_pe = tl.load(q_pe_ptrs, mask=q_ptrs_mask, other=0.0)
                 
                 
                 wkv_b1 = tl.load(wkv_b_ptrs1)
                 wkv_b = tl.load(wkv_b_ptrs2).trans()
-
                 q_nope = tl.dot(q_nope, wkv_b1)
-
                 if INT8:
                     k_descale = tl.load(k_descale_ptrs)
                     v_descale = tl.load(v_descale_ptrs)
@@ -1204,7 +1207,7 @@ class _attention(torch.autograd.Function):
 
 
         attn_fwd[grid](q, q_pe, kv, k_pe, wkv_b, metadata.bias, metadata.sm_scale, M, o, *q_strides, *q_pe_strides, *kv_strides, *k_pe_strides, *o_strides, *wkv_b_strides,
-                       *bias_strides, *alibi_strides, 128, 128, q_descale, k_descale, p_scale, p_descale, v_descale,
+                       *bias_strides, *alibi_strides, 32, 32, q_descale, k_descale, p_scale, p_descale, v_descale,
                        metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p,
                        philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
                        alibi_slopes=metadata.alibi_slopes, HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size,

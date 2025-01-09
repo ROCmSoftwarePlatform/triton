@@ -12,15 +12,15 @@ from MLA import attention, input_helper
 @dataclass
 class ModelArgs:
     attn_impl: str = "naive"
-    dim: int = 2048
-    n_heads: int = 16
+    dim: int = 512
+    n_heads: int = 4
     q_lora_rank: int = 0
-    kv_lora_rank: int = 512
-    qk_nope_head_dim: int = 128
-    qk_rope_head_dim: int = 64
-    v_head_dim: int = 128
-    max_batch_size: int = 8
-    max_seq_len: int = 4096
+    kv_lora_rank: int = 128
+    qk_nope_head_dim: int = 32
+    qk_rope_head_dim: int = 16
+    v_head_dim: int = 32
+    max_batch_size: int = 2
+    max_seq_len: int = 1024
     dtype: str = "bf16"
 
 # Define MLA with Flash Attention integration
@@ -103,18 +103,15 @@ class MLA(nn.Module):
             else:
                 wkv_b = self.wkv_b.weight
                 wkv_b = wkv_b.view(self.n_heads, -1, self.kv_lora_rank)
-                # print(q_nope.shape)
-                # print(wkv_b[:, :self.qk_nope_head_dim].shape)
-                print("q, q_pe, kv, k_pe, wkv_b", q_nope.shape, q_pe.shape, kv.shape, k_pe.squeeze(2).shape, wkv_b.shape)
-
+                print("wkv_b full shape: ", wkv_b.shape)
+                print(f"q_nope x wkv_b1: {q_nope.shape}x{wkv_b[:, :self.qk_nope_head_dim].shape}")
                 q_nope = torch.einsum("bshd,hdc->bshc", q_nope, wkv_b[:, :self.qk_nope_head_dim])
-                # print("q nope after")
-                # print(q_nope.shape)
+
                 self.kv_cache[:bsz, start_pos:end_pos] = self.kv_norm(kv)
                 self.pe_cache[:bsz, start_pos:end_pos] = k_pe.squeeze(2)
-                # print("kv shape")
-                # print(self.kv_cache[:bsz, :end_pos].shape)
 
+                print(f"q_nope x kv: {q_nope.shape}x{self.kv_cache[:bsz, :end_pos].shape}")
+                print(f"q_pe x k_pe: {q_pe.shape}x{self.pe_cache[:bsz, :end_pos].shape}")
 
                 scores = (torch.einsum("bshc,btc->bsht", q_nope, self.kv_cache[:bsz, :end_pos]) +
                           torch.einsum("bshr,btr->bsht", q_pe, self.pe_cache[:bsz, :end_pos])) * self.softmax_scale
@@ -126,18 +123,22 @@ class MLA(nn.Module):
             if attn_impl == "naive":
                 x = torch.einsum("bsht,bthd->bshd", scores, self.v_cache[:bsz, :end_pos])
             else:
-                # print("scores shape")
-                # print(scores.shape)
-                # print("kv shape")
-                # print(self.kv_cache[:bsz, :end_pos].shape)
+                print(f"p x kv: {scores.shape}x{self.kv_cache[:bsz, :end_pos].shape}")
+                print(f"temp x wkv_b: {x.shape}x{wkv_b[:, -self.v_head_dim:].shape}")
                 x = torch.einsum("bsht,btc->bshc", scores, self.kv_cache[:bsz, :end_pos])
                 x = torch.einsum("bshc,hdc->bshd", x, wkv_b[:, -self.v_head_dim:])
         
         if attn_impl == "flash":
             torch.cuda.synchronize()
-            print("here")
+            print("flash")
             print("x shape")
             print(x.shape)
+            x = x.permute((0,2,1,3))
+        # else:
+        #     torch.cuda.synchronize()
+        #     print("ref")
+        #     print("x shape")
+        #     print(x.shape)
         x = self.wo(x.flatten(2))
         return x
 
@@ -190,24 +191,25 @@ def test_mla_forward():
     # Run naive implementation
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
-    args.attn_impl = "absorb"
-    mla_naive = MLA(args).to("cuda").float()
-    output_naive = mla_naive(x, start_pos=0, freqs_cis=freqs_cis, mask=None)
+    args.attn_impl = "flash"
+    mla_1 = MLA(args).to("cuda").float()
+    output_1 = mla_1(x, start_pos=0, freqs_cis=freqs_cis, mask=None)
+    print(output_1.flatten()[:10])
 
     # Run absorb implementation
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
-    args.attn_impl = "flash"
-    mla_absorb = MLA(args).to("cuda").float()
-    output_absorb = mla_absorb(x, start_pos=0, freqs_cis=freqs_cis, mask=None)
+    args.attn_impl = "absorb"
+    mla_2 = MLA(args).to("cuda").float()
+    output_2 = mla_2(x, start_pos=0, freqs_cis=freqs_cis, mask=None)
+    print(output_2.flatten()[:10])
 
     # Compute the difference between the outputs
-    diff = torch.abs(output_naive - output_absorb).mean().item()
+    diff = torch.abs(output_1 - output_2).mean().item()
     print(f"Mean absolute difference between naive and absorb: {diff}")
 
     # Assert that the difference is within tolerance
-    tolerance = 0.02
-    assert diff <= tolerance, f"Difference {diff} exceeds tolerance {tolerance}"
+    torch.testing.assert_close(output_1, output_2, atol=1e-2, rtol=1e-2)
 
     print("Test passed: Differences are within tolerance.")
 
