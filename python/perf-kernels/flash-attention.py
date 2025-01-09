@@ -431,8 +431,11 @@ autotune_configs, autotune_keys = get_autotune_configs()
     use_cuda_graph=True,
 )
 @triton.jit
-def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh, stride_qm, stride_qk, stride_kz,
-             stride_kh, stride_kn, stride_kk, stride_vz, stride_vh, stride_vk, stride_vn, stride_oz, stride_oh,
+def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out,
+             stride_qz, stride_qh, stride_qm, stride_qk, 
+             stride_kz, stride_kh, stride_kn, stride_kk,
+             stride_vz, stride_vh, stride_vk, stride_vn,
+             stride_oz, stride_oh,
              stride_om, stride_on, stride_bz, stride_bh, stride_bm, stride_bn, stride_az, stride_ah, Q_descale,
              K_descale, P_scale, P_descale, V_descale, cu_seqlens_q, cu_seqlens_k, dropout_p, philox_seed,
              PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: tl.constexpr,

@@ -290,7 +290,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias
         if INT8_GEMM:
             qk += ((((tl.dot(q, k).to(tl.float32) * q_descale)) * k_descale) * QK_SCALE)
         elif LATENT_ATTENTION:
-            qk += tl.dot(q_nope, kv)
+            qk += tl.dot(q_nope.to(kv.type.element_ty), kv)
             qk += tl.dot(q_pe, k_pe)
             qk *= QK_SCALE
         else:
@@ -350,8 +350,8 @@ def _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias
         elif LATENT_ATTENTION:
             # p should be BLOCK_M, BLOCK_N
             # 
-            temp = tl.dot(p, kv.trans())
-            acc += tl.dot(temp, wkv_b)
+            temp = tl.dot(p.to(kv.type.element_ty), kv.trans())
+            acc += tl.dot(temp.to(wkv_b.type.element_ty), wkv_b)
         else:
             if INT8_KV:
                 v = (v * v_descale).to(p.type.element_ty)
@@ -604,7 +604,7 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
                 wkv_b_ptrs1 = wkv_b_offset + offs_d1[:, None] * stride_wkv_b_k + offs_dc[None, :] * stride_wkv_b_n
 
                 # Compute pointers for the second part ([-v_head_dim:, compressed d]) needed in the inner loop
-                wkv_b_ptrs2 = wkv_b_offset + offs_d2[:, None] * stride_wkv_b_k + offs_dc[None, :] * stride_wkv_b_n
+                wkv_b_ptrs2 = wkv_b_offset + offs_d2[None, :] * stride_wkv_b_k + offs_dc[:, None] * stride_wkv_b_n
 
                 
                 # Compute pointers for all the scale tensors used in this kernel.
@@ -661,8 +661,11 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
                 
                 
                 wkv_b1 = tl.load(wkv_b_ptrs1)
-                wkv_b = tl.load(wkv_b_ptrs2).trans()
+                wkv_b = tl.load(wkv_b_ptrs2)
                 q_nope = tl.dot(q_nope, wkv_b1)
+                
+                
+                
                 if INT8:
                     k_descale = tl.load(k_descale_ptrs)
                     v_descale = tl.load(v_descale_ptrs)
@@ -1203,11 +1206,11 @@ class _attention(torch.autograd.Function):
         atomic_counter = torch.zeros([1], device=q.device, dtype=torch.int32)
 
         print("inside flash attention")
-        print("q, q_pe, kv, k_pe, wkv_b", q.shape, q_pe.shape, kv.shape, k_pe.shape, wkv_b.shape)
+        print("q_nope, q_pe, kv, k_pe, wkv_b", q.shape, q_pe.shape, kv.shape, k_pe.shape, wkv_b.shape)
 
 
         attn_fwd[grid](q, q_pe, kv, k_pe, wkv_b, metadata.bias, metadata.sm_scale, M, o, *q_strides, *q_pe_strides, *kv_strides, *k_pe_strides, *o_strides, *wkv_b_strides,
-                       *bias_strides, *alibi_strides, 32, 32, q_descale, k_descale, p_scale, p_descale, v_descale,
+                       *bias_strides, *alibi_strides, metadata.qk_nope_head_dim, metadata.v_head_dim, q_descale, k_descale, p_scale, p_descale, v_descale,
                        metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p,
                        philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
                        alibi_slopes=metadata.alibi_slopes, HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size,
