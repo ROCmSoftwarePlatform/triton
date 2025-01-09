@@ -1,8 +1,14 @@
 import re
+import sys
+#import os
+#pwd = os.path.dirname(__file__)
 
-filename = "/home/dtanner/repos/rocm_triton/golden_ir/versions/2_global_loads.llir"
+# filename = "/home/dtanner/repos/rocm_triton/golden_ir/versions/2_global_loads.llir"
+filename = sys.argv[1]
+print(filename)
 with open(filename, 'r') as f:
   llvm_lines = f.readlines()
+  print(len(llvm_lines))
   llvm_str = "".join(llvm_lines)
   f.close()
 
