@@ -6,6 +6,7 @@ import torch
 import triton
 import triton.language as tl
 import os
+import json
 
 
 def is_cuda():
@@ -338,64 +339,105 @@ def test_layernorm(M, N, eps=1e-5):
 #Benchmark
 arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
 
+def get_benchmark_shapes(args):
+    # M, N
+    benchmark_shapes = {}
+    if args.M_benchmark:
+        N = args.N_start
+        shapes = [(m, N) for m in range(args.M_start, args.M_end, args.M_step)]
+        benchmark_shapes['M'] = shapes
+    else:
+        M = args.M_start
+        shapes = [(M, n) for n in range(args.N_start, args.N_end, args.N_step)]
+        benchmark_shapes['N'] = shapes
+
+    return benchmark_shapes
+
+
+def get_model_shapes(args):
+    model_shapes = {}
+    # If user did not provide an absolute path, resolve relative path from script directory
+    if not os.path.isabs(args.model_configs):
+        config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.model_configs)
+    else:
+        config_file = args.model_configs
+
+    with open(config_file, 'r') as f:
+        configs = json.load(f)
+
+    if args.model != "all":
+        model_name = args.model
+        # Check if the model exists
+        if model_name not in configs:
+            raise ValueError(f"Model '{model_name}' not found in {config_file}")
+        # Handle a specific model
+        config = configs[model_name]
+        seq_len = args.sl if args.sl else config["max_ctx_len"]
+        M, N= seq_len, config["hidden_size"]
+        model_shapes[model_name] = [(M, N)]
+    else:
+        # Handle all models
+        for model_name, config in configs.items():
+            seq_len = args.sl if args.sl else config["max_ctx_len"]
+            M, N = seq_len, config["hidden_size"]
+            model_shapes[model_name] = [(M, N)]
+
+    return model_shapes
+
+
+def get_shapes(args):
+    return get_model_shapes(args) if args.model else get_benchmark_shapes(args)
+
 
 def run_benchmark(args):
+    benchmark_shapes = get_shapes(args)
     config = []
-    if (args.M_benchmark):
-        val = args.M_start
-        x_vals_list = []
-        while val <= args.M_end:
-            x_vals_list.append(val)
-            val *= args.M_step
-        mn_args = {'N': args.N_start}
-        plot_name = str("layernorm-performance_" + args.dtype + "_N" + str(args.N_start) + "_M" + str(args.M_start) +
-                        "-" + str(args.M_end) + "-" + str(args.M_step))
-        x_names = ['M']
-    else:
-        x_vals_list = [i for i in range(args.N_start, args.N_end, args.N_step)]
-        mn_args = {'M': args.M_start}
-        plot_name = str("layernorm-performance_" + args.dtype + "_M" + str(args.M_start) + "_N" + str(args.N_start) +
-                        "-" + str(args.N_end) + "-" + str(args.N_step))
-        x_names = ['N']
-    dtype = arg_to_torch_dtype[args.dtype]
+    x_names = ['M', 'N']
+    other_args = {}
+    for name in benchmark_shapes.keys():
+        if args.model:
+            plot_name = str("layernorm-performance_for_model_" + name)
+        else:
+            plot_name = str("layernorm-performance_" + args.dtype + name)
 
-    if args.mode == 'fwd' or args.mode == 'both':
-        fwd_plot_name = plot_name + f"_forward_pass(GBS)"
-        mn_args['mode'] = 'forward'
-        config.append(
-            triton.testing.Benchmark(
-                x_names=x_names,
-                x_vals=x_vals_list,
-                line_arg='provider',
-                line_vals=['triton', 'torch'],
-                line_names=[
-                    "Triton",
-                    "Torch",
-                ],
-                styles=[('blue', '-'), ('green', '-')],
-                ylabel="GB/s",
-                plot_name=fwd_plot_name,
-                args=mn_args,
-            ))
+        dtype = arg_to_torch_dtype[args.dtype]
+        if args.mode == 'fwd' or args.mode == 'both':
+            fwd_plot_name = plot_name + f"_forward_pass(GBS)"
+            other_args['mode'] = 'forward'
+            config.append(
+                triton.testing.Benchmark(
+                    x_names=x_names,
+                    x_vals=benchmark_shapes[name],
+                    line_arg='provider',
+                    line_vals=['triton', 'torch'],
+                    line_names=[
+                        "Triton",
+                        "Torch",
+                    ],
+                    styles=[('blue', '-'), ('green', '-')],
+                    ylabel="GB/s",
+                    plot_name=fwd_plot_name,
+                    args=other_args,
+                ))
 
-    if args.mode == 'bwd' or args.mode == 'both':
-        bwd_plot_name = plot_name + f"_backward_pass(GBS)"
-        mn_args['mode'] = 'backward'
-        config.append(
-            triton.testing.Benchmark(
-                x_names=x_names,
-                x_vals=x_vals_list,
-                line_arg='provider',
-                line_vals=['triton', 'torch'],
-                line_names=[
-                    "Triton",
-                    "Torch",
-                ],
-                styles=[('blue', '-'), ('green', '-')],
-                ylabel="GB/s",
-                plot_name=bwd_plot_name,
-                args=mn_args,
-            ))
+        if args.mode == 'bwd' or args.mode == 'both':
+            bwd_plot_name = plot_name + f"_backward_pass(GBS)"
+            other_args['mode'] = 'backward'
+            config.append(
+                triton.testing.Benchmark(
+                    x_names=x_names,
+                    x_vals=benchmark_shapes[name],
+                    line_arg='provider',
+                    line_vals=['triton', 'torch'],
+                    line_names=[
+                        "Triton",
+                        "Torch",
+                    ],
+                    styles=[('blue', '-'), ('green', '-')],
+                    ylabel="GB/s",
+                    plot_name=bwd_plot_name,
+                    args=other_args,
+                ))
 
     @triton.testing.perf_report(config)
     def benchmark(M, N, provider, mode='forward'):
@@ -416,10 +458,6 @@ def run_benchmark(args):
         if mode == 'forward':
             gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
             ms = triton.testing.do_bench(y_fwd)
-            # if provider == 'torch':
-            #     ms = triton.testing.do_bench(lambda: torch_layernorm(x, w_shape, w, b))
-            # if provider == 'triton':
-            #     ms = triton.testing.do_bench(lambda: layernorm(x, w_shape, w, b))
         elif mode == 'backward':
             x.requires_grad_(True)
             w.requires_grad_(True)
@@ -470,46 +508,17 @@ def parse_args():
     model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
                   "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
     parser.add_argument('-model', type=str, default=None, help=model_help)
+    parser.add_argument(
+        '-sl', type=int, default=0,
+        help="Sequence length used together with model. Defaults to max_seq_len from model config if not provided.")
 
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    mn_list = []
     if args.no_benchmark:
-        if args.model:
-            import json
-            # If user did not provide an absolute path, resolve relative path from script directory
-            if not os.path.isabs(args.model_configs):
-                config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.model_configs)
-            else:
-                config_file = args.model_configs
-
-            with open(config_file, 'r') as f:
-                configs = json.load(f)
-
-            if args.model != "all":
-                model_name = args.model
-                # Check if the model exists
-                if model_name not in configs:
-                    raise ValueError(f"Model '{model_name}' not found in {config_file}")
-                # Handle a specific model
-                config = configs[model_name]
-                seq_len = args.sl if args.sl else config["max_ctx_len"]
-                M, N= seq_len, config["hidden_size"]
-                mn_list.append((model_name, M, N))
-            else:
-                # Handle all models
-                for model_name, config in configs.items():
-                    seq_len = args.sl if args.sl else config["max_ctx_len"]
-                    M, N = seq_len, config["hidden_size"]
-                    mn_list.append((model_name, M, N, K))
-        else:
-            mn_list.append((args.M_start, args.N_start))
-
-        for M, N in mn_list:
-            run_layernorm(M, N)
+        run_layernorm(args.M_start, args.N_start)
     else:
         run_benchmark(args)
 
