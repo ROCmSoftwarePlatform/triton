@@ -23,7 +23,7 @@ class SharedEncodingAttr;
 
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
-                                                TensorOrMemDesc type,
+                                                RankedTensorType type,
                                                 int numWarps);
 
 /// Returns true if the Load uses block pointer.
@@ -134,6 +134,9 @@ scf::ForOp replaceForOpWithNewSignature(RewriterBase &rewriter, scf::ForOp loop,
 scf::IfOp replaceIfOpWithNewSignature(
     RewriterBase &rewriter, scf::IfOp loop, TypeRange newResultTypes,
     SmallVectorImpl<std::tuple<Value, Value>> &replacements);
+
+// Append the given |newOperands| to the |forOp|'s yield op.
+void appendToForOpYield(scf::ForOp forOp, ArrayRef<Value> newOperands);
 
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping);

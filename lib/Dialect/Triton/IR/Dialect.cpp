@@ -21,6 +21,15 @@ using namespace mlir::triton;
 // TritonDialect Dialect Interfaces
 //===----------------------------------------------------------------------===//
 
+namespace mlir::triton {
+
+static bool moeLDSBypass = false;
+
+void enableMoeLDSBypass(bool value) { moeLDSBypass = value; }
+
+bool isMoeLDSBypass() { return moeLDSBypass; }
+} // namespace mlir::triton
+
 namespace {
 struct TritonInlinerInterface : public DialectInlinerInterface {
   using DialectInlinerInterface::DialectInlinerInterface;

@@ -125,6 +125,21 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
+    if (isMoeLDSBypass() && isBlockedToDotShortcut(srcTy, dstTy)) {
+      auto srcElems = triton::gpu::getTotalElemsPerThread(srcTy);
+      auto dstElems = triton::gpu::getTotalElemsPerThread(dstTy);
+      if (srcElems != dstElems) {
+        llvm::errs() << "incompatible layout conversion: " << op << "\n";
+      }
+      assert(srcElems == dstElems);
+      auto loc = op.getLoc();
+      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      Value view =
+          packLLElements(loc, getTypeConverter(), vals, rewriter, dstTy);
+      rewriter.replaceOp(op, view);
+      return success();
+    }
+
     if (isa<AMDMfmaEncodingAttr>(srcLayout) &&
         isa<DotOperandEncodingAttr>(dstLayout)) {
       return lowerMfmaToDotOperand(op, adaptor, rewriter);

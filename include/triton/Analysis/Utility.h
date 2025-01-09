@@ -190,6 +190,8 @@ bool isSingleValue(Value value);
 
 bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
 
+bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
+
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool isMmaToMmaShortcut(RankedTensorType srcTy, RankedTensorType dstTy);

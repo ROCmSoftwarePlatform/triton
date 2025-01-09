@@ -6,6 +6,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/MapVector.h"
@@ -403,8 +404,9 @@ void LoopPipeliner::createBufferTypes() {
     auto sharedEnc = ttg::SharedEncodingAttr::get(
         ty.getContext(), dotOpEnc, ty.getShape(),
         ttg::getOrder(ty.getEncoding()), CTALayout, eType);
-    loadsBufferType[loadOp] =
-        triton::MemDescType::get(bufferShape, eType, sharedEnc);
+    loadsBufferType[loadOp] = triton::MemDescType::get(
+        bufferShape, eType, sharedEnc,
+        triton::gpu::SharedMemorySpaceAttr::get(ty.getContext()));
   }
 }
 

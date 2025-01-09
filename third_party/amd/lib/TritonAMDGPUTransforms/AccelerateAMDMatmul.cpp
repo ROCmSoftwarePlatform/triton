@@ -60,6 +60,9 @@ SmallVector<unsigned, 2> warpsPerTile(tt::DotOp dotOp,
                                       SmallVector<int64_t, 2> shapePerWarp) {
   auto rank = shape.size();
   // Early exit for batched matmul
+  if (triton::isMoeLDSBypass())
+    return {1, static_cast<unsigned>(numWarps)};
+
   if (rank == 3)
     return {(unsigned)numWarps, 1, 1};
 

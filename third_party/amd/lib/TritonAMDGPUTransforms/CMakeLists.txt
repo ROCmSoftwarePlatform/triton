@@ -3,8 +3,9 @@ add_triton_library(TritonAMDGPUTransforms
   OptimizeEpilogue.cpp
   ReorderInstructions.cpp
   StreamPipeline.cpp
+  StreamPipelineV2.cpp
   MfmaGroup.cpp
-
+  AMDBypassLDSForDotLayout.cpp
   DEPENDS
   TritonAMDGPUTransformsIncGen
   TritonGPUIR

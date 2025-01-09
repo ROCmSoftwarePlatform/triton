@@ -16,6 +16,25 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
   let dependentDialects = [];
 }
 
+def TritonAMDGPUStreamPipelineV2 : Pass<"tritonamdgpu-stream-pipeline-v2", "mlir::ModuleOp"> {
+  let summary = "pipeline";
+
+  let description = [{
+    Pipeline global loads through registers to shared memory while computing on previous
+    tile
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUStreamPipelineV2Pass()";
+
+  let dependentDialects = [];
+
+  let options = [
+    Option<"numStages", "num_stages",
+           "int32_t", /*default*/"2",
+           "Number of Pipeline stages">
+  ];
+}
+
 def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir::ModuleOp"> {
   let summary = "accelerate matmul";
 
@@ -51,6 +70,18 @@ def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir:
 
   let dependentDialects = [];
 
+}
+
+def TritonAMDGPUBypassLDSForDotLayout: Pass<"tritonamdgpu-bypass-lds-for-dot-layout", "mlir::ModuleOp"> {
+  let summary = "Bypass moving data trough LDS for dot layout when possible";
+
+  let description = [{
+    Bypass moving data trough LDS for dot layout when possible.
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUBypassLDSForDotLayout()";
+
+  let dependentDialects = [];
 }
 
 def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "mlir::ModuleOp"> {

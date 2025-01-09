@@ -27,6 +27,7 @@ class HIPOptions:
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
     matrix_instr_nonkdim: int = 0
+    enable_moe_lds_bypass: bool = False
     kpack: int = 1
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
@@ -105,6 +106,7 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_ttir(mod, metadata, options):
+        mod.context.enable_moe_lds_bypass(options.enable_moe_lds_bypass)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
@@ -133,14 +135,28 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
+
+        if options.enable_moe_lds_bypass:
+            amd.passes.ttgpuir.add_tritongpu_bypass_lds_for_dot_layout_pass(pm)
+
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        if options.num_stages == 0 and amd.has_matrix_core_feature(options.arch):
-            amd.passes.ttgpuir.add_stream_pipeline(pm)
+        use_new_pipeliner = os.getenv("TRITON_HIP_USE_NEW_STREAM_PIPELINE", "0") == "1"
+        if amd.has_matrix_core_feature(options.arch):
+            if use_new_pipeliner:
+                # In the old pipeliner we only support num_stages = 0/1, which means something
+                # different than the NVIDIA side. In the new pipeliner we unify the num_stages
+                # interpretation. Default to use 2 stages if not explicitly set.
+                num_stages = options.num_stages if options.num_stages != 0 else 2
+                amd.passes.ttgpuir.add_stream_pipelinev2(pm, num_stages)
+            else:
+                if options.num_stages == 0:
+                    amd.passes.ttgpuir.add_stream_pipeline(pm)
             passes.common.add_canonicalizer(pm)
+
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
-        if options.num_stages != 0:
+        if use_new_pipeliner or options.num_stages != 0:
             amd.passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
