@@ -287,7 +287,7 @@ def run_layernorm(M, N):
     w_shape = (N, )
     w = torch.rand(w_shape, device='cuda')
     b = torch.rand(w_shape, device='cuda')
-    y_triton = layernorm(x, w, b)
+    y_triton = layernorm(x, w_shape, w, b)
 
 
 
@@ -490,7 +490,7 @@ def parse_args():
     parser.add_argument('-Ne', "--N_end", default="65536", type=int)
 
     parser.add_argument('-d', "--dtype", default="fp16")
-    parser.add_argument('-nb', "--no_benchmark", default=False, type=bool)
+    parser.add_argument('-nb', "--no_benchmark", action='store_true', default=False, help='no benchmark, just run one input shape')
     parser.add_argument('-mode', "--mode", default='fwd', type=str, help='run forward or backward or both passes, default is forward')
 
     # model related inputs
