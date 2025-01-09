@@ -8,6 +8,7 @@ import triton.language as tl
 import os
 import json
 import math
+from itertools import product
 
 
 def is_cuda():
@@ -28,15 +29,7 @@ def get_cuda_autotune_config():
 
 def get_hip_autotune_config():
     return [
-        triton.Config({'waves_per_eu': 1}, num_warps=4, num_stages=1),
-        triton.Config({'waves_per_eu': 1}, num_warps=8, num_stages=1),
-        triton.Config({'waves_per_eu': 1}, num_warps=16, num_stages=1),
-        triton.Config({'waves_per_eu': 2}, num_warps=4, num_stages=1),
-        triton.Config({'waves_per_eu': 2}, num_warps=8, num_stages=1),
-        triton.Config({'waves_per_eu': 2}, num_warps=16, num_stages=1),
-        triton.Config({'waves_per_eu': 4}, num_warps=4, num_stages=1),
-        triton.Config({'waves_per_eu': 4}, num_warps=8, num_stages=1),
-        triton.Config({'waves_per_eu': 4}, num_warps=16, num_stages=1),
+        triton.Config({'waves_per_eu': we}, num_warps=wa, num_stages=1) for we, wa in product([1, 2, 4], [4, 8, 16])
     ]
 
 
@@ -318,15 +311,13 @@ def get_benchmark_shapes(args):
     if args.M_benchmark:
         N = args.N_start
         assert args.M_start > 0 and args.M_end, "m start and end values need to be positive!"
-        m_range = int(math.log2(args.M_end/args.M_start)) + 1
-        shapes = [(args.M_start * (2 ** i), N) for i in range(0, m_range)]
+        m_range = int(math.log2(args.M_end / args.M_start)) + 1
+        shapes = [(args.M_start * (2**i), N) for i in range(0, m_range)]
         benchmark_shapes['M'] = shapes
-        print(f"M_benchmark, shapes = {benchmark_shapes}")
     else:
         M = args.M_start
         shapes = [(M, n) for n in range(args.N_start, args.N_end, args.N_step)]
         benchmark_shapes['N'] = shapes
-        print(f"N_benchmark, shapes = {benchmark_shapes}")
 
     return benchmark_shapes
 
@@ -460,7 +451,7 @@ def parse_args():
     parser.add_argument('-M', "--M_start", default="1", type=int)
     parser.add_argument('-Ms', "--M_step", default="2", type=int)
     parser.add_argument('-Me', "--M_end", default="512", type=int)
-    parser.add_argument('-Mb', "--M_benchmark", action='store_true', default=False, 
+    parser.add_argument('-Mb', "--M_benchmark", action='store_true', default=False,
                         help='whether do benchmark on M or N, default N')
 
     parser.add_argument('-N', "--N_start", default="1024", type=int)
