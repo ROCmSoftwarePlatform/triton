@@ -48,17 +48,7 @@ def get_autotune_config():
 
 @triton.autotune(configs=get_autotune_config(), key=['n_rows', 'n_cols'], use_cuda_graph=True)
 @triton.jit
-def layernorm_kernel(x_ptr, 
-                     y_ptr, 
-                     w_ptr, 
-                     b_ptr, 
-                     mean_ptr, 
-                     rstd_ptr, 
-                     x_row_stride, 
-                     y_row_stride, 
-                     n_rows, 
-                     n_cols, 
-                     eps,
+def layernorm_kernel(x_ptr, y_ptr, w_ptr, b_ptr, mean_ptr, rstd_ptr, x_row_stride, y_row_stride, n_rows, n_cols, eps,
                      BLOCK_SIZE: tl.constexpr):
 
     #program id
@@ -210,7 +200,7 @@ def _layer_norm_bwd_dwdb(DW,  # pointer to the partial sum of weights gradient
 
 
 class LayerNorm(torch.autograd.Function):
-    
+
     @staticmethod
     def forward(ctx, x, normalized_shape, weight, bias, eps=1e-5):
         y = torch.empty_like(x)
@@ -222,17 +212,13 @@ class LayerNorm(torch.autograd.Function):
         BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
         # heuristics for number of warps
         num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
-        layernorm_kernel[(M, )](
-            x, y, weight, bias, mean, rstd,
-            x.stride(0), y.stride(0), M, N, eps, BLOCK_SIZE
-        )
+        layernorm_kernel[(M, )](x, y, weight, bias, mean, rstd, x.stride(0), y.stride(0), M, N, eps, BLOCK_SIZE)
         ctx.save_for_backward(x, weight, bias, mean, rstd)
         ctx.BLOCK_SIZE = BLOCK_SIZE
         ctx.num_warps = num_warps
         ctx.eps = eps
 
         return y
-
 
     @staticmethod
     def backward(ctx, dy):
@@ -264,7 +250,7 @@ class LayerNorm(torch.autograd.Function):
             _dw, _db, dw, db, min(tile_num, M), N,  #
             BLOCK_SIZE_M=32,  #
             BLOCK_SIZE_N=128)
-        
+
         return dx, None, dw, db, None
 
 
@@ -290,18 +276,8 @@ def run_layernorm(M, N):
 
 
 #pytest
-@pytest.mark.parametrize('M, N', [(1823, 781), 
-                                  (2, 128), 
-                                  (1, 4), 
-                                  (128, 2), 
-                                  (1, 128), 
-                                  (8192, 8192), 
-                                  (4096, 8192),
-                                  (359, 1), 
-                                  (1, 359), 
-                                  (1, 16385), 
-                                  (1, 131072), 
-                                  (1, 89999)])
+@pytest.mark.parametrize('M, N', [(1823, 781), (2, 128), (1, 4), (128, 2), (1, 128), (8192, 8192), (4096, 8192),
+                                  (359, 1), (1, 359), (1, 16385), (1, 131072), (1, 89999)])
 def test_layernorm(M, N, eps=1e-5):
     torch.manual_seed(0)
     x = torch.randn(M, N, device='cuda')
@@ -333,6 +309,7 @@ def test_layernorm(M, N, eps=1e-5):
 
 #Benchmark
 arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
+
 
 def get_benchmark_shapes(args):
     # M, N
@@ -368,7 +345,7 @@ def get_model_shapes(args):
         # Handle a specific model
         config = configs[model_name]
         seq_len = args.sl if args.sl else config["max_ctx_len"]
-        M, N= seq_len, config["hidden_size"]
+        M, N = seq_len, config["hidden_size"]
         model_shapes[model_name] = [(M, N)]
     else:
         # Handle all models
@@ -397,7 +374,7 @@ def run_benchmark(args):
 
         dtype = arg_to_torch_dtype[args.dtype]
         if args.mode == 'fwd' or args.mode == 'both':
-            fwd_plot_name = plot_name + f"_forward_pass(GBS)"
+            fwd_plot_name = plot_name + "_forward_pass(GBS)"
             other_args['mode'] = 'forward'
             config.append(
                 triton.testing.Benchmark(
@@ -416,7 +393,7 @@ def run_benchmark(args):
                 ))
 
         if args.mode == 'bwd' or args.mode == 'both':
-            bwd_plot_name = plot_name + f"_backward_pass(GBS)"
+            bwd_plot_name = plot_name + "_backward_pass(GBS)"
             other_args['mode'] = 'backward'
             config.append(
                 triton.testing.Benchmark(
@@ -485,8 +462,10 @@ def parse_args():
     parser.add_argument('-Ne', "--N_end", default="65536", type=int)
 
     parser.add_argument('-d', "--dtype", default="fp16")
-    parser.add_argument('-nb', "--no_benchmark", action='store_true', default=False, help='no benchmark, just run one input shape')
-    parser.add_argument('-mode', "--mode", default='fwd', type=str, help='run forward or backward or both passes, default is forward')
+    parser.add_argument('-nb', "--no_benchmark", action='store_true', default=False,
+                        help='no benchmark, just run one input shape')
+    parser.add_argument('-mode', "--mode", default='fwd', type=str,
+                        help='run forward or backward or both passes, default is forward')
 
     # model related inputs
     parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
