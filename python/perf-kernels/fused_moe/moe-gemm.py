@@ -440,21 +440,21 @@ def input_helper(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool
     return a, b, c, metadata
 
 
-@pytest.mark.parametrize("M, K, N, top_k, E", [
-    (64, 4096, 14336, 2, 8),
-    (16, 1, 14336, 2, 4),
-    (1, 128, 14336, 2, 4),
-    (16, 128, 14336, 1, 4),
-    (16, 128, 14336, 1, 1),
-    (64, 128, 7186, 2, 8),
-    (64, 128, 3584, 2, 8),
-    (64, 128, 1792, 2, 8),
-    (64, 128, 64, 2, 8),
+@pytest.mark.parametrize("M, N, K, top_k, E", [
+    (64, 14336, 4096, 2, 8),
+    (16, 14336, 1, 2, 4),
+    (1, 14336, 128, 2, 4),
+    (16, 14336, 128, 1, 4),
+    (16, 14336, 128, 1, 1),
+    (64, 7186, 128, 2, 8),
+    (64, 3584, 128, 2, 8),
+    (64, 1792, 128, 2, 8),
+    (64, 64, 128, 2, 8),
 ])
 @pytest.mark.parametrize('routed_weight', [True, False])
-def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool, dtype=torch.float16):
+def test_correctness(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool, dtype=torch.float16):
     torch.manual_seed(20)
-    a, b, c, metadata = input_helper(M, K, N, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=False,
+    a, b, c, metadata = input_helper(M, N, K, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=False,
                                      use_int8_w8a16=False, fp8_type=None, dtype=dtype)
 
     tri_out = moe_gemm(a, b, c, metadata)
@@ -474,25 +474,25 @@ def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: 
     torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=1e-2)
 
 
-@pytest.mark.parametrize("M, K, N, top_k, E", [
-    (64, 4096, 14336, 2, 8),
-    (16, 1, 14336, 2, 4),
-    (1, 128, 14336, 2, 4),
-    (16, 128, 14336, 1, 4),
-    (16, 128, 14336, 1, 1),
-    (64, 128, 7186, 2, 8),
-    (64, 128, 3584, 2, 8),
-    (64, 128, 1792, 2, 8),
-    (64, 128, 64, 2, 8),
+@pytest.mark.parametrize("M, N, K, top_k, E", [
+    (64, 14336, 4096, 2, 8),
+    (16, 14336, 1, 2, 4),
+    (1, 14336, 128, 2, 4),
+    (16, 14336, 128, 1, 4),
+    (16, 14336, 128, 1, 1),
+    (64, 7186, 128, 2, 8),
+    (64, 3584, 128, 2, 8),
+    (64, 1792, 128, 2, 8),
+    (64, 64, 128, 2, 8),
 ])
 @pytest.mark.parametrize('routed_weight', [True, False])
 @pytest.mark.parametrize('use_fp8_w8a8', [True])
 # triton does not support torch.float8_e4m3fn
 @pytest.mark.parametrize('fp8_type', [torch.float8_e5m2, torch.float8_e5m2fnuz])
-def test_correctness_fp8(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool, use_fp8_w8a8, fp8_type,
+def test_correctness_fp8(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool, use_fp8_w8a8, fp8_type,
                          dtype=torch.float16):
     torch.manual_seed(20)
-    a, b, c, metadata = input_helper(M, K, N, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=use_fp8_w8a8,
+    a, b, c, metadata = input_helper(M, N, K, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=use_fp8_w8a8,
                                      use_int8_w8a16=False, fp8_type=fp8_type, dtype=dtype)
 
     tri_out = moe_gemm(a, b, c, metadata)
@@ -517,23 +517,23 @@ def test_correctness_fp8(M: int, K: int, N: int, top_k: int, E: int, routed_weig
     torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=1e-2)
 
 
-@pytest.mark.parametrize("M, K, N, top_k, E", [
-    (64, 4096, 14336, 2, 8),
-    (16, 1, 14336, 2, 4),
-    (1, 128, 14336, 2, 4),
-    (16, 128, 14336, 1, 4),
-    (16, 128, 14336, 1, 1),
-    (64, 128, 7186, 2, 8),
-    (64, 128, 3584, 2, 8),
-    (64, 128, 1792, 2, 8),
-    (64, 128, 64, 2, 8),
+@pytest.mark.parametrize("M, N, K, top_k, E", [
+    (64, 14336, 4096, 2, 8),
+    (16, 14336, 1, 2, 4),
+    (1, 14336, 128, 2, 4),
+    (16, 14336, 128, 1, 4),
+    (16, 14336, 128, 1, 1),
+    (64, 7186, 128, 2, 8),
+    (64, 3584, 128, 2, 8),
+    (64, 1792, 128, 2, 8),
+    (64, 64, 128, 2, 8),
 ])
 @pytest.mark.parametrize('routed_weight', [True, False])
 @pytest.mark.parametrize('use_int8_w8a16', [True])
-def test_correctness_int8(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool, use_int8_w8a16,
+def test_correctness_int8(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool, use_int8_w8a16,
                           dtype=torch.float16):
     torch.manual_seed(20)
-    a, b, c, metadata = input_helper(M, K, N, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=False,
+    a, b, c, metadata = input_helper(M, N, K, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=False,
                                      use_int8_w8a16=use_int8_w8a16, fp8_type=None, dtype=dtype)
 
     tri_out = moe_gemm(a, b, c, metadata)
@@ -558,19 +558,19 @@ def test_correctness_int8(M: int, K: int, N: int, top_k: int, E: int, routed_wei
 
 def get_configs():
     configs = [
-        {"M": 64, "K": 128, "N": 256, "E": 8, "top_k": 2},
-        {"M": 64, "K": 1024, "N": 1792, "E": 8, "top_k": 2},
-        {"M": 64, "K": 4096, "N": 7168, "E": 8, "top_k": 2},
-        {"M": 128, "K": 4096, "N": 7168, "E": 8, "top_k": 2},
-        {"M": 1024, "K": 4096, "N": 7168, "E": 8, "top_k": 2},
-        {"M": 4096, "K": 4096, "N": 7168, "E": 8, "top_k": 2},
-        {"M": 64, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 128, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 256, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 512, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 1024, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 2048, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 4096, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
+        {"M": 64, "N": 256, "K": 128, "E": 8, "top_k": 2},
+        {"M": 64, "N": 1792, "K": 1024, "E": 8, "top_k": 2},
+        {"M": 64, "N": 7168, "K": 4096, "E": 8, "top_k": 2},
+        {"M": 128, "N": 7168, "K": 4096, "E": 8, "top_k": 2},
+        {"M": 1024, "N": 7168, "K": 4096, "E": 8, "top_k": 2},
+        {"M": 4096, "N": 7168, "K": 4096, "E": 8, "top_k": 2},
+        {"M": 64, "N": 14336, "K": 4096, "E": 8, "top_k": 2},
+        {"M": 128, "N": 14336, "K": 4096, "E": 8, "top_k": 2},
+        {"M": 256, "N": 14336, "K": 4096, "E": 8, "top_k": 2},
+        {"M": 512, "N": 14336, "K": 4096, "E": 8, "top_k": 2},
+        {"M": 1024, "N": 14336, "K": 4096, "E": 8, "top_k": 2},
+        {"M": 2048, "N": 14336, "K": 4096, "E": 8, "top_k": 2},
+        {"M": 4096, "N": 14336, "K": 4096, "E": 8, "top_k": 2},
     ]
     return configs
 
