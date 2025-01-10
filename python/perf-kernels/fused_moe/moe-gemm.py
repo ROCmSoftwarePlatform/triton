@@ -357,7 +357,6 @@ def test_correctness(M: int, N: int, K: int, top_k: int, E: int, routed_weight: 
 
 def get_configs():
     configs = [
-        {"M": 64, "K": 256, "N": 128, "E": 8, "top_k": 2},
         {"M": 64, "K": 1792, "N": 1024, "E": 8, "top_k": 2},
         {"M": 64, "K": 7168, "N": 4096, "E": 8, "top_k": 2},
         {"M": 128, "K": 7168, "N": 4096, "E": 8, "top_k": 2},
