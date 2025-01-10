@@ -5,3 +5,4 @@ TFlops - Scenario
 596 - default kernel in gemm_sub.py, default compiler.
 586 - mfma_order nosb nomask.
 575 - mfma_order_sb_nomask_orig.ttgir/llir.
+590 - 2c - prefetching and sb

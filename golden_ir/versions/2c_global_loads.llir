@@ -17,6 +17,7 @@ enum InstructionKindMask {
 
 everything but mfmas can cross
 2047 - (1+8) = 2038 // verified
+-->; sched_barrier mask(0x000007F6)
 
 everything but lds and mfmas can cross
 2047 - (1+8+128+256+512) = 1142

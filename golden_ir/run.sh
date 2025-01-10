@@ -5,9 +5,11 @@ rm -rf triton_cache
 TRITON_MFMA_TILE_ENABLE_SCHED_BARRIERS=1 TRITON_CACHE_DIR=triton_cache python gemm_sub.py \
   --trans-b \
   --file config.yaml \
-  --sub versions/2c_global_loads.llir \
+  --sub versions/2d_global_loads.llir \
   --verbose
 
+#  --sub versions/3_regions.llir \
+#  --sub versions/2d_global_loads.llir \
 # remember groupm of llir must match grid launch
 
 #  --sub ir/mfma_order_sb_nomask_orig.ttgir \    # =1 575
