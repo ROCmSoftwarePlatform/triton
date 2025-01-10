@@ -298,7 +298,7 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, topk_weights: to
     return c
 
 
-def input_helper(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool, dtype):
+def input_helper(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool, dtype):
     a = torch.randn((M, K), dtype=dtype, device='cuda')
     b = torch.randn((E, N, K), dtype=dtype, device='cuda')
     c = torch.zeros((M, top_k, N), dtype=dtype, device='cuda')
@@ -378,16 +378,20 @@ def model_benchmark_configs(args):
     config_file = args.model_configs
     configs = get_model_configs(config_path=config_file, model_families=["mistral"], model=args.model)
     fa_configs = []
-    M = args.M if args.M else 1024  # check size
+    M = args.M if args.M else 4096  # check size
     # M, K, N, E, top_k
 
     for model_name, config in configs.items():
-        N = config["intermediate_size"]
-        K = config["hidden_size"]
+        N1 = config["intermediate_size"] * 2
+        K1 = config["hidden_size"]
+
+        N2 = config["hidden_size"]
+        K2 = config["intermediate_size"]
 
         E = 8
         top_k = 2
-        fa_configs.append((model_name, M, K, N, E, top_k))
+        fa_configs.append((model_name, M, N1, K1, E, top_k))
+        fa_configs.append((model_name, M, N2, K2, E, top_k))
 
     return fa_configs
 
@@ -396,18 +400,18 @@ def run_benchmark(custom, args):
     print_time = args.return_time
     routed_weight = args.routed_weight
     dtype = arg_to_torch_dtype[args.dtype]
-    x_names = ['M', 'K', 'N', 'E', 'top_k']
+    x_names = ['M', 'N', 'K', 'E', 'top_k']
     if custom:
-        assert args.M and args.K and args.N and args.E and args.top_k, \
-            "Please provide M, K, N, E, top_k for custom runs."
-        x_vals_list = [(args.M, args.K, args.N, args.E, args.top_k)]
+        assert args.M and args.N and args.K and args.E and args.top_k, \
+            "Please provide M, N, K, E, top_k for custom runs."
+        x_vals_list = [(args.M, args.N, args.K, args.E, args.top_k)]
     else:
         if args.model:
             x_vals_list = model_benchmark_configs(args)
-            x_names = ['model', 'M', 'K', 'N', 'E', 'top_k']
+            x_names = ['model', 'M', 'N', 'K', 'E', 'top_k']
         else:
             configs = get_configs()
-            x_vals_list = [(cfg['M'], cfg['K'], cfg['N'], cfg['E'], cfg['top_k']) for cfg in configs]
+            x_vals_list = [(cfg['M'], cfg['N'], cfg['K'], cfg['E'], cfg['top_k']) for cfg in configs]
 
     line_names = ['Time (ms)', 'Bandwidth (GB/s)'] if print_time else ['TFLOPS', 'Bandwidth (GB/s)']
 
@@ -428,10 +432,10 @@ def run_benchmark(custom, args):
                                          args={'dtype': dtype, 'routed_weight': routed_weight})
 
     @triton.testing.perf_report([benchmark])
-    def bench_moe_gemm(M, K, N, E, top_k, dtype, routed_weight, metric, model=None):
+    def bench_moe_gemm(M, N, K, E, top_k, dtype, routed_weight, metric, model=None):
         # metric will be either 'time'/'tflops' or 'bandwidth'
         a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
-            M, K, N, top_k, E, routed_weight=routed_weight, dtype=dtype)
+            M, N, K, top_k, E, routed_weight=routed_weight, dtype=dtype)
 
         flops = 2.0 * M * top_k * K * N
         if routed_weight:
