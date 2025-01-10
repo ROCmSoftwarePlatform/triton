@@ -324,21 +324,21 @@ def input_helper(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool
 
 
 @pytest.mark.parametrize("M, K, N, top_k, E", [
-    (64, 4096, 14336, 2, 8),
-    (16, 1, 14336, 2, 4),
-    (1, 128, 14336, 2, 4),
-    (16, 128, 14336, 1, 4),
-    (16, 128, 14336, 1, 1),
-    (64, 128, 7186, 2, 8),
-    (64, 128, 3584, 2, 8),
-    (64, 128, 1792, 2, 8),
-    (64, 128, 64, 2, 8),
+    (64, 14336, 4096, 2, 8),
+    (16, 14336, 1, 2, 4),
+    (1, 14336, 128, 2, 4),
+    (16, 14336, 128, 1, 4),
+    (16, 14336, 128, 1, 1),
+    (64, 7186, 128, 2, 8),
+    (64, 3584, 128, 2, 8),
+    (64, 1792, 128, 2, 8),
+    (64, 64, 128, 2, 8),
 ])
 @pytest.mark.parametrize('routed_weight', [True, False])
-def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: bool, dtype=torch.float16):
+def test_correctness(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool, dtype=torch.float16):
     torch.manual_seed(20)
     a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
-        M, K, N, top_k, E, routed_weight=routed_weight, dtype=dtype)
+        M, N, K, top_k, E, routed_weight=routed_weight, dtype=dtype)
 
     tri_out = moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config)
 
@@ -357,19 +357,19 @@ def test_correctness(M: int, K: int, N: int, top_k: int, E: int, routed_weight: 
 
 def get_configs():
     configs = [
-        {"M": 64, "K": 128, "N": 256, "E": 8, "top_k": 2},
-        {"M": 64, "K": 1024, "N": 1792, "E": 8, "top_k": 2},
-        {"M": 64, "K": 4096, "N": 7168, "E": 8, "top_k": 2},
-        {"M": 128, "K": 4096, "N": 7168, "E": 8, "top_k": 2},
-        {"M": 1024, "K": 4096, "N": 7168, "E": 8, "top_k": 2},
-        {"M": 4096, "K": 4096, "N": 7168, "E": 8, "top_k": 2},
-        {"M": 64, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 128, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 256, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 512, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 1024, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 2048, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
-        {"M": 4096, "K": 4096, "N": 14336, "E": 8, "top_k": 2},
+        {"M": 64,   "K": 256,   "N": 128,  "E": 8, "top_k": 2},
+        {"M": 64,   "K": 1792,  "N": 1024, "E": 8, "top_k": 2},
+        {"M": 64,   "K": 7168,  "N": 4096, "E": 8, "top_k": 2},
+        {"M": 128,  "K": 7168,  "N": 4096, "E": 8, "top_k": 2},
+        {"M": 1024, "K": 7168,  "N": 4096, "E": 8, "top_k": 2},
+        {"M": 4096, "K": 7168,  "N": 4096, "E": 8, "top_k": 2},
+        {"M": 64,   "K": 14336, "N": 4096, "E": 8, "top_k": 2},
+        {"M": 128,  "K": 14336, "N": 4096, "E": 8, "top_k": 2},
+        {"M": 256,  "K": 14336, "N": 4096, "E": 8, "top_k": 2},
+        {"M": 512,  "K": 14336, "N": 4096, "E": 8, "top_k": 2},
+        {"M": 1024, "K": 14336, "N": 4096, "E": 8, "top_k": 2},
+        {"M": 2048, "K": 14336, "N": 4096, "E": 8, "top_k": 2},
+        {"M": 4096, "K": 14336, "N": 4096, "E": 8, "top_k": 2}
     ]
     return configs
 
