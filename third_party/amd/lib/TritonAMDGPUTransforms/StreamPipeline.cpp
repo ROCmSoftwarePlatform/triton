@@ -373,6 +373,16 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
   return attr;
 }
 
+static float getComputeFactor(Operation *op) {
+  if (isa<tt::DotOp, tt::ReduceOp>(op)) {
+    // depends on size?
+    return 20;
+  } else if (isa<tt::LoadOp, tt::StoreOp>(op)) {
+    return 4;
+  }
+  return 1;
+}
+
 // Create a map from load ops to their indirection levels and the final uses
 // of the load op (another load op, or a dot op).
 //
@@ -380,6 +390,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
 // "1" for the load op used by the load op used by the dot op, and so on.
 void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
   DenseSet<Operation *> seen;
+  bool forced = forOp->hasAttr(tt::kNumStagesAttrName);
 
   // Recursively visit the given op and its operands to discover all load ops
   // and collect their indirection levels and uses.
@@ -403,20 +414,25 @@ void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
         }
       };
 
+  DenseMap<Operation *, int> depthMap;
+  
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!isa<mlir::triton::DotOpInterface>(op))
+    Operation *opp = &op;
+    int depth = 0;
+    for (Value operand : op.getOperands()) {
+      Operation *defOp = operand.getDefiningOp();
+      if (defOp && depthMap.contains(defOp))
+        depth = std::max(depth, depthMap[defOp]);
+    }
+    int factor = getComputeFactor(opp) + depth;
+    depthMap[opp] = factor;
+    LDBG("DEPTH(" << factor << "):  " << op);
+    
+    if ((!op.hasTrait<OpTrait::DotLike>() || (forced && !isa<tt::LoadOp>(opp)))
+         || factor > 40)
       continue;
     seen.clear();
-    dfs(&op, 0, &op);
-  }
-
-  // If the loop has numStages attribute, also consider pipelining other loads
-  // that are not directly used by dot ops.
-  if (forOp->hasAttr(tt::kNumStagesAttrName)) {
-    for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (!isa<tt::LoadOp>(op))
-        dfs(&op, 0, &op);
-    }
+    dfs(opp, 0, opp);
   }
 }
 
