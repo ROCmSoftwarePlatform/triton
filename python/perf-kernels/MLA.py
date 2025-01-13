@@ -432,9 +432,9 @@ autotune_configs, autotune_keys = get_autotune_configs()
 )
 @triton.jit
 def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh, stride_qm,
-             stride_qk,  # strides for Q
+             stride_qk,  # strides for Q_NOPE
              stride_q_pe_z, stride_q_pe_h, stride_q_pe_m, stride_q_pe_k,  # strides for Q_PE
-             stride_kz, stride_kn, stride_kk,  # strides for KV
+             stride_kv_z, stride_kv_n, stride_kv_k,  # strides for KV
              stride_k_pe_z, stride_k_pe_n, stride_k_pe_k,  # strides for K_PE
              stride_oz, stride_oh, stride_om, stride_on, stride_wkv_b_h, stride_wkv_b_k, stride_wkv_b_n, stride_bz,
              stride_bh, stride_bm, stride_bn, stride_az, stride_ah, qk_nope_head_dim: tl.constexpr,
@@ -574,8 +574,8 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, str
                 q_offset = Q + off_z * stride_qz + off_h_q * stride_qh + cu_seqlens_q_start * stride_qm
                 q_ptrs = q_offset + offs_m[:, None] * stride_qm + offs_q_d[None, :] * stride_qk
                 # reference k pointers: k_ptrs = k_offset + offs_d[:, None] * stride_kk + offs_n[None, :] * stride_kn
-                kv_offset = KV + off_z * stride_kz + cu_seqlens_kv_start * stride_kn
-                kv_ptrs = kv_offset + offs_kv_d[:, None] * stride_kk + offs_n[None, :] * stride_kn
+                kv_offset = KV + off_z * stride_kv_z + cu_seqlens_kv_start * stride_kv_n
+                kv_ptrs = kv_offset + offs_kv_d[:, None] * stride_kv_k + offs_n[None, :] * stride_kv_n
                 # pointers for position embeddings
                 k_pe_offset = K_PE + off_z * stride_k_pe_z + cu_seqlens_kv_start * stride_k_pe_k
                 k_pe_ptrs = k_pe_offset + offs_k_pe_d[:, None] * stride_k_pe_k + offs_n[None, :] * stride_k_pe_n
@@ -586,11 +586,8 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, str
                 # Compute pointers for the first part (wkv_b[:qk_nope_head_dim, :]) to be absorbed into q computation at outer loop
                 wkv_b_offset = WKV_B + off_h_q * stride_wkv_b_h
                 wkv_b_ptrs1 = wkv_b_offset + offs_wkv_b_q[:, None] * stride_wkv_b_k + offs_dc[None, :] * stride_wkv_b_n
-                # tl loading this should come out as qk_nope_head_dim x dc matrix
-
                 # Compute pointers for the second part (wkv_b[-v_head_dim:, :]) needed in the inner loop
                 wkv_b_ptrs2 = wkv_b_offset + offs_wkv_b_v[:, None] * stride_wkv_b_k + offs_dc[None, :] * stride_wkv_b_n
-                # tl loading this should come out as dc x v_head_dim matrix
 
                 # Compute pointers for all the scale tensors used in this kernel.
                 INT8_GEMM: tl.constexpr = INT8 & (not INT8_KV)
@@ -694,7 +691,7 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, str
                 if n_full_blocks > 0:
                     block_max = (n_blocks - masked_blocks) * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(
-                        acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kn, stride_k_pe_n, 
+                        acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kv_n, stride_k_pe_n, 
                         stride_bn, start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
                         # _, _, offs_n_causal, masked_blocks, n_extra_tokens, _
                         block_min, block_max, 0, 0, 0, alibi_slope, q_descale, k_descale, v_descale, p_scale,
@@ -714,14 +711,14 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, str
                         offs_n_causal = offs_n + (seqlen_q - seqlen_k)
                     else:
                         offs_n_causal = 0
-                    kv_ptrs += n_full_blocks * BLOCK_N * stride_kn
+                    kv_ptrs += n_full_blocks * BLOCK_N * stride_kv_n
                     k_pe_ptrs += n_full_blocks * BLOCK_N * stride_k_pe_k
                     if USE_BIAS:
                         bias_ptrs += n_full_blocks * BLOCK_N * stride_bn
                     if RETURN_ENCODED_SOFTMAX:
                         encoded_sm_ptrs += n_full_blocks * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(
-                        acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kn, stride_k_pe_n,
+                        acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kv_n, stride_k_pe_n,
                         stride_bn, start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
                         block_min, block_max, offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope, q_descale,
                         k_descale, v_descale, p_scale, IS_CAUSAL, BLOCK_M, BLOCK_KV_DMODEL, BLOCK_K_PE_DMODEL, BLOCK_N,
