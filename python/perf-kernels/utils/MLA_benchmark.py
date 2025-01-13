@@ -266,7 +266,7 @@ class ModelArgs:
     """
     max_batch_size: int = 8
     max_seq_len: int = 4096 * 4 
-    dtype: Literal["bf16", "fp8", "fp16"] = "bf16"  # Change default to "fp16"
+    dtype: Literal["bf16", "fp8", "fp16"] = "bf16"  # Change default to "bf16"
     vocab_size: int = 102400
     dim: int = 2048 
     inter_dim: int = 10944
@@ -284,10 +284,10 @@ class ModelArgs:
     route_scale: float = 1.
     # mla
     q_lora_rank: int = 0
-    kv_lora_rank: int = 512//2 
-    qk_nope_head_dim: int = 128//2
-    qk_rope_head_dim: int = 64//2
-    v_head_dim: int = 128//2
+    kv_lora_rank: int = 512
+    qk_nope_head_dim: int = 128
+    qk_rope_head_dim: int = 64
+    v_head_dim: int = 128
     # yarn
     original_seq_len: int = 4096
     rope_theta: float = 10000.0
@@ -602,7 +602,6 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
     y = torch.view_as_real(x * freqs_cis).flatten(3)
     return y.to(dtype)
 
-
 class MLA(nn.Module):
     """
     Multi-Headed Attention Layer (MLA).
@@ -747,7 +746,7 @@ def test_mla_implementations():
     x = embed(tokens)
     # Generate random start position and freqs_cis
     start_pos = 0
-    freqs_cis = precompute_freqs_cis(args) # torch.randn(seq_len, args.qk_rope_head_dim // 2, dtype=torch.bfloat16, device="cuda")  # Change to torch.bfloat16
+    freqs_cis = precompute_freqs_cis(args)
     seqlen = tokens.size(1)
     freqs_cis = freqs_cis[:seqlen]
     # Generate a random mask (optional)
