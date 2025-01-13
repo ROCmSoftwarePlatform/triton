@@ -233,19 +233,20 @@ def compute_alibi_tensor(alibi_slopes, seqlen_q, seqlen_k):
     relative_pos = torch.abs(q_idx + seqlen_k - seqlen_q - k_idx)  # (N_CTX_Q, N_CTX_K)
     return -1 * alibi_slopes.unsqueeze(-1).unsqueeze(-1) * relative_pos  # (Z, H, N_CTX_Q, N_CTX_K)
 
+
 # acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kn, stride_bn, start_m,
                     actual_seqlen_k, actual_seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
                     block_min, block_max, offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope, q_descale,
                     k_descale, v_descale, p_scale, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
-                    BLOCK_KV_DMODEL: tl.constexpr, BLOCK_K_PE_DMODEL: tl.constexpr,
-                    BLOCK_N: tl.constexpr, OFFS_M: tl.constexpr, OFFS_N: tl.constexpr,
-                    PRE_LOAD_V: tl.constexpr, MASK_STEPS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr,
-                    RETURN_ENCODED_SOFTMAX: tl.constexpr, PADDED_KV_HEAD: tl.constexpr, PADDED_K_PE_HEAD: tl.constexpr,
-                    ACTUAL_BLOCK_KV_DMODEL: tl.constexpr,  ACTUAL_BLOCK_K_PE_DMODEL: tl.constexpr,
-                    QK_SCALE: tl.constexpr, INT8_GEMM: tl.constexpr, USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr, LATENT_ATTENTION: tl.constexpr):
-    
+                    BLOCK_KV_DMODEL: tl.constexpr, BLOCK_K_PE_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,
+                    OFFS_M: tl.constexpr, OFFS_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, MASK_STEPS: tl.constexpr,
+                    ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, PADDED_KV_HEAD: tl.constexpr,
+                    PADDED_K_PE_HEAD: tl.constexpr, ACTUAL_BLOCK_KV_DMODEL: tl.constexpr,
+                    ACTUAL_BLOCK_K_PE_DMODEL: tl.constexpr, QK_SCALE: tl.constexpr, INT8_GEMM: tl.constexpr,
+                    USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr, LATENT_ATTENTION: tl.constexpr):
+
     # loop over k, v, and update accumulator
     for start_n in range(block_min, block_max, BLOCK_N):
         # For padded blocks, we will overrun the tensor size if
@@ -343,7 +344,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias
                 acc += tl.dot(p, v.to(p.type.element_ty))
         elif LATENT_ATTENTION:
             # p should be BLOCK_M, BLOCK_N
-            # 
+            #
             temp = tl.dot(p.to(kv.type.element_ty), kv.trans())
             acc += tl.dot(temp.to(wkv_b.type.element_ty), wkv_b)
         else:
@@ -443,28 +444,25 @@ autotune_configs, autotune_keys = get_autotune_configs()
     use_cuda_graph=True,
 )
 @triton.jit
-def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, 
-             stride_qz, stride_qh, stride_qm, stride_qk, # strides for Q
+def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh, stride_qm,
+             stride_qk,  # strides for Q
              stride_q_pe_z, stride_q_pe_h, stride_q_pe_m, stride_q_pe_k,  # strides for Q_PE
-             stride_kz, stride_kn, stride_kk, # strides for KV
-             stride_k_pe_z, stride_k_pe_n, stride_k_pe_k, # strides for K_PE
-             stride_oz, stride_oh, stride_om, stride_on,
-             stride_wkv_b_h, stride_wkv_b_k, stride_wkv_b_n,
-             stride_bz, stride_bh, stride_bm, stride_bn, 
-             stride_az, stride_ah, 
-             qk_nope_head_dim: tl.constexpr, v_head_dim: tl.constexpr,
-             Q_descale, K_descale, P_scale, P_descale, V_descale, cu_seqlens_q, cu_seqlens_k, dropout_p, philox_seed,
-             PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: tl.constexpr,
-             GRID_CU_MULTIP: tl.constexpr, B: tl.constexpr, philox_offset_base, encoded_softmax, alibi_slopes,
-             HQ: tl.constexpr, HK: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr,
-             MAX_SEQLENS_K: tl.constexpr, VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
-             BLOCK_Q_DMODEL: tl.constexpr, BLOCK_DC_MODEL: tl.constexpr, BLOCK_Q_PE_DMODEL: tl.constexpr,
-             BLOCK_KV_DMODEL: tl.constexpr, BLOCK_K_PE_DMODEL: tl.constexpr, BLOCK_V_DMODEL: tl.constexpr,
-             ACTUAL_BLOCK_Q_DMODEL: tl.constexpr, ACTUAL_BLOCK_DC_MODEL: tl.constexpr, ACTUAL_BLOCK_Q_PE_DMODEL: tl.constexpr,
-             ACTUAL_BLOCK_KV_DMODEL: tl.constexpr, ACTUAL_BLOCK_K_PE_DMODEL: tl.constexpr,
-             BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
-             ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr,
-             INT8: tl.constexpr, USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr, LATENT_ATTENTION:tl.constexpr):
+             stride_kz, stride_kn, stride_kk,  # strides for KV
+             stride_k_pe_z, stride_k_pe_n, stride_k_pe_k,  # strides for K_PE
+             stride_oz, stride_oh, stride_om, stride_on, stride_wkv_b_h, stride_wkv_b_k, stride_wkv_b_n, stride_bz,
+             stride_bh, stride_bm, stride_bn, stride_az, stride_ah, qk_nope_head_dim: tl.constexpr,
+             v_head_dim: tl.constexpr, Q_descale, K_descale, P_scale, P_descale, V_descale, cu_seqlens_q, cu_seqlens_k,
+             dropout_p, philox_seed, PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter,
+             NUM_CU: tl.constexpr, GRID_CU_MULTIP: tl.constexpr, B: tl.constexpr, philox_offset_base, encoded_softmax,
+             alibi_slopes, HQ: tl.constexpr, HK: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr, MAX_SEQLENS_K: tl.constexpr,
+             VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_Q_DMODEL: tl.constexpr,
+             BLOCK_DC_MODEL: tl.constexpr, BLOCK_Q_PE_DMODEL: tl.constexpr, BLOCK_KV_DMODEL: tl.constexpr,
+             BLOCK_K_PE_DMODEL: tl.constexpr, BLOCK_V_DMODEL: tl.constexpr, ACTUAL_BLOCK_Q_DMODEL: tl.constexpr,
+             ACTUAL_BLOCK_DC_MODEL: tl.constexpr, ACTUAL_BLOCK_Q_PE_DMODEL: tl.constexpr,
+             ACTUAL_BLOCK_KV_DMODEL: tl.constexpr, ACTUAL_BLOCK_K_PE_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,
+             PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr,
+             RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr, INT8: tl.constexpr,
+             USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr, LATENT_ATTENTION: tl.constexpr):
 
     assert LATENT_ATTENTION, "This kernel is meant to work with latent attention only"
 
@@ -482,7 +480,7 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
         num_tiles_total = 1
 
     while tile_id < num_tiles_total:  # loops more than once only if PERSISTENT
-        
+
         if PERSISTENT:
             # tile id basically tells us the Q block we are handling
             off_z = tile_id // num_tiles_per_sample  # at which batch sample are we
@@ -498,7 +496,7 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
         offs_q_d = tl.arange(0, BLOCK_Q_DMODEL)
 
         # We need to split the wkv_b into two along the d (if the whole wkv_b is of size h,d,dc: num heads, head dim, compressed head dim)
-        offs_wkv_b_q = tl.arange(0, qk_nope_head_dim) 
+        offs_wkv_b_q = tl.arange(0, qk_nope_head_dim)
         offs_wkv_b_v = tl.arange(qk_nope_head_dim, qk_nope_head_dim + v_head_dim)
         offs_dc = tl.arange(0, BLOCK_DC_MODEL)
         offs_q_pe_d = tl.arange(0, BLOCK_Q_PE_DMODEL)
@@ -578,7 +576,7 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
                     n_extra_tokens = BLOCK_N - seqlen_k
                 elif seqlen_k % BLOCK_N:
                     n_extra_tokens = seqlen_k % BLOCK_N
-                
+
                 PADDED_Q_HEAD: tl.constexpr = (ACTUAL_BLOCK_Q_DMODEL != BLOCK_Q_DMODEL)
                 PADDED_Q_PE_HEAD: tl.constexpr = (ACTUAL_BLOCK_Q_PE_DMODEL != BLOCK_Q_PE_DMODEL)
                 PADDED_KV_HEAD: tl.constexpr = (ACTUAL_BLOCK_KV_DMODEL != BLOCK_KV_DMODEL)
@@ -588,18 +586,18 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
                 # Compute pointers for all the tensors used in this kernel.
                 q_offset = Q + off_z * stride_qz + off_h_q * stride_qh + cu_seqlens_q_start * stride_qm
                 q_ptrs = q_offset + offs_m[:, None] * stride_qm + offs_q_d[None, :] * stride_qk
-                
+
                 kv_offset = KV + off_z * stride_kz + cu_seqlens_kv_start * stride_kn
                 kv_ptrs = kv_offset + offs_kv_d[:, None] * stride_kk + offs_n[None, :] * stride_kn
-                
+
                 # pointers for position embeddings
                 k_pe_offset = K_PE + off_z * stride_k_pe_z + cu_seqlens_kv_start * stride_k_pe_k
                 k_pe_ptrs = k_pe_offset + offs_n[None, :] * stride_k_pe_n + offs_k_pe_d[:, None] * stride_k_pe_k
-                
-                q_pe_offset = Q_PE + off_z * stride_q_pe_z + off_h_q * stride_q_pe_h
-                q_pe_ptrs = q_pe_offset + offs_m[:, None] * stride_q_pe_m + offs_q_pe_d[None, :] * stride_q_pe_k                
 
-                # weight matrix: 
+                q_pe_offset = Q_PE + off_z * stride_q_pe_z + off_h_q * stride_q_pe_h
+                q_pe_ptrs = q_pe_offset + offs_m[:, None] * stride_q_pe_m + offs_q_pe_d[None, :] * stride_q_pe_k
+
+                # weight matrix:
                 wkv_b_offset = WKV_B + off_h_q * stride_wkv_b_h
 
                 # Compute pointers for the first part (wkv_b[:qk_nope_head_dim, :]) to be absorbed into q computation at outer loop
@@ -611,7 +609,6 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
                 wkv_b_ptrs2 = wkv_b_offset + offs_wkv_b_v[None, :] * stride_wkv_b_k + offs_dc[:, None] * stride_wkv_b_n
                 # tl loading this should come out as dc x v_head_dim matrix
 
-                
                 # Compute pointers for all the scale tensors used in this kernel.
                 INT8_GEMM: tl.constexpr = INT8 & (not INT8_KV)
                 if INT8:
@@ -658,21 +655,21 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
                 # Q is loaded once at the beginning and shared by all N blocks.
                 q_ptrs_mask = offs_m[:, None] < seqlen_q
                 q_pe_ptrs_mask = offs_m[:, None] < seqlen_q
-                
+
                 if PADDED_Q_HEAD:
                     q_ptrs_mask = q_ptrs_mask & (offs_q_d[None, :] < ACTUAL_BLOCK_Q_DMODEL)
 
                 if PADDED_Q_PE_HEAD:
                     q_pe_ptrs_mask = q_pe_ptrs_mask & (offs_q_pe_d[None, :] < ACTUAL_BLOCK_Q_PE_DMODEL)
-                
+
                 q_nope = tl.load(q_ptrs, mask=q_ptrs_mask, other=0.0)
                 q_pe = tl.load(q_pe_ptrs, mask=q_pe_ptrs_mask, other=0.0)
-                
+
                 # TODO: handle if dc dimension is not a multiple of 2 (wkv_b.shape: h, dc, )
                 wkv_b1 = tl.load(wkv_b_ptrs1)
                 wkv_b = tl.load(wkv_b_ptrs2)
                 q_nope = tl.dot(q_nope, wkv_b1)
-                
+
                 if INT8:
                     k_descale = tl.load(k_descale_ptrs)
                     v_descale = tl.load(v_descale_ptrs)
@@ -712,20 +709,17 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
                 # value because there is no masking. Similarly we do not need padding.
                 if n_full_blocks > 0:
                     block_max = (n_blocks - masked_blocks) * BLOCK_N
-                    acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kn,
-                                                    stride_bn, start_m, seqlen_k, seqlen_q, dropout_p, philox_seed,
-                                                    batch_philox_offset, encoded_sm_ptrs,
-                                                    # _, _, offs_n_causal, masked_blocks, n_extra_tokens, _
-                                                    block_min, block_max, 0, 0, 0, alibi_slope, q_descale, k_descale,
-                                                    v_descale, p_scale,
-                                                    # IS_CAUSAL, ....
-                                                    False, BLOCK_M, 
-                                                    BLOCK_KV_DMODEL, BLOCK_K_PE_DMODEL, BLOCK_N, offs_m, offs_n,
-                                                    # _, MASK_STEPS, ...
-                                                    PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX,
-                                                    PADDED_KV_HEAD, PADDED_K_PE_HEAD, ACTUAL_BLOCK_KV_DMODEL, ACTUAL_BLOCK_K_PE_DMODEL,
-                                                    QK_SCALE, INT8_GEMM, USE_P_SCALE,
-                                                    INT8_KV, True)
+                    acc, l_i, m_i = _attn_fwd_inner(
+                        acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kn, stride_bn,
+                        start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
+                        # _, _, offs_n_causal, masked_blocks, n_extra_tokens, _
+                        block_min, block_max, 0, 0, 0, alibi_slope, q_descale, k_descale, v_descale, p_scale,
+                        # IS_CAUSAL, ....
+                        False, BLOCK_M, BLOCK_KV_DMODEL, BLOCK_K_PE_DMODEL, BLOCK_N, offs_m, offs_n,
+                        # _, MASK_STEPS, ...
+                        PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_KV_HEAD, PADDED_K_PE_HEAD,
+                        ACTUAL_BLOCK_KV_DMODEL, ACTUAL_BLOCK_K_PE_DMODEL, QK_SCALE, INT8_GEMM, USE_P_SCALE, INT8_KV,
+                        True)
                     block_min = block_max
                     block_max = n_blocks * BLOCK_N
 
@@ -743,14 +737,15 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
                     if RETURN_ENCODED_SOFTMAX:
                         encoded_sm_ptrs += n_full_blocks * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(
-                        acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kn, stride_bn, start_m, seqlen_k,
-                        seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs, block_min, block_max,
-                        offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope, q_descale, k_descale, v_descale,
-                        p_scale, IS_CAUSAL, BLOCK_M,  BLOCK_KV_DMODEL, BLOCK_K_PE_DMODEL, BLOCK_N, offs_m, offs_n,
+                        acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kn, stride_bn,
+                        start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
+                        block_min, block_max, offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope, q_descale,
+                        k_descale, v_descale, p_scale, IS_CAUSAL, BLOCK_M, BLOCK_KV_DMODEL, BLOCK_K_PE_DMODEL, BLOCK_N,
+                        offs_m, offs_n,
                         # _, MASK_STEPS, ...
-                        PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_KV_HEAD, PADDED_K_PE_HEAD, 
-                        ACTUAL_BLOCK_KV_DMODEL, ACTUAL_BLOCK_K_PE_DMODEL,
-                        QK_SCALE, INT8_GEMM, USE_P_SCALE, INT8_KV, True)
+                        PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_KV_HEAD, PADDED_K_PE_HEAD,
+                        ACTUAL_BLOCK_KV_DMODEL, ACTUAL_BLOCK_K_PE_DMODEL, QK_SCALE, INT8_GEMM, USE_P_SCALE, INT8_KV,
+                        True)
 
                 if INT8 and not INT8_KV:
                     if USE_P_SCALE:
@@ -1134,7 +1129,7 @@ def get_strides_from_layout_latent(q, q_pe, kv, k_pe, o, wkv_b, metadata):
     k_pe_strides = (k_pe.stride(0), k_pe.stride(1), k_pe.stride(2))
     o_strides = (o.stride(0), o.stride(1), o.stride(2), o.stride(3))
     wkv_b_strides = (wkv_b.stride(0), wkv_b.stride(1), wkv_b.stride(2))
- 
+
     return q_strides, q_pe_strides, kv_strides, k_pe_strides, o_strides, wkv_b_strides
 
 
@@ -1155,8 +1150,9 @@ class _attention(torch.autograd.Function):
         # metadata.check_args(q, kv, k_pe, o)
 
         batch, nheads_q, nheads_k, head_size = get_shape_from_layout(q, kv, metadata)
-        
-        q_strides, q_pe_strides, kv_strides, k_pe_strides, o_strides, wkv_b_strides = get_strides_from_layout_latent(q, q_pe, kv, k_pe, o, wkv_b, metadata)
+
+        q_strides, q_pe_strides, kv_strides, k_pe_strides, o_strides, wkv_b_strides = get_strides_from_layout_latent(
+            q, q_pe, kv, k_pe, o, wkv_b, metadata)
 
         # Get closest power of 2 over or equal to 32.
         padded_q_dmodel = 1 << (head_size - 1).bit_length()
@@ -1228,23 +1224,24 @@ class _attention(torch.autograd.Function):
 
         atomic_counter = torch.zeros([1], device=q.device, dtype=torch.int32)
 
-        attn_fwd[grid](q, q_pe, kv, k_pe, wkv_b, metadata.bias, metadata.sm_scale, M, o, *q_strides, *q_pe_strides, *kv_strides, *k_pe_strides, *o_strides, *wkv_b_strides,
-                       *bias_strides, *alibi_strides, metadata.qk_nope_head_dim, metadata.v_head_dim, q_descale, k_descale, p_scale, p_descale, v_descale,
-                       metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p,
-                       philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
-                       alibi_slopes=metadata.alibi_slopes, HQ=nheads_q, HK=nheads_k,
-                       MAX_SEQLENS_Q=metadata.max_seqlens_q, MAX_SEQLENS_K=metadata.max_seqlens_k,
-                       IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
-                       BLOCK_Q_DMODEL=padded_q_dmodel, BLOCK_DC_MODEL=padded_dc_model, BLOCK_Q_PE_DMODEL=padded_q_pe_dmodel,
-                       BLOCK_KV_DMODEL=padded_kv_dmodel, BLOCK_K_PE_DMODEL=padded_k_pe_dmodel, BLOCK_V_DMODEL=padded_v_dmodel,
-                       ACTUAL_BLOCK_Q_DMODEL=head_size, ACTUAL_BLOCK_DC_MODEL=head_dc_size, ACTUAL_BLOCK_Q_PE_DMODEL=head_q_pe_size,
-                       ACTUAL_BLOCK_KV_DMODEL=head_kv_size, ACTUAL_BLOCK_K_PE_DMODEL=head_k_pe_size,
-                       USE_BIAS=False if metadata.bias is None else True,
-                       USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
-                       > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8,
-                       USE_P_SCALE=metadata.int8 and metadata.use_p_scale, INT8_KV=metadata.int8 and metadata.int8_kv,
-                       PERSISTENT=metadata.persistent is not None, PERSISTENT_DYNAMIC=metadata.persistent == "dynamic",
-                       NUM_CU=NUM_CU, LATENT_ATTENTION=True, atomic_counter=atomic_counter, B=batch)
+        attn_fwd[grid](
+            q, q_pe, kv, k_pe, wkv_b, metadata.bias, metadata.sm_scale, M, o, *q_strides, *q_pe_strides, *kv_strides,
+            *k_pe_strides, *o_strides, *wkv_b_strides, *bias_strides, *alibi_strides, metadata.qk_nope_head_dim,
+            metadata.v_head_dim, q_descale, k_descale, p_scale, p_descale, v_descale, metadata.cu_seqlens_q,
+            metadata.cu_seqlens_k, dropout_p=metadata.dropout_p, philox_seed=philox_seed,
+            philox_offset_base=philox_offset, encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes,
+            HQ=nheads_q, HK=nheads_k, MAX_SEQLENS_Q=metadata.max_seqlens_q, MAX_SEQLENS_K=metadata.max_seqlens_k,
+            IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen, BLOCK_Q_DMODEL=padded_q_dmodel,
+            BLOCK_DC_MODEL=padded_dc_model, BLOCK_Q_PE_DMODEL=padded_q_pe_dmodel, BLOCK_KV_DMODEL=padded_kv_dmodel,
+            BLOCK_K_PE_DMODEL=padded_k_pe_dmodel, BLOCK_V_DMODEL=padded_v_dmodel, ACTUAL_BLOCK_Q_DMODEL=head_size,
+            ACTUAL_BLOCK_DC_MODEL=head_dc_size, ACTUAL_BLOCK_Q_PE_DMODEL=head_q_pe_size,
+            ACTUAL_BLOCK_KV_DMODEL=head_kv_size, ACTUAL_BLOCK_K_PE_DMODEL=head_k_pe_size,
+            USE_BIAS=False if metadata.bias is None else True,
+            USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p > 0.0,
+            RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8, USE_P_SCALE=metadata.int8
+            and metadata.use_p_scale, INT8_KV=metadata.int8 and metadata.int8_kv, PERSISTENT=metadata.persistent
+            is not None, PERSISTENT_DYNAMIC=metadata.persistent == "dynamic", NUM_CU=NUM_CU, LATENT_ATTENTION=True,
+            atomic_counter=atomic_counter, B=batch)
 
         # ctx.save_for_backward(q, k, v, o, M)
         ctx.grid = grid
@@ -2130,6 +2127,7 @@ def main():
            "Only fp16, bf16 and f32 types currently supported."
 
     run_benchmark(custom_config, args)
+
 
 if __name__ == '__main__':
     sys.exit(main())

@@ -9,16 +9,12 @@ import torch.distributed as dist
 
 import sys
 import os
+
 sys.path.append(os.path.expanduser("~/rocm/triton/python/perf-kernels"))
 
 # Now you can import the functions
 from MLA import attention, input_helper
 
-
-
-from typing import Tuple
-
-import torch
 import triton
 import triton.language as tl
 from triton import Config
@@ -125,17 +121,16 @@ def weight_dequant(x: torch.Tensor, s: torch.Tensor, block_size: int = 128) -> t
 
 fp8_gemm_configs = [
     Config({'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': 128}, num_stages=num_stages, num_warps=8)
-    for block_m in [16, 32, 64] for block_n in [32, 64, 128] for num_stages in [3, 4, 5, 6]
+    for block_m in [16, 32, 64]
+    for block_n in [32, 64, 128]
+    for num_stages in [3, 4, 5, 6]
 ]
+
 
 @triton.autotune(configs=fp8_gemm_configs, key=['N', 'K'])
 @triton.jit
-def fp8_gemm_kernel(a_ptr, b_ptr, c_ptr,
-                    a_s_ptr, b_s_ptr,
-                    M, N: tl.constexpr, K: tl.constexpr,
-                    BLOCK_SIZE_M: tl.constexpr,
-                    BLOCK_SIZE_N: tl.constexpr,
-                    BLOCK_SIZE_K: tl.constexpr):
+def fp8_gemm_kernel(a_ptr, b_ptr, c_ptr, a_s_ptr, b_s_ptr, M, N: tl.constexpr, K: tl.constexpr,
+                    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
     """
     Performs a matrix multiplication operation on FP8 matrices with scaling factors.
 
@@ -211,8 +206,8 @@ def fp8_gemm(a: torch.Tensor, a_s: torch.Tensor, b: torch.Tensor, b_s: torch.Ten
 
 def flash_attention(q_nope, q_pe, kv, k_pe, wkv_b, qk_nope_head_dim, v_head_dim):
     # Replace this with your actual Flash Attention implementation
-    q_nope = q_nope.permute((0,2,1,3))
-    q_pe = q_pe.permute((0,2,1,3))
+    q_nope = q_nope.permute((0, 2, 1, 3))
+    q_pe = q_pe.permute((0, 2, 1, 3))
     # k_pe = k_pe.permute((0,2,1,3))
     o = torch.zeros((*q_nope.shape[:-1], v_head_dim), dtype=q_nope.dtype)
     Z, H, N, D = q_nope.shape
@@ -221,13 +216,15 @@ def flash_attention(q_nope, q_pe, kv, k_pe, wkv_b, qk_nope_head_dim, v_head_dim)
     input_metadata.qk_nope_head_dim = qk_nope_head_dim
     input_metadata.v_head_dim = v_head_dim
     attention(q_nope, q_pe, kv, k_pe, o, wkv_b, input_metadata)
-    return o # torch.randn_like(q_nope)  # Dummy output
+    return o  # torch.randn_like(q_nope)  # Dummy output
+
 
 world_size = 1
 rank = 0
 block_size = 128
 gemm_impl: Literal["bf16", "fp8", "fp16"] = "bf16"
 attn_impl: Literal["naive", "absorb"] = "absorb"
+
 
 @dataclass
 class ModelArgs:
@@ -265,15 +262,15 @@ class ModelArgs:
         mscale (float): Scaling factor for extended attention.
     """
     max_batch_size: int = 8
-    max_seq_len: int = 4096 * 4 
+    max_seq_len: int = 4096 * 4
     dtype: Literal["bf16", "fp8", "fp16"] = "bf16"  # Change default to "bf16"
     vocab_size: int = 102400
-    dim: int = 2048 
+    dim: int = 2048
     inter_dim: int = 10944
-    moe_inter_dim: int = 1408 
+    moe_inter_dim: int = 1408
     n_layers: int = 27
     n_dense_layers: int = 1
-    n_heads: int = 16 
+    n_heads: int = 16
     # moe
     n_routed_experts: int = 64
     n_shared_experts: int = 2
@@ -305,6 +302,7 @@ class ParallelEmbedding(nn.Module):
         vocab_size (int): Vocabulary size.
         dim (int): Embedding dimension.
     """
+
     def __init__(self, vocab_size: int, dim: int):
         super().__init__()
         self.vocab_size = vocab_size
@@ -347,16 +345,16 @@ def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] =
 
     Args:
         x (torch.Tensor): The input tensor.
-        weight (torch.Tensor): The weight tensor. It may be quantized and 
+        weight (torch.Tensor): The weight tensor. It may be quantized and
             requires dequantization for certain cases.
         bias (Optional[torch.Tensor]): The bias tensor to be added. Default is None.
 
     Returns:
-        torch.Tensor: The result of the linear transformation, which may involve 
+        torch.Tensor: The result of the linear transformation, which may involve
         quantization-aware computations depending on the input parameters.
 
     Notes:
-        - If `weight` is quantized (e.g., `element_size() > 1`), a dequantized version 
+        - If `weight` is quantized (e.g., `element_size() > 1`), a dequantized version
           is used for computation.
         - If `gemm_impl == "bf16"`, dequantization and a `bf16` GEMM operation are applied.
         - For other cases, the function applies quantization to `x` and uses `fp8_gemm` for computation.
@@ -386,7 +384,7 @@ class Linear(nn.Module):
     """
     dtype = torch.bfloat16  # Change default to torch.bfloat16
 
-    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None):
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype=None):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -394,7 +392,8 @@ class Linear(nn.Module):
         if self.weight.element_size() == 1:
             scale_out_features = (out_features + block_size - 1) // block_size
             scale_in_features = (in_features + block_size - 1) // block_size
-            self.weight.scale = self.scale = nn.Parameter(torch.randn(scale_out_features, scale_in_features, dtype=torch.float32))
+            self.weight.scale = self.scale = nn.Parameter(
+                torch.randn(scale_out_features, scale_in_features, dtype=torch.float32))
         else:
             self.register_parameter("scale", None)
         if bias:
@@ -425,7 +424,8 @@ class ColumnParallelLinear(Linear):
         bias (bool): Whether to include a bias term. Defaults to False.
         dtype (optional): Data type for the layer. Defaults to `torch.bfloat16`.
     """
-    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None):
+
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype=None):
         assert out_features % world_size == 0
         self.part_out_features = out_features // world_size
         super().__init__(in_features, self.part_out_features, bias, dtype)
@@ -454,7 +454,8 @@ class RowParallelLinear(Linear):
         bias (bool): Whether to include a bias term. Defaults to False.
         dtype (optional): Data type for the layer. Defaults to `torch.bfloat16`.
     """
-    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None):
+
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype=None):
         assert in_features % world_size == 0
         self.part_in_features = in_features // world_size
         super().__init__(self.part_in_features, out_features, bias, dtype)
@@ -485,6 +486,7 @@ class RMSNorm(nn.Module):
         dim (int): Dimension of the input tensor.
         eps (float): Epsilon value for numerical stability. Defaults to 1e-6.
     """
+
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
         self.dim = dim
@@ -501,7 +503,7 @@ class RMSNorm(nn.Module):
         Returns:
             torch.Tensor: Normalized tensor with the same shape as input.
         """
-        return F.rms_norm(x, (self.dim,), self.weight, self.eps)
+        return F.rms_norm(x, (self.dim, ), self.weight, self.eps)
 
 
 def precompute_freqs_cis(args: ModelArgs) -> torch.Tensor:
@@ -552,7 +554,7 @@ def precompute_freqs_cis(args: ModelArgs) -> torch.Tensor:
         """
         low = math.floor(find_correction_dim(low_rot, dim, base, max_seq_len))
         high = math.ceil(find_correction_dim(high_rot, dim, base, max_seq_len))
-        return max(low, 0), min(high, dim-1)
+        return max(low, 0), min(high, dim - 1)
 
     def linear_ramp_factor(min, max, dim):
         """
@@ -573,7 +575,7 @@ def precompute_freqs_cis(args: ModelArgs) -> torch.Tensor:
         ramp_func = torch.clamp(linear_func, 0, 1)
         return ramp_func
 
-    freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+    freqs = 1.0 / (base**(torch.arange(0, dim, 2, dtype=torch.float32) / dim))
     if seqlen > args.original_seq_len:
         low, high = find_correction_range(beta_fast, beta_slow, dim, base, args.original_seq_len)
         smooth = 1 - linear_ramp_factor(low, high, dim // 2)
@@ -602,6 +604,7 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
     y = torch.view_as_real(x * freqs_cis).flatten(3)
     return y.to(dtype)
 
+
 class MLA(nn.Module):
     """
     Multi-Headed Attention Layer (MLA).
@@ -618,6 +621,7 @@ class MLA(nn.Module):
         v_head_dim (int): Dimensionality of value projections.
         softmax_scale (float): Scaling factor for softmax in attention computation.
     """
+
     def __init__(self, args: ModelArgs):
         super().__init__()
         self.dim = args.dim
@@ -640,21 +644,24 @@ class MLA(nn.Module):
         self.kv_norm = RMSNorm(self.kv_lora_rank)
         self.wkv_b = ColumnParallelLinear(self.kv_lora_rank, self.n_heads * (self.qk_nope_head_dim + self.v_head_dim))
         self.wo = RowParallelLinear(self.n_heads * self.v_head_dim, self.dim)
-        self.softmax_scale = self.qk_head_dim ** -0.5
+        self.softmax_scale = self.qk_head_dim**-0.5
         if args.max_seq_len > args.original_seq_len:
             mscale = 0.1 * args.mscale * math.log(args.rope_factor) + 1.0
             self.softmax_scale = self.softmax_scale * mscale * mscale
 
         if attn_impl == "naive":
-            self.register_buffer("k_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.n_local_heads, self.qk_head_dim), persistent=False)
-            self.register_buffer("v_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.n_local_heads, self.v_head_dim), persistent=False)
+            self.register_buffer(
+                "k_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.n_local_heads, self.qk_head_dim),
+                persistent=False)
+            self.register_buffer(
+                "v_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.n_local_heads, self.v_head_dim),
+                persistent=False)
         else:
-            self.register_buffer("kv_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.kv_lora_rank), persistent=False)
-            self.register_buffer("pe_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.qk_rope_head_dim), persistent=False)
+            self.register_buffer("kv_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.kv_lora_rank),
+                                 persistent=False)
+            self.register_buffer("pe_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.qk_rope_head_dim),
+                                 persistent=False)
 
-    
-
-    
     def forward(self, x: torch.Tensor, start_pos: int, freqs_cis: torch.Tensor, mask: Optional[torch.Tensor]):
         """
         Forward pass for the Multi-Headed Attention Layer (MLA).
@@ -680,7 +687,7 @@ class MLA(nn.Module):
         kv = self.wkv_a(x)
         kv, k_pe = torch.split(kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
         k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis)
-        
+
         if attn_impl == "flash":
             print("Computing flash MLA attention")
             # Flash Attention integration
@@ -688,7 +695,7 @@ class MLA(nn.Module):
             wkv_b = wkv_b.view(self.n_heads, -1, self.kv_lora_rank)
             kv = self.kv_norm(kv)
             x = flash_attention(q_nope, q_pe, kv, k_pe.squeeze(2), wkv_b, self.qk_nope_head_dim, self.v_head_dim)
-            x = x.permute((0,2,1,3))
+            x = x.permute((0, 2, 1, 3))
         else:
             if attn_impl == "naive":
                 print("Computing naive MLA attention")
@@ -702,7 +709,8 @@ class MLA(nn.Module):
                 scores = torch.einsum("bshd,bthd->bsht", q, self.k_cache[:bsz, :end_pos]) * self.softmax_scale
             else:
                 print("Computing absorbed MLA attention")
-                wkv_b = self.wkv_b.weight if self.wkv_b.scale is None else weight_dequant(self.wkv_b.weight, self.wkv_b.scale, block_size) 
+                wkv_b = self.wkv_b.weight if self.wkv_b.scale is None else weight_dequant(
+                    self.wkv_b.weight, self.wkv_b.scale, block_size)
                 wkv_b = wkv_b.view(self.n_local_heads, -1, self.kv_lora_rank)
                 #print("wkv_b full shape: ", wkv_b.shape)
                 #print(f"q_nope x wkv_b1: {q_nope.shape}x{wkv_b[:, :self.qk_nope_head_dim].shape}")
@@ -712,8 +720,8 @@ class MLA(nn.Module):
                 #print(f"q_nope x kv: {q_nope.shape}x{self.kv_cache[:bsz, :end_pos].shape}")
                 #print(f"q_pe x k_pe: {q_pe.shape}x{self.pe_cache[:bsz, :end_pos].shape}")
                 scores = (torch.einsum("bshc,btc->bsht", q_nope, self.kv_cache[:bsz, :end_pos]) +
-                            torch.einsum("bshr,btr->bsht", q_pe, self.pe_cache[:bsz, :end_pos])) * self.softmax_scale
-                
+                          torch.einsum("bshr,btr->bsht", q_pe, self.pe_cache[:bsz, :end_pos])) * self.softmax_scale
+
             if mask is not None:
                 scores += mask.unsqueeze(1)
             scores = scores.softmax(dim=-1, dtype=torch.float32).type_as(x)
@@ -732,7 +740,7 @@ class MLA(nn.Module):
 def test_mla_implementations():
     # Define model arguments
     args = ModelArgs()
-    
+
     # Create two MLA instances, one with "naive" and one with "absorb" implementation
     set_seed(0)
     mla_naive = MLA(args)
@@ -760,18 +768,24 @@ def test_mla_implementations():
     global attn_impl
     attn_impl = "absorb"
     mla_absorb.attn_impl = "absorb"
-    mla_absorb.kv_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_absorb.kv_lora_rank, dtype=torch.bfloat16, device="cuda")  # Change to torch.bfloat16
-    mla_absorb.pe_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_absorb.qk_rope_head_dim, dtype=torch.bfloat16, device="cuda")  # Change to torch.bfloat16
-    
+    mla_absorb.kv_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_absorb.kv_lora_rank,
+                                      dtype=torch.bfloat16, device="cuda")  # Change to torch.bfloat16
+    mla_absorb.pe_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_absorb.qk_rope_head_dim,
+                                      dtype=torch.bfloat16, device="cuda")  # Change to torch.bfloat16
+
     output_absorb = mla_absorb(x, start_pos, freqs_cis, mask)
 
     attn_impl = "naive"
     mla_naive.attn_impl = "naive"
-    mla_naive.k_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_naive.n_local_heads, mla_naive.qk_head_dim, dtype=torch.bfloat16, device="cuda")  # Change to torch.bfloat16
-    mla_naive.v_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_naive.n_local_heads, mla_naive.v_head_dim, dtype=torch.bfloat16, device="cuda")  # Change to torch.bfloat16
+    mla_naive.k_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_naive.n_local_heads,
+                                    mla_naive.qk_head_dim, dtype=torch.bfloat16,
+                                    device="cuda")  # Change to torch.bfloat16
+    mla_naive.v_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_naive.n_local_heads,
+                                    mla_naive.v_head_dim, dtype=torch.bfloat16,
+                                    device="cuda")  # Change to torch.bfloat16
 
     output_naive = mla_naive(x, start_pos, freqs_cis, mask)
-    
+
     # Print the last 10 elements of each tensor for quick inspection
     print(f"output_naive (last 10): {output_naive.flatten()[-10:]}")
     print(f"output_absorb (last 10): {output_absorb.flatten()[-10:]}")
@@ -786,22 +800,22 @@ def test_mla_implementations():
         print("All elements are close within the specified tolerances.")
     except AssertionError as e:
         print("Tensors are not close within the specified tolerances.")
-        
+
         # Step 1: Element-wise comparison
         # torch.isclose returns a boolean tensor where each element is True if the corresponding
         # elements in output_naive and output_absorb are close, otherwise False.
         output_absorb = output_absorb.flatten()
         output_naive = output_naive.flatten()
         close_mask = torch.isclose(output_naive, output_absorb, atol=atol, rtol=rtol)
-        
+
         # Step 2: Identify mismatches by inverting the mask
         mismatch_mask = ~close_mask
-        
+
         # Step 3: Get the indices of mismatched elements
         # torch.nonzero returns the indices where the condition is True. Since mismatch_mask is 1D,
         # we flatten it to get a 1D tensor of indices.
         mismatched_indices = torch.nonzero(mismatch_mask).flatten()
-        
+
         # Check if there are any mismatches
         num_mismatches = mismatched_indices.numel()
         if num_mismatches == 0:
@@ -811,7 +825,7 @@ def test_mla_implementations():
             num_to_print = min(10, num_mismatches)
             # Shuffle the indices and take the first `num_to_print`
             selected_indices = mismatched_indices[torch.randperm(num_mismatches)[:num_to_print]]
-            
+
             print(f"\nPrinting {num_to_print} randomly selected mismatched indices:")
             for idx in selected_indices:
                 naive_val = output_naive[idx].item()
@@ -821,12 +835,13 @@ def test_mla_implementations():
 
         raise e
 
+
 import random
 import numpy as np
 
 
 def set_seed(seed: int = 0):
-    torch.set_default_dtype(torch.bfloat16) 
+    torch.set_default_dtype(torch.bfloat16)
     torch.set_default_device("cuda")
     torch.manual_seed(seed)
     random.seed(seed)
