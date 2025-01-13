@@ -1,6 +1,16 @@
 adding --use-mask gets rid uf llir having segfaults.
 removing triton_cache changes pass vs fail.
 
+# att.txt:
+# kernel_dispatch
+# 1 - old
+# 2 - distribution
+# 3 - works
+# v0 still wrong
+# v1 does have setprio
+# 4 - distribution
+# 5 - none
+
 TFlops - Scenario
 596 - default kernel in gemm_sub.py, default compiler.
 586 - mfma_order nosb nomask.
