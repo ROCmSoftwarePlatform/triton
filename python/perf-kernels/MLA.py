@@ -236,7 +236,7 @@ def compute_alibi_tensor(alibi_slopes, seqlen_q, seqlen_k):
 
 # acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs
 @triton.jit
-def _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kn, stride_bn, start_m,
+def _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kv_n, stride_k_pe_n, stride_bn, start_m,
                     actual_seqlen_k, actual_seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
                     block_min, block_max, offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope, q_descale,
                     k_descale, v_descale, p_scale, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
@@ -247,6 +247,8 @@ def _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias
                     ACTUAL_BLOCK_K_PE_DMODEL: tl.constexpr, QK_SCALE: tl.constexpr, INT8_GEMM: tl.constexpr,
                     USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr, LATENT_ATTENTION: tl.constexpr):
 
+    assert LATENT_ATTENTION, "This kernel is only planned to work with the latent attention"
+    
     # loop over k, v, and update accumulator
     for start_n in range(block_min, block_max, BLOCK_N):
         # For padded blocks, we will overrun the tensor size if
@@ -255,6 +257,10 @@ def _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias
             k_offs_n = start_n + tl.arange(0, BLOCK_N)
         else:
             k_offs_n = None
+        
+        # ref: 
+        # k_offs_k = None if not PADDED_HEAD else tl.arange(0, BLOCK_DMODEL)
+        # k = load_fn(k_ptrs, k_offs_k, k_offs_n, ACTUAL_BLOCK_DMODEL, actual_seqlen_k)
         kv_offs_k = None if not PADDED_KV_HEAD else tl.arange(0, BLOCK_KV_DMODEL)
         kv = load_fn(kv_ptrs, kv_offs_k, k_offs_n, ACTUAL_BLOCK_KV_DMODEL, actual_seqlen_k)
         k_pe_offs_k = None if not PADDED_K_PE_HEAD else tl.arange(0, BLOCK_K_PE_DMODEL)
@@ -279,19 +285,12 @@ def _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias
             causal_boundary = start_n + offs_n_causal
             causal_mask = OFFS_M[:, None] >= causal_boundary[None, :]
             qk = tl.where(causal_mask, qk, float("-inf"))
+        
         # -- compute qk ----
-        assert LATENT_ATTENTION, "This kernel is only planned to work with the latent attention"
-
-        if INT8_GEMM:
-            qk += ((((tl.dot(q, k).to(tl.float32) * q_descale)) * k_descale) * QK_SCALE)
-        elif LATENT_ATTENTION:
-            qk += tl.dot(q_nope.to(kv.type.element_ty), kv)
-            qk += tl.dot(q_pe, k_pe)
-            qk *= QK_SCALE
-        else:
-            if INT8_KV:
-                k = (k * k_descale).to(q.type.element_ty)
-            qk += tl.dot(q, k) * QK_SCALE
+        # normally in FA: qk += (tl.dot(q, k) * QK_SCALE)
+        qk += tl.dot(q_nope.to(kv.type.element_ty), kv)
+        qk += tl.dot(q_pe, k_pe)
+        qk *= QK_SCALE
 
         if bias_ptrs is not None:
             bias_offs_n = start_n + tl.arange(0, BLOCK_N) if MASK_STEPS else None
@@ -327,36 +326,24 @@ def _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias
         # -- update output accumulator --
         alpha = tl.math.exp2(m_i - m_ij)
         acc = acc * alpha[:, None]
-        # if not PRE_LOAD_V:
-        #     v = load_fn(v_ptrs, k_offs_n, k_offs_k, actual_seqlen_k, ACTUAL_BLOCK_DMODEL)
+
         # -- update m_i and l_i
         l_i = l_i * alpha + l_ij
         # update m_i and l_i
         m_i = m_ij
 
-        if INT8_GEMM:
-            if USE_P_SCALE:
-                p = (p * p_scale).to(tl.int8)
-                # They are all int8
-                acc += tl.dot(p, v)
-            else:
-                # v is in int8 but p is not, we want the gemm in p's type
-                acc += tl.dot(p, v.to(p.type.element_ty))
-        elif LATENT_ATTENTION:
-            # p should be BLOCK_M, BLOCK_N
-            #
-            temp = tl.dot(p.to(kv.type.element_ty), kv.trans())
-            acc += tl.dot(temp.to(wkv_b.type.element_ty), wkv_b)
-        else:
-            if INT8_KV:
-                v = (v * v_descale).to(p.type.element_ty)
-            acc += tl.dot(p.to(v.type.element_ty), v)
+        # v = tl.dot(kv.trans(), wkv_b.trans()) # not the actual v, but helps to think
+        v = tl.dot(wkv_b, kv).trans()
+        acc += tl.dot(p.to(v.type.element_ty), v)
 
-        kv_ptrs += BLOCK_N * stride_kn
+        kv_ptrs += BLOCK_N * stride_kv_n
+        k_pe_ptrs += BLOCK_N * stride_k_pe_n
         if bias_ptrs is not None:
             bias_ptrs += BLOCK_N * stride_bn
         if RETURN_ENCODED_SOFTMAX:
             encoded_sm_ptrs += BLOCK_N
+
+
     return acc, l_i, m_i
 
 
@@ -586,27 +573,23 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, str
                 # Compute pointers for all the tensors used in this kernel.
                 q_offset = Q + off_z * stride_qz + off_h_q * stride_qh + cu_seqlens_q_start * stride_qm
                 q_ptrs = q_offset + offs_m[:, None] * stride_qm + offs_q_d[None, :] * stride_qk
-
+                # reference k pointers: k_ptrs = k_offset + offs_d[:, None] * stride_kk + offs_n[None, :] * stride_kn
                 kv_offset = KV + off_z * stride_kz + cu_seqlens_kv_start * stride_kn
                 kv_ptrs = kv_offset + offs_kv_d[:, None] * stride_kk + offs_n[None, :] * stride_kn
-
                 # pointers for position embeddings
                 k_pe_offset = K_PE + off_z * stride_k_pe_z + cu_seqlens_kv_start * stride_k_pe_k
-                k_pe_ptrs = k_pe_offset + offs_n[None, :] * stride_k_pe_n + offs_k_pe_d[:, None] * stride_k_pe_k
-
+                k_pe_ptrs = k_pe_offset + offs_k_pe_d[:, None] * stride_k_pe_k + offs_n[None, :] * stride_k_pe_n
                 q_pe_offset = Q_PE + off_z * stride_q_pe_z + off_h_q * stride_q_pe_h
                 q_pe_ptrs = q_pe_offset + offs_m[:, None] * stride_q_pe_m + offs_q_pe_d[None, :] * stride_q_pe_k
-
                 # weight matrix:
                 wkv_b_offset = WKV_B + off_h_q * stride_wkv_b_h
-
                 # Compute pointers for the first part (wkv_b[:qk_nope_head_dim, :]) to be absorbed into q computation at outer loop
                 wkv_b_offset = WKV_B + off_h_q * stride_wkv_b_h
                 wkv_b_ptrs1 = wkv_b_offset + offs_wkv_b_q[:, None] * stride_wkv_b_k + offs_dc[None, :] * stride_wkv_b_n
                 # tl loading this should come out as qk_nope_head_dim x dc matrix
 
                 # Compute pointers for the second part (wkv_b[-v_head_dim:, :]) needed in the inner loop
-                wkv_b_ptrs2 = wkv_b_offset + offs_wkv_b_v[None, :] * stride_wkv_b_k + offs_dc[:, None] * stride_wkv_b_n
+                wkv_b_ptrs2 = wkv_b_offset + offs_wkv_b_v[:, None] * stride_wkv_b_k + offs_dc[None, :] * stride_wkv_b_n
                 # tl loading this should come out as dc x v_head_dim matrix
 
                 # Compute pointers for all the scale tensors used in this kernel.
@@ -668,6 +651,7 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, str
                 # TODO: handle if dc dimension is not a multiple of 2 (wkv_b.shape: h, dc, )
                 wkv_b1 = tl.load(wkv_b_ptrs1)
                 wkv_b = tl.load(wkv_b_ptrs2)
+                # q_nope = torch.einsum("bshd,hdc->bshc", q_nope, wkv_b[:, :self.qk_nope_head_dim])
                 q_nope = tl.dot(q_nope, wkv_b1)
 
                 if INT8:
@@ -710,8 +694,8 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, str
                 if n_full_blocks > 0:
                     block_max = (n_blocks - masked_blocks) * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(
-                        acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kn, stride_bn,
-                        start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
+                        acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kn, stride_k_pe_n, 
+                        stride_bn, start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
                         # _, _, offs_n_causal, masked_blocks, n_extra_tokens, _
                         block_min, block_max, 0, 0, 0, alibi_slope, q_descale, k_descale, v_descale, p_scale,
                         # IS_CAUSAL, ....
@@ -737,8 +721,8 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, str
                     if RETURN_ENCODED_SOFTMAX:
                         encoded_sm_ptrs += n_full_blocks * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(
-                        acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kn, stride_bn,
-                        start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
+                        acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs, stride_kn, stride_k_pe_n,
+                        stride_bn, start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
                         block_min, block_max, offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope, q_descale,
                         k_descale, v_descale, p_scale, IS_CAUSAL, BLOCK_M, BLOCK_KV_DMODEL, BLOCK_K_PE_DMODEL, BLOCK_N,
                         offs_m, offs_n,

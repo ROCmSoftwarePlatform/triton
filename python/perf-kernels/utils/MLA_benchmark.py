@@ -204,19 +204,19 @@ def fp8_gemm(a: torch.Tensor, a_s: torch.Tensor, b: torch.Tensor, b_s: torch.Ten
     return c
 
 
-def flash_attention(q_nope, q_pe, kv, k_pe, wkv_b, qk_nope_head_dim, v_head_dim):
-    # Replace this with your actual Flash Attention implementation
+def flash_attention(q_nope, q_pe, kv, k_pe, wkv_b, qk_nope_head_dim, v_head_dim, sm_scale):
+    # q comes in as bshd, we assume bhsd inside kernel. So permute for now.
     q_nope = q_nope.permute((0, 2, 1, 3))
     q_pe = q_pe.permute((0, 2, 1, 3))
-    # k_pe = k_pe.permute((0,2,1,3))
     o = torch.zeros((*q_nope.shape[:-1], v_head_dim), dtype=q_nope.dtype)
     Z, H, N, D = q_nope.shape
-    print("Z, H, N, D: ", Z, H, N, D)
+    print(f"Z, H, N, D: {Z, H, N, D}")
     _, _, _, input_metadata = input_helper(Z, H, H, N, N, D, q_nope.dtype, "bhsd", requires_grad=False)
     input_metadata.qk_nope_head_dim = qk_nope_head_dim
     input_metadata.v_head_dim = v_head_dim
-    attention(q_nope, q_pe, kv, k_pe, o, wkv_b, input_metadata)
-    return o  # torch.randn_like(q_nope)  # Dummy output
+    input_metadata.sm_scale = sm_scale
+    o, _, _ = attention(q_nope, q_pe, kv, k_pe, o, wkv_b, input_metadata)
+    return o.permute((0, 2, 1, 3))  # permute back to bshd
 
 
 world_size = 1
@@ -281,10 +281,10 @@ class ModelArgs:
     route_scale: float = 1.
     # mla
     q_lora_rank: int = 0
-    kv_lora_rank: int = 512
-    qk_nope_head_dim: int = 128
-    qk_rope_head_dim: int = 64
-    v_head_dim: int = 128
+    kv_lora_rank: int = 512 // 2
+    qk_nope_head_dim: int = 128 // 2
+    qk_rope_head_dim: int = 64 // 2
+    v_head_dim: int = 128 // 2
     # yarn
     original_seq_len: int = 4096
     rope_theta: float = 10000.0
@@ -689,16 +689,13 @@ class MLA(nn.Module):
         k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis)
 
         if attn_impl == "flash":
-            print("Computing flash MLA attention")
-            # Flash Attention integration
-            wkv_b = self.wkv_b.weight
+            # "absorb" of gemms and Flash Attention fused
+            wkv_b = self.wkv_b.weight if self.wkv_b.scale is None else weight_dequant(self.wkv_b.weight, self.wkv_b.scale, block_size) 
             wkv_b = wkv_b.view(self.n_heads, -1, self.kv_lora_rank)
             kv = self.kv_norm(kv)
-            x = flash_attention(q_nope, q_pe, kv, k_pe.squeeze(2), wkv_b, self.qk_nope_head_dim, self.v_head_dim)
-            x = x.permute((0, 2, 1, 3))
+            x = flash_attention(q_nope, q_pe, kv, k_pe.squeeze(2), wkv_b, self.qk_nope_head_dim, self.v_head_dim, self.softmax_scale)
         else:
             if attn_impl == "naive":
-                print("Computing naive MLA attention")
                 q = torch.cat([q_nope, q_pe], dim=-1)
                 kv = self.wkv_b(self.kv_norm(kv))
                 kv = kv.view(bsz, seqlen, self.n_local_heads, self.qk_nope_head_dim + self.v_head_dim)
@@ -708,17 +705,12 @@ class MLA(nn.Module):
                 self.v_cache[:bsz, start_pos:end_pos] = v
                 scores = torch.einsum("bshd,bthd->bsht", q, self.k_cache[:bsz, :end_pos]) * self.softmax_scale
             else:
-                print("Computing absorbed MLA attention")
                 wkv_b = self.wkv_b.weight if self.wkv_b.scale is None else weight_dequant(
                     self.wkv_b.weight, self.wkv_b.scale, block_size)
                 wkv_b = wkv_b.view(self.n_local_heads, -1, self.kv_lora_rank)
-                #print("wkv_b full shape: ", wkv_b.shape)
-                #print(f"q_nope x wkv_b1: {q_nope.shape}x{wkv_b[:, :self.qk_nope_head_dim].shape}")
                 q_nope = torch.einsum("bshd,hdc->bshc", q_nope, wkv_b[:, :self.qk_nope_head_dim])
                 self.kv_cache[:bsz, start_pos:end_pos] = self.kv_norm(kv)
                 self.pe_cache[:bsz, start_pos:end_pos] = k_pe.squeeze(2)
-                #print(f"q_nope x kv: {q_nope.shape}x{self.kv_cache[:bsz, :end_pos].shape}")
-                #print(f"q_pe x k_pe: {q_pe.shape}x{self.pe_cache[:bsz, :end_pos].shape}")
                 scores = (torch.einsum("bshc,btc->bsht", q_nope, self.kv_cache[:bsz, :end_pos]) +
                           torch.einsum("bshr,btr->bsht", q_pe, self.pe_cache[:bsz, :end_pos])) * self.softmax_scale
 
@@ -728,9 +720,7 @@ class MLA(nn.Module):
             if attn_impl == "naive":
                 x = torch.einsum("bsht,bthd->bshd", scores, self.v_cache[:bsz, :end_pos])
             else:
-                #print(f"p x kv: {scores.shape}x{self.kv_cache[:bsz, :end_pos].shape}")
                 x = torch.einsum("bsht,btc->bshc", scores, self.kv_cache[:bsz, :end_pos])
-                #print(f"temp x wkv_b: {x.shape}x{wkv_b[:, -self.v_head_dim:].shape}")
                 x = torch.einsum("bshc,hdc->bshd", x, wkv_b[:, -self.v_head_dim:])
         x = self.wo(x.flatten(2))
 
@@ -775,8 +765,8 @@ def test_mla_implementations():
 
     output_absorb = mla_absorb(x, start_pos, freqs_cis, mask)
 
-    attn_impl = "naive"
-    mla_naive.attn_impl = "naive"
+    attn_impl = "flash"
+    mla_naive.attn_impl = "flash"
     mla_naive.k_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_naive.n_local_heads,
                                     mla_naive.qk_head_dim, dtype=torch.bfloat16,
                                     device="cuda")  # Change to torch.bfloat16
