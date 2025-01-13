@@ -9,6 +9,7 @@
 namespace mlir {
 
 std::unique_ptr<Pass> createTritonAMDGPUStreamPipelinePass(int numStages = 2,
+                                                           int maxDepth = 0,
                                                            int prefetch = 0);
 
 std::unique_ptr<Pass>

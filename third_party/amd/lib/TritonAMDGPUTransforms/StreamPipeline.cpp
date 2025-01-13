@@ -96,9 +96,9 @@ namespace {
 //
 class StreamPipeliner {
 public:
-  StreamPipeliner(scf::ForOp _forOp, int _numStages, bool _prefetch)
-      : forOp(_forOp), prefetch(_prefetch), numStages(_numStages + prefetch),
-        schedule(numStages),
+  StreamPipeliner(scf::ForOp _forOp, int _numStages, int _maxDepth, bool _prefetch)
+      : forOp(_forOp), maxDepth(_maxDepth), prefetch(_prefetch),
+        numStages(_numStages + prefetch), schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
     options.supportDynamicLoops = true;
     options.peelEpilogue = true;
@@ -152,6 +152,7 @@ private:
 
   // User settings
   bool prefetch;
+  int maxDepth;
   int numStages;
 
   // Scheduling clusters
@@ -374,13 +375,14 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
 }
 
 static float getComputeFactor(Operation *op) {
-  if (isa<tt::DotOp, tt::ReduceOp>(op)) {
+  if (isa<tt::DotOp>(op)) {
     // depends on size?
-    return 20;
-  } else if (isa<tt::LoadOp, tt::StoreOp>(op)) {
-    return 4;
+    return 1;
+  } else if (isa<tt::ReduceOp>(op)) {
+    // depends on size?
+    return 1;
   }
-  return 1;
+  return 0;
 }
 
 // Create a map from load ops to their indirection levels and the final uses
@@ -415,22 +417,30 @@ void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
       };
 
   DenseMap<Operation *, int> depthMap;
-  
+
   for (Operation &op : forOp.getBody()->without_terminator()) {
     Operation *opp = &op;
+    // Compute depth of current op based on compute factor and depth
+    // of inputs.
     int depth = 0;
     for (Value operand : op.getOperands()) {
       Operation *defOp = operand.getDefiningOp();
       if (defOp && depthMap.contains(defOp))
         depth = std::max(depth, depthMap[defOp]);
     }
-    int factor = getComputeFactor(opp) + depth;
-    depthMap[opp] = factor;
-    LDBG("DEPTH(" << factor << "):  " << op);
-    
-    if ((!op.hasTrait<OpTrait::DotLike>() || (forced && !isa<tt::LoadOp>(opp)))
-         || factor > 40)
+    int computeDepth = getComputeFactor(opp) + depth;
+    depthMap[opp] = computeDepth;
+    LDBG("DEPTH(" << computeDepth << "):  " << op);
+
+    if (computeDepth > maxDepth)
       continue;
+    
+    if (isa<tt::LoadOp>(opp))
+      continue;
+
+    if (!op.hasTrait<OpTrait::DotLike>() && !forced)
+      continue;
+
     seen.clear();
     dfs(opp, 0, opp);
   }
@@ -875,8 +885,9 @@ void labelLoadOpsForTritonDot(scf::ForOp forOp) {
 
 struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
   PipelinePass() = default;
-  PipelinePass(int32_t numStages, int32_t prefetch) {
+  PipelinePass(int32_t numStages, int32_t maxDepth, int32_t prefetch) {
     this->numStages = numStages;
+    this->maxDepth = maxDepth;
     this->prefetch = prefetch;
   }
 
@@ -889,10 +900,13 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
         loops.push_back(forOp);
     });
 
+    if (maxDepth == 0)
+      maxDepth = 1000;
+
     for (scf::ForOp forOp : loops) {
       if (!checkPrecondition(forOp))
         continue;
-      StreamPipeliner sp(forOp, getNumStagesOrDefault(forOp), prefetch);
+      StreamPipeliner sp(forOp, getNumStagesOrDefault(forOp), maxDepth, prefetch);
       if (failed(sp.pipelineLoop()))
         continue;
     }
@@ -910,6 +924,7 @@ private:
 } // namespace
 
 std::unique_ptr<Pass> mlir::createTritonAMDGPUStreamPipelinePass(int numStages,
+                                                                 int maxDepth,
                                                                  int prefetch) {
-  return std::make_unique<PipelinePass>(numStages, prefetch);
+  return std::make_unique<PipelinePass>(numStages, maxDepth, prefetch);
 }

@@ -19,6 +19,9 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
     Option<"numStages", "num_stages",
            "int32_t", /*default*/"2",
            "Number of Pipeline stages">,
+    Option<"maxDepth", "max_depth",
+           "int32_t", /*default*/"0",
+           "Max compute depth to consider pipelining">,
     Option<"prefetch", "prefetch",
            "int32_t", /*default*/"0",
            "Enable prefetch from shared memory">
