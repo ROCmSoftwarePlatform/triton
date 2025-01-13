@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 
-INPUT="2c"
-OUTPUT="2d"
-python renumber_llir.py /home/dtanner/repos/rocm_triton/golden_ir/versions/${INPUT}_global_loads.llir
-mv /home/dtanner/repos/rocm_triton/golden_ir/versions/${INPUT}_global_loads.llir.renumbered \
-  /home/dtanner/repos/rocm_triton/golden_ir/versions/${OUTPUT}_global_loads.llir 
+INPUT="4_loop_end"
+OUTPUT="4b_loop_end"
+python renumber_llir.py /home/dtanner/repos/rocm_triton/golden_ir/versions/${INPUT}.llir
+mv /home/dtanner/repos/rocm_triton/golden_ir/versions/${INPUT}.llir.renumbered \
+  /home/dtanner/repos/rocm_triton/golden_ir/versions/${OUTPUT}.llir 

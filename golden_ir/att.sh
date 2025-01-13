@@ -11,7 +11,7 @@ rm -rf ~/.triton/cache
 # this did parse correctly, did att capture correct custom kernel?
 AMDGCN=auto
 rocprofv2 \
-  -d att_3a_nopc_f \
+  -d att_4d_loop_end \
   -i att.txt \
   --plugin att ${AMDGCN} \
   --mode file \

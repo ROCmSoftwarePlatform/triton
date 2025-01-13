@@ -4,6 +4,6 @@
 python gemm_sub.py \
   --trans-b \
   --file config.yaml \
-  --sub versions/3_regions.llir \
+  --sub versions/4d_loop_end.llir \
   --verbose
 
