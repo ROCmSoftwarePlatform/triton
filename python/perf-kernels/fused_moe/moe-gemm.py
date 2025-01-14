@@ -382,11 +382,11 @@ def model_benchmark_configs(args):
     # M, K, N, E, top_k
 
     for model_name, config in configs.items():
-        N1 = config["intermediate_size"] * 2
+        N1 = config["intermediate_size"]
         K1 = config["hidden_size"]
 
         N2 = config["hidden_size"]
-        K2 = config["intermediate_size"]
+        K2 = config["intermediate_size"] // 2
 
         E = 8
         top_k = 2
