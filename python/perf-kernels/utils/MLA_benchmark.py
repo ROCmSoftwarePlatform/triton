@@ -268,7 +268,7 @@ class ModelArgs:
     """
     max_batch_size: int = 8
     max_seq_len: int = 4096 * 4
-    dtype: Literal["bf16", "fp8", "fp16"] = "bf16"  # Change default to "bf16"
+    dtype: Literal["bf16", "fp8"] = "bf16"
     vocab_size: int = 102400
     dim: int = 2048
     inter_dim: int = 10944
@@ -288,7 +288,7 @@ class ModelArgs:
     q_lora_rank: int = 0
     kv_lora_rank: int = 512 // 2
     qk_nope_head_dim: int = 128 // 2
-    qk_rope_head_dim: int = 64
+    qk_rope_head_dim: int = 64 // 2
     v_head_dim: int = 128 // 2
     # yarn
     original_seq_len: int = 4096
@@ -653,7 +653,7 @@ class MLA(nn.Module):
         if args.max_seq_len > args.original_seq_len:
             mscale = 0.1 * args.mscale * math.log(args.rope_factor) + 1.0
             self.softmax_scale = self.softmax_scale * mscale * mscale
-
+        # no caching yet for flash
         if attn_impl == "naive":
             self.register_buffer(
                 "k_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.n_local_heads, self.qk_head_dim),
@@ -661,7 +661,7 @@ class MLA(nn.Module):
             self.register_buffer(
                 "v_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.n_local_heads, self.v_head_dim),
                 persistent=False)
-        else:
+        elif attn_impl == "absorb":
             self.register_buffer("kv_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.kv_lora_rank),
                                  persistent=False)
             self.register_buffer("pe_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.qk_rope_head_dim),
@@ -694,7 +694,7 @@ class MLA(nn.Module):
         k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis)
 
         if attn_impl == "flash":
-            # "absorb" of gemms and Flash Attention fused
+            # "absorb" + Flash Attention fused
             wkv_b = self.wkv_b.weight if self.wkv_b.scale is None else weight_dequant(self.wkv_b.weight, self.wkv_b.scale, block_size) 
             wkv_b = wkv_b.view(self.n_heads, -1, self.kv_lora_rank)
             kv = self.kv_norm(kv)
@@ -719,6 +719,7 @@ class MLA(nn.Module):
                 scores = (torch.einsum("bshc,btc->bsht", q_nope, self.kv_cache[:bsz, :end_pos]) +
                           torch.einsum("bshr,btr->bsht", q_pe, self.pe_cache[:bsz, :end_pos])) * self.softmax_scale
 
+            assert mask is None, "causal mask not yet implemented for flash"
             if mask is not None:
                 scores += mask.unsqueeze(1)
             scores = scores.softmax(dim=-1, dtype=torch.float32).type_as(x)
@@ -727,7 +728,8 @@ class MLA(nn.Module):
             else:
                 x = torch.einsum("bsht,btc->bshc", scores, self.kv_cache[:bsz, :end_pos])
                 x = torch.einsum("bshc,hdc->bshd", x, wkv_b[:, -self.v_head_dim:])
-        x = self.wo(x.flatten(2))
+        
+        # x = self.wo(x.flatten(2))
 
         return x
 
@@ -745,7 +747,7 @@ def test_mla_implementations():
     mla_absorb.load_state_dict(mla_naive.state_dict())
     # Create a random input tensor
     embed = ParallelEmbedding(args.vocab_size, args.dim)
-    tokens = torch.randint(0, args.vocab_size, (2, 128))
+    tokens = torch.randint(0, args.vocab_size, (8, 2))
     x = embed(tokens)
     # Generate random start position and freqs_cis
     start_pos = 0
@@ -757,8 +759,8 @@ def test_mla_implementations():
     x = attn_norm(x)
 
     mask = None
-    if seqlen > 1:
-        mask = torch.full((seqlen, seqlen), float("-inf"), device=tokens.device).triu_(1)
+    # if seqlen > 1:
+    #     mask = torch.full((seqlen, seqlen), float("-inf"), device=tokens.device).triu_(1)
     # Set the attention implementation for each instance
     global attn_impl
     attn_impl = "absorb"
@@ -782,8 +784,8 @@ def test_mla_implementations():
     output_naive = mla_naive(x, start_pos, freqs_cis, mask)
 
     # Print the last 10 elements of each tensor for quick inspection
-    print(f"output_naive (last 10): {output_naive.flatten()[-10:]}")
-    print(f"output_absorb (last 10): {output_absorb.flatten()[-10:]}")
+    print(f"output_naive (last 10): {output_naive.flatten()[:10]}")
+    print(f"output_absorb (last 10): {output_absorb.flatten()[:10]}")
 
     # Define tolerances
     atol = 1e-2
