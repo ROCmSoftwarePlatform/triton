@@ -135,18 +135,15 @@ def triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_P
     rms_kernel[grid](y, x, g, rsigma, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, blk_size, USE_BLOCKED,
                      NUM_PRGMS)
 
-    return y
+    return y, rsigma
 
 
-def torch_rmsnorm(x, g):
+def torch_rmsnorm(x, g, epsilon=1e-6):
     M, N = x.shape
-    if hasattr(torch.nn, 'RMSNorm'):
-        rms_norm = torch.nn.RMSNorm(N, device='cuda')
-        return rms_norm(x)
-    else:
-        rms = torch.sqrt(torch.sum(x * x, dim=-1) * 1 / N)
-        rms_norm = torch.div(x, rms.unsqueeze(1).repeat(1, N)) * g
-        return rms_norm
+    rms = torch.sqrt(torch.sum(x * x, dim=-1) * 1 / N)
+    rsigma = 1.0 / rms
+    rms_norm = x * rsigma.unsqueeze(1) * g
+    return rms_norm, rsigma
 
 
 @pytest.mark.parametrize('M, N', [
@@ -170,11 +167,12 @@ def test_rmsnorm(M, N):
     USE_BLOCKED = n_cols > blk_size
     NUM_PRGMS = min(n_rows, get_num_sms())
     g = torch.ones((1, N), device='cuda')
-    y_triton = triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS)
+    y_triton, rsigma_triton = triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS)
 
-    y_torch = torch_rmsnorm(x, g)
+    y_torch, rsigma_torch = torch_rmsnorm(x, g)
 
     assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
+    assert torch.allclose(rsigma_triton, rsigma_torch), (rsigma_triton, rsigma_torch)
 
 
 #Benchmark
