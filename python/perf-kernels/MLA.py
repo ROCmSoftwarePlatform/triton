@@ -388,8 +388,8 @@ def get_cdna_autotune_configs():
         #               num_stages=1, num_warps=4),
         # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
         #               num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=1),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
@@ -581,12 +581,11 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, str
                 k_pe_ptrs = k_pe_offset + offs_k_pe_d[:, None] * stride_k_pe_k + offs_n[None, :] * stride_k_pe_n
                 q_pe_offset = Q_PE + off_z * stride_q_pe_z + off_h_q * stride_q_pe_h
                 q_pe_ptrs = q_pe_offset + offs_m[:, None] * stride_q_pe_m + offs_q_pe_d[None, :] * stride_q_pe_k
-                # weight matrix:
+                # weight matrix:                
                 wkv_b_offset = WKV_B + off_h_q * stride_wkv_b_h
-                # Compute pointers for the first part (wkv_b[:qk_nope_head_dim, :]) to be absorbed into q computation at outer loop
-                wkv_b_offset = WKV_B + off_h_q * stride_wkv_b_h
+                # Compute pointers for the first part (WKV_B[:,:qk_nope_head_dim, :]) to be absorbed into q computation at outer loop
                 wkv_b_ptrs1 = wkv_b_offset + offs_wkv_b_q[:, None] * stride_wkv_b_k + offs_dc[None, :] * stride_wkv_b_n
-                # Compute pointers for the second part (wkv_b[-v_head_dim:, :]) needed in the inner loop
+                # Compute pointers for the second part (WKV_B[:,-v_head_dim:, :]) needed in the inner loop
                 wkv_b_ptrs2 = wkv_b_offset + offs_wkv_b_v[:, None] * stride_wkv_b_k + offs_dc[None, :] * stride_wkv_b_n
 
                 # Compute pointers for all the scale tensors used in this kernel.

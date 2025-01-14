@@ -283,7 +283,7 @@ class ModelArgs:
     q_lora_rank: int = 0
     kv_lora_rank: int = 512 // 2
     qk_nope_head_dim: int = 128 // 2
-    qk_rope_head_dim: int = 64 // 2
+    qk_rope_head_dim: int = 64
     v_head_dim: int = 128 // 2
     # yarn
     original_seq_len: int = 4096
