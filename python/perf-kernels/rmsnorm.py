@@ -62,7 +62,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, outpu
 
             # Accumulate sum of squares
             n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
-            sum_squares = 0.
+            sum_squares: tl.float32 = 0.
             for blk_idx in tl.range(0, n_cols_blks, num_stages=2):
                 cols = blk_idx * BLOCK_SIZE + col_offsets
                 input_ptrs = row_input_ptr + cols
@@ -83,7 +83,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, outpu
             norm_factor = tl.rsqrt(mean_square + epsilon)
 
             # Store rsigma (norm_factor)
-            tl.store(rsigma_ptr + row_idx, norm_factor.to(rsigma_ptr.type.element_ty))
+            tl.store(rsigma_ptr + row_idx, norm_factor)
 
             # Normalize and write output
             for blk_idx in tl.range(0, n_cols_blks, num_stages=2):
@@ -121,7 +121,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, outpu
 
             # Store rsigma (norm_factor)
             rsigma_output_ptr = rsigma_ptr + row_idx
-            tl.store(rsigma_output_ptr, norm_factor.to(rsigma_ptr.type.element_ty))
+            tl.store(rsigma_output_ptr, norm_factor)
 
             rms_norm = row * norm_factor * g
 
@@ -163,7 +163,7 @@ def test_rmsnorm(M, N):
     torch.manual_seed(0)
     x = torch.randn(M, N, device='cuda')
     y = torch.zeros_like(x, device='cuda')
-    rsigma = torch.empty((M, ), device='cuda')
+    rsigma = torch.empty((M, ), device='cuda', dtype=torch.float32)
     n_rows, n_cols = x.shape
     MAX_FUSED_SIZE = 65536 // x.element_size()
     blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
@@ -242,7 +242,7 @@ def run_benchmark(args):
     def benchmark(M, N, provider, model=None):
         x = torch.randn(M, N, device='cuda', dtype=dtype)
         y = torch.zeros_like(x, device='cuda')
-        rsigma = torch.empty((M, ), device='cuda', dtype=dtype)
+        rsigma = torch.empty((M, ), device='cuda', dtype=torch.float32)
         n_rows, n_cols = x.shape
         MAX_FUSED_SIZE = 65536 // x.element_size()
         blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
@@ -304,7 +304,7 @@ def main():
     if args.no_benchmark:
         x = torch.randn(args.M_start, args.N_start, device='cuda')
         y = torch.zeros_like(x, device='cuda')
-        rsigma = torch.empty((args.M_start, ), device='cuda')
+        rsigma = torch.empty((args.M_start, ), device='cuda', dtype=torch.float32)
         n_rows, n_cols = x.shape
         MAX_FUSED_SIZE = 65536 // x.element_size()
         blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
