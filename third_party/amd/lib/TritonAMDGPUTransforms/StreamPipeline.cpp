@@ -96,7 +96,8 @@ namespace {
 //
 class StreamPipeliner {
 public:
-  StreamPipeliner(scf::ForOp _forOp, int _numStages, int _maxDepth, bool _prefetch)
+  StreamPipeliner(scf::ForOp _forOp, int _numStages, int _maxDepth,
+                  bool _prefetch)
       : forOp(_forOp), maxDepth(_maxDepth), prefetch(_prefetch),
         numStages(_numStages + prefetch), schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
@@ -392,7 +393,6 @@ static float getComputeFactor(Operation *op) {
 // "1" for the load op used by the load op used by the dot op, and so on.
 void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
   DenseSet<Operation *> seen;
-  bool forced = forOp->hasAttr(tt::kNumStagesAttrName);
 
   // Recursively visit the given op and its operands to discover all load ops
   // and collect their indirection levels and uses.
@@ -420,6 +420,7 @@ void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
     Operation *opp = &op;
+
     // Compute depth of current op based on compute factor and depth
     // of inputs.
     int depth = 0;
@@ -432,17 +433,26 @@ void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
     depthMap[opp] = computeDepth;
     LDBG("DEPTH(" << computeDepth << "):  " << op);
 
-    if (computeDepth > maxDepth)
+    if (maxDepth != 0 && computeDepth > maxDepth)
       continue;
-    
+
     if (isa<tt::LoadOp>(opp))
       continue;
 
-    if (!op.hasTrait<OpTrait::DotLike>() && !forced)
+    if (!op.hasTrait<OpTrait::DotLike>())
       continue;
 
     seen.clear();
     dfs(opp, 0, opp);
+  }
+
+  // If the loop has numStages attribute, also consider pipelining other loads
+  // that are not directly used by dot ops.
+  if (forOp->hasAttr(tt::kNumStagesAttrName)) {
+    for (Operation &op : forOp.getBody()->without_terminator()) {
+      if (!isa<tt::LoadOp>(op))
+        dfs(&op, 0, &op);
+    }
   }
 }
 
@@ -900,13 +910,11 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
         loops.push_back(forOp);
     });
 
-    if (maxDepth == 0)
-      maxDepth = 1000;
-
     for (scf::ForOp forOp : loops) {
       if (!checkPrecondition(forOp))
         continue;
-      StreamPipeliner sp(forOp, getNumStagesOrDefault(forOp), maxDepth, prefetch);
+      StreamPipeliner sp(forOp, getNumStagesOrDefault(forOp), maxDepth,
+                         prefetch);
       if (failed(sp.pipelineLoop()))
         continue;
     }
