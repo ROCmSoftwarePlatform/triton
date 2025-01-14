@@ -377,7 +377,7 @@ def get_configs():
 def model_benchmark_configs(args):
     config_file = args.model_configs
     configs = get_model_configs(config_path=config_file, model_families=["mistral"], model=args.model)
-    fa_configs = []
+    moe_configs = []
     M = args.M if args.M else 4096  # check size
     # M, K, N, E, top_k
 
@@ -390,14 +390,13 @@ def model_benchmark_configs(args):
 
         E = 8
         top_k = 2
-        fa_configs.append((model_name, M, N1, K1, E, top_k))
-        fa_configs.append((model_name, M, N2, K2, E, top_k))
+        moe_configs.append((model_name, M, N1, K1, E, top_k))
+        moe_configs.append((model_name, M, N2, K2, E, top_k))
 
-    return fa_configs
+    return moe_configs
 
 
 def run_benchmark(custom, args):
-    print_time = args.return_time
     routed_weight = args.routed_weight
     dtype = arg_to_torch_dtype[args.dtype]
     x_names = ['M', 'N', 'K', 'E', 'top_k']
@@ -413,21 +412,14 @@ def run_benchmark(custom, args):
             configs = get_configs()
             x_vals_list = [(cfg['M'], cfg['N'], cfg['K'], cfg['E'], cfg['top_k']) for cfg in configs]
 
-    line_names = ['Time (ms)', 'Bandwidth (GB/s)'] if print_time else ['TFLOPS', 'Bandwidth (GB/s)']
+    line_names = ['Time (ms)', 'TFLOPS', 'Bandwidth (GB/s)']
+    line_vals = ['time', 'tflops', 'bandwidth']
 
-    if print_time:
-        # We'll have 2 lines: 'time' and 'bandwidth'
-        line_vals = ['time', 'bandwidth']
-        line_names = ['Time (ms)', 'Bandwidth (GB/s)']
-    else:
-        line_vals = ['tflops', 'bandwidth']
-        line_names = ['TFLOPS', 'Bandwidth (GB/s)']
-
-    benchmark = triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='metric',  # <--- important
-                                         line_vals=line_vals,  # <--- a list of 2 metrics
-                                         line_names=line_names,  # <--- matching 2 metrics
+    benchmark = triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='metric',
+                                         line_vals=line_vals,
+                                         line_names=line_names,
                                          styles=[('red', '-'),
-                                                 ('blue', '-')], ylabel='ms / TFLOPS / GB/s',  # or a more generic label
+                                                 ('blue', '-'), ('yellow', '-')], ylabel='ms / TFLOPS / GB/s',
                                          plot_name='moe-gemm-benchmark',
                                          args={'dtype': dtype, 'routed_weight': routed_weight})
 
@@ -437,12 +429,16 @@ def run_benchmark(custom, args):
         a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
             M, N, K, top_k, E, routed_weight=routed_weight, dtype=dtype)
 
+        # (M, K) * (top_k, N, K) -> (M, top_k, N). 2 for multiplication and accumulation
         flops = 2.0 * M * top_k * K * N
+        # The weight is applied on the gemm product which has the shape of (M, top_k, N)
         if routed_weight:
             flops += M * top_k * N
 
         bytes_ = torch.tensor([], dtype=dtype).element_size()
+        # (M, K) memory load for A (E,  N,  K) for B not (top_k,  N,  K) because we are in total bringing in all expert matrices into the chip from memory. It's just that not all multiply the same A.
         mem_read = (M * K + E * N * K) * bytes_
+        # Memory write for the gemm product
         mem_write = (M * top_k * N) * bytes_
         mem = mem_read + mem_write
         fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
@@ -482,7 +478,6 @@ def parse_args():
     parser.add_argument("-top_k", type=int, default=0, help="top_k experts per token")
     parser.add_argument("-routed_weight", action='store_true', default=False)
     parser.add_argument("-dtype", default='fp16')
-    parser.add_argument("-return_time", action='store_true', default=False, help='Return time instead of TFLOPs')
     args = parser.parse_args()
     return args
 
