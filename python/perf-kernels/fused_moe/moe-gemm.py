@@ -415,12 +415,9 @@ def run_benchmark(custom, args):
     line_names = ['Time (ms)', 'TFLOPS', 'Bandwidth (GB/s)']
     line_vals = ['time', 'tflops', 'bandwidth']
 
-    benchmark = triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='metric',
-                                         line_vals=line_vals,
-                                         line_names=line_names,
-                                         styles=[('red', '-'),
-                                                 ('blue', '-'), ('yellow', '-')], ylabel='ms / TFLOPS / GB/s',
-                                         plot_name='moe-gemm-benchmark',
+    benchmark = triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='metric', line_vals=line_vals,
+                                         line_names=line_names, styles=[('red', '-'), ('blue', '-'), ('yellow', '-')],
+                                         ylabel='ms / TFLOPS / GB/s', plot_name='moe-gemm-benchmark',
                                          args={'dtype': dtype, 'routed_weight': routed_weight})
 
     @triton.testing.perf_report([benchmark])
