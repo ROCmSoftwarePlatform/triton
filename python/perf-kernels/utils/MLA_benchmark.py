@@ -210,7 +210,12 @@ def flash_attention(q_nope, q_pe, kv, k_pe, wkv_b, qk_nope_head_dim, v_head_dim,
     q_pe = q_pe.permute((0, 2, 1, 3))
     o = torch.zeros((*q_nope.shape[:-1], v_head_dim), dtype=q_nope.dtype)
     Z, H, N, D = q_nope.shape
-    print(f"Z, H, N, D: {Z, H, N, D}")
+    print(f"Q_NOPE shape: bhsd={Z, H, N, D}")
+    print(f"Q_PE shape: btr={q_pe.shape}")
+    print(f"KV shape: btc={kv.shape}")
+    print(f"K_PE shape: btr={k_pe.shape}")
+    print(f"WKV_B shape: b(d+d)c={wkv_b.shape}")
+    print("\n\n")
     _, _, _, input_metadata = input_helper(Z, H, H, N, N, D, q_nope.dtype, "bhsd", requires_grad=False)
     input_metadata.qk_nope_head_dim = qk_nope_head_dim
     input_metadata.v_head_dim = v_head_dim
