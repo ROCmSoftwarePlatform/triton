@@ -25,12 +25,13 @@ for ii in range(0, num_lines):
     if len(s) > 0:
         token = s[0]
         pattern_unv = r"\%\d+"
-        pattern_bb = r"\d+:"
+        pattern_bb = r"^\d+:"
         # BB
         if re.match(pattern_bb, token):
-            number = int(token[:-1])
-            print("BB %i found" % number)
-            unv_last = number
+            bbid = int(token[:-1])
+            print("Found BB: %i -> %i" % (bbid, unv_last))
+            unv_map[bbid] = unv_last+1
+            unv_last += 1
         # %123
         elif re.match(pattern_unv, token):
             unv = int(token[1:])
@@ -40,24 +41,33 @@ for ii in range(0, num_lines):
                 continue
             if unv == unv_last+1:
                 # valid
-                print("%i -> %i" % (unv_last, unv))
+                #print("%i -> %i" % (unv_last, unv))
                 unv_last = unv
             else:
-                print("error %i != %i+1; unv_map %i -> %i" % (unv, unv_last, unv, unv_last+1))
-                print(number)
+                print("Found: %i -> %i" % (unv, unv_last+1))
                 # need to do search-replace for rest of tile
                 # change unv to unv_last+1
                 unv_map[unv] = unv_last+1
                 unv_last += 1
 
 # fix numbering
-print(unv_map)
+#print(unv_map)
+
 #print(llvm_str)
 unique = "__tmp__"
 for key, value in unv_map.items():
-    key = "%" + str(key)
-    value = "%" + unique + str(value)
-    llvm_str = llvm_str.replace(key, value)
+    # update unv
+    sub_key = "%" + str(key)
+    sub_value = "%" + unique + str(value)
+    llvm_str = llvm_str.replace(sub_key, sub_value)
+    # update bb
+    #key = '\n' + str(key) + ':'
+    #value = '\n' + unique + str(value) + ':'
+    sub_key = '\n' + str(key) + ':'
+    sub_value = '\n' + unique + str(value) + ':'
+    #print("Key: {%s}" % sub_key)
+    #print("Value: {%s}" % sub_value)
+    llvm_str = llvm_str.replace(sub_key, sub_value)
 
 llvm_str = llvm_str.replace(unique, "")
 #print(llvm_str)
