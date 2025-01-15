@@ -57,9 +57,10 @@ for ii in range(0, num_lines):
 unique = "__tmp__"
 for key, value in unv_map.items():
     # update unv
-    sub_key = "%" + str(key)
-    sub_value = "%" + unique + str(value)
-    llvm_str = llvm_str.replace(sub_key, sub_value)
+    for suffix in [' ', ',']:
+        sub_key = "%" + str(key) + suffix
+        sub_value = "%" + unique + str(value) + suffix
+        llvm_str = llvm_str.replace(sub_key, sub_value)
     # update bb
     #key = '\n' + str(key) + ':'
     #value = '\n' + unique + str(value) + ':'
