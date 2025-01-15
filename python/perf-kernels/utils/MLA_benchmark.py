@@ -228,7 +228,7 @@ def flash_attention(q_nope, q_pe, kv, k_pe, wkv_b, qk_nope_head_dim, v_head_dim,
 world_size = 1
 rank = 0
 block_size = 128
-gemm_impl: Literal["bf16", "fp8", "fp16"] = "bf16"
+gemm_impl: Literal["bf16", "fp8", "fp16"] = "fp16"
 attn_impl: Literal["naive", "absorb"] = "absorb"
 
 
@@ -240,7 +240,7 @@ class ModelArgs:
     Attributes:
         max_batch_size (int): Maximum batch size.
         max_seq_len (int): Maximum sequence length.
-        dtype (Literal["bf16", "fp8", "fp16"]): Data type for computations.
+        dtype (Literal["fp16", "fp8", "fp16"]): Data type for computations.
         vocab_size (int): Vocabulary size.
         dim (int): Model dimension.
         inter_dim (int): Intermediate dimension for MLP layers.
@@ -269,7 +269,7 @@ class ModelArgs:
     """
     max_batch_size: int = 8
     max_seq_len: int = 4096 * 4
-    dtype: Literal["bf16", "fp8"] = "bf16"
+    dtype: Literal["bf16", "fp8", "fp16"] = "fp16"
     vocab_size: int = 102400
     dim: int = 2048
     inter_dim: int = 10944
@@ -362,12 +362,12 @@ def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] =
     Notes:
         - If `weight` is quantized (e.g., `element_size() > 1`), a dequantized version
           is used for computation.
-        - If `gemm_impl == "bf16"`, dequantization and a `bf16` GEMM operation are applied.
+        - If `gemm_impl == "fp16"`, dequantization and a `fp16` GEMM operation are applied.
         - For other cases, the function applies quantization to `x` and uses `fp8_gemm` for computation.
     """
     if weight.element_size() > 1:
         return F.linear(x, weight, bias)
-    elif gemm_impl == "bf16":
+    elif gemm_impl == "fp16":
         weight = weight_dequant(weight, weight.scale)
         return F.linear(x, weight, bias)
     else:
@@ -386,9 +386,9 @@ class Linear(nn.Module):
         in_features (int): Number of input features.
         out_features (int): Number of output features.
         bias (bool): Whether to include a bias term. Defaults to False.
-        dtype (optional): Data type for the layer. Defaults to `torch.bfloat16`.
+        dtype (optional): Data type for the layer. Defaults to `torch.float16`.
     """
-    dtype = torch.bfloat16  # Change default to torch.bfloat16
+    dtype = torch.float16  # Change default to torch.float16
 
     def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype=None):
         super().__init__()
@@ -428,7 +428,7 @@ class ColumnParallelLinear(Linear):
         in_features (int): Number of input features.
         out_features (int): Total number of output features.
         bias (bool): Whether to include a bias term. Defaults to False.
-        dtype (optional): Data type for the layer. Defaults to `torch.bfloat16`.
+        dtype (optional): Data type for the layer. Defaults to `torch.float16`.
     """
 
     def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype=None):
@@ -458,7 +458,7 @@ class RowParallelLinear(Linear):
         in_features (int): Total number of input features.
         out_features (int): Number of output features.
         bias (bool): Whether to include a bias term. Defaults to False.
-        dtype (optional): Data type for the layer. Defaults to `torch.bfloat16`.
+        dtype (optional): Data type for the layer. Defaults to `torch.float16`.
     """
 
     def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype=None):
@@ -711,16 +711,13 @@ class MLA(nn.Module):
                 self.v_cache[:bsz, start_pos:end_pos] = v
                 scores = torch.einsum("bshd,bthd->bsht", q, self.k_cache[:bsz, :end_pos]) * self.softmax_scale
             else:
-                wkv_b = self.wkv_b.weight if self.wkv_b.scale is None else weight_dequant(
-                    self.wkv_b.weight, self.wkv_b.scale, block_size)
+                wkv_b = self.wkv_b.weight if self.wkv_b.scale is None else weight_dequant(self.wkv_b.weight, self.wkv_b.scale, block_size) 
                 wkv_b = wkv_b.view(self.n_local_heads, -1, self.kv_lora_rank)
                 q_nope = torch.einsum("bshd,hdc->bshc", q_nope, wkv_b[:, :self.qk_nope_head_dim])
                 self.kv_cache[:bsz, start_pos:end_pos] = self.kv_norm(kv)
                 self.pe_cache[:bsz, start_pos:end_pos] = k_pe.squeeze(2)
                 scores = (torch.einsum("bshc,btc->bsht", q_nope, self.kv_cache[:bsz, :end_pos]) +
-                          torch.einsum("bshr,btr->bsht", q_pe, self.pe_cache[:bsz, :end_pos])) * self.softmax_scale
-
-            assert mask is None, "causal mask not yet implemented for flash"
+                        torch.einsum("bshr,btr->bsht", q_pe, self.pe_cache[:bsz, :end_pos])) * self.softmax_scale
             if mask is not None:
                 scores += mask.unsqueeze(1)
             scores = scores.softmax(dim=-1, dtype=torch.float32).type_as(x)
@@ -729,8 +726,7 @@ class MLA(nn.Module):
             else:
                 x = torch.einsum("bsht,btc->bshc", scores, self.kv_cache[:bsz, :end_pos])
                 x = torch.einsum("bshc,hdc->bshd", x, wkv_b[:, -self.v_head_dim:])
-        
-        # x = self.wo(x.flatten(2))
+            # x = self.wo(x.flatten(2))
 
         return x
 
@@ -750,12 +746,13 @@ def test_mla_implementations():
     mla_absorb.load_state_dict(mla_naive.state_dict())
     # Create a random input tensor
     embed = ParallelEmbedding(args.vocab_size, args.dim)
-    tokens = torch.randint(0, args.vocab_size, (2, 128))
+    tokens = torch.randint(0, args.vocab_size, (2, 64))
+    seqlen = tokens.size(1)
     x = embed(tokens)
     # Generate random start position and freqs_cis
     start_pos = 0
     freqs_cis = precompute_freqs_cis(args)
-    seqlen = tokens.size(1)
+    
     freqs_cis = freqs_cis[:seqlen]
     # Generate a random mask (optional)
     attn_norm = RMSNorm(args.dim)
@@ -767,11 +764,9 @@ def test_mla_implementations():
     # Set the attention implementation for each instance
     global attn_impl
     attn_impl = "absorb"
-    mla_absorb.attn_impl = "absorb"
-    mla_absorb.kv_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_absorb.kv_lora_rank,
-                                      dtype=torch.bfloat16, device="cuda")  # Change to torch.bfloat16
-    mla_absorb.pe_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_absorb.qk_rope_head_dim,
-                                      dtype=torch.bfloat16, device="cuda")  # Change to torch.bfloat16
+    # mla_absorb.attn_impl = attn_impl
+    mla_absorb.kv_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_absorb.kv_lora_rank)
+    mla_absorb.pe_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_absorb.qk_rope_head_dim) 
 
     output_absorb = mla_absorb(x, start_pos, freqs_cis, mask)
 
@@ -782,13 +777,9 @@ def test_mla_implementations():
     print(f"Time it takes for {attn_impl}: {time.time() - start} s")
 
     attn_impl = "naive"
-    mla_naive.attn_impl = "naive"
-    mla_naive.k_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_naive.n_local_heads,
-                                    mla_naive.qk_head_dim, dtype=torch.bfloat16,
-                                    device="cuda")  # Change to torch.bfloat16
-    mla_naive.v_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_naive.n_local_heads,
-                                    mla_naive.v_head_dim, dtype=torch.bfloat16,
-                                    device="cuda")  # Change to torch.bfloat16
+    # mla_naive.attn_impl = attn_impl
+    mla_naive.k_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_naive.n_local_heads, mla_naive.qk_head_dim)
+    mla_naive.v_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_naive.n_local_heads, mla_naive.v_head_dim)  
 
     # warmup
     output_naive = mla_naive(x, start_pos, freqs_cis, mask)
@@ -813,6 +804,16 @@ def test_mla_implementations():
         print("All elements are close within the specified tolerances.")
     except AssertionError as e:
         print("Tensors are not close within the specified tolerances.")
+
+        close_mask = torch.isclose(output_naive, output_absorb, atol=atol, rtol=rtol)
+        # Step 2: Identify mismatches by inverting the mask
+        mismatch_mask = ~close_mask
+        mismatch_indices = torch.nonzero(mismatch_mask)
+        # print(mismatch_indices)
+        print(f"output shape: {output_naive.shape}")
+        print("mismatch indices")
+        
+        [print(idx) for idx in mismatch_indices]
 
         # Step 1: Element-wise comparison
         # torch.isclose returns a boolean tensor where each element is True if the corresponding
@@ -854,7 +855,7 @@ import numpy as np
 
 
 def set_seed(seed: int = 0):
-    torch.set_default_dtype(torch.bfloat16)
+    torch.set_default_dtype(torch.float16)
     torch.set_default_device("cuda")
     torch.manual_seed(seed)
     random.seed(seed)
