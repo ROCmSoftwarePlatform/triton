@@ -332,9 +332,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias
         # update m_i and l_i
         m_i = m_ij
 
-        # v = tl.dot(kv.trans(), wkv_b.trans()) # not the actual v, but helps to think
-        v = tl.dot(wkv_b, kv).trans()
-        acc += tl.dot(p.to(v.type.element_ty), v)
+        acc += tl.dot(p.to(kv.type.element_ty), kv.trans())
 
         kv_ptrs += BLOCK_N * stride_kv_n
         k_pe_ptrs += BLOCK_N * stride_k_pe_n
@@ -627,7 +625,7 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, str
                 # initialize pointer to m and l
                 m_i = tl.full([BLOCK_M], float("-inf"), dtype=tl.float32)
                 l_i = tl.full([BLOCK_M], 1.0, dtype=tl.float32)
-                acc = tl.zeros([BLOCK_M, v_head_dim], dtype=tl.float32)
+                acc = tl.zeros([BLOCK_M, BLOCK_DC_MODEL], dtype=tl.float32)
                 # scale sm_scale by log_2(e) and use 2^x in the loop as we do not
                 # have native e^x support in HW.
                 QK_SCALE: tl.constexpr = SM_SCALE * 1.44269504089
@@ -732,6 +730,9 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, str
                         acc *= p_descale
                     acc *= v_descale
 
+                acc = tl.dot(acc.to(wkv_b.type.element_ty), wkv_b.trans())
+                
+                
                 # epilogue
                 # This helps the compiler do Newton Raphson on l_i vs on acc which is much larger.
                 l_recip = 1 / l_i[:, None]
