@@ -226,7 +226,7 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
   %145 = or disjoint i32 %133, 12288
   %146 = or disjoint i32 %131, 14336
   %147 = or disjoint i32 %133, 14336
-  ; global memory addresses
+  ; local memory addresses
   %148 = getelementptr half, ptr addrspace(3) @global_smem, i32 %131
   %149 = getelementptr half, ptr addrspace(3) @global_smem, i32 %133
   %150 = getelementptr half, ptr addrspace(3) @global_smem, i32 %134
@@ -255,7 +255,7 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
   %173 = or disjoint i32 %169, 8192
   %174 = or disjoint i32 %168, 12288
   %175 = or disjoint i32 %169, 12288
-  ; global memory addresses
+  ; local memory addresses
   %176 = getelementptr half, ptr addrspace(3) getelementptr (i8, ptr addrspace(3) @global_smem, i32 32768), i32 %168
   %177 = getelementptr half, ptr addrspace(3) getelementptr (i8, ptr addrspace(3) @global_smem, i32 32768), i32 %169
   %178 = getelementptr half, ptr addrspace(3) getelementptr (i8, ptr addrspace(3) @global_smem, i32 32768), i32 %170
@@ -266,15 +266,19 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
   %183 = getelementptr half, ptr addrspace(3) getelementptr (i8, ptr addrspace(3) @global_smem, i32 32768), i32 %175
   %184 = add nsw i32 %121, -2
 
-  ; Local Prefetch
+  fence syncscope("workgroup") release, !dbg !37
+  tail call void @llvm.amdgcn.s.barrier(), !dbg !37
+  fence syncscope("workgroup") acquire, !dbg !37
+
+  ; Local Prefetch before loop
   ; A0 K0
-  %315 = load <8 x half>, ptr addrspace(3) %176, align 16, !dbg !43
-  %316 = shufflevector <8 x half> %315, <8 x half> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>, !dbg !59
-  %317 = shufflevector <8 x half> %315, <8 x half> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>, !dbg !59
+  %7315 = load <8 x half>, ptr addrspace(3) %176, align 16, !dbg !43
+  %7316 = shufflevector <8 x half> %7315, <8 x half> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>, !dbg !59
+  %7317 = shufflevector <8 x half> %7315, <8 x half> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>, !dbg !59
   ; B0 K0
-  %318 = load <8 x half>, ptr addrspace(3) %148, align 16, !dbg !37
-  %319 = shufflevector <8 x half> %318, <8 x half> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>, !dbg !59
-  %320 = shufflevector <8 x half> %318, <8 x half> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>, !dbg !59
+  %7318 = load <8 x half>, ptr addrspace(3) %148, align 16, !dbg !37
+  %7319 = shufflevector <8 x half> %7318, <8 x half> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>, !dbg !59
+  %7320 = shufflevector <8 x half> %7318, <8 x half> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>, !dbg !59
 
   ; Done Before Loop
   br label %185, !dbg !36
@@ -418,27 +422,30 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
   %313 = phi float [ 0.000000e+00, %.lr.ph ], [ %778, %185 ]
   %314 = phi i32 [ 0, %.lr.ph ], [ %779, %185 ]
 
+  ; Live-in Local Prefetch
+  %8316 = phi <2 x half> [ %9316, %.lr.ph ], [ %7316, %185 ]
+  %8317 = phi <2 x half> [ %9317, %.lr.ph ], [ %7317, %185 ]
+  %8319 = phi <2 x half> [ %9319, %.lr.ph ], [ %7319, %185 ]
+  %8320 = phi <2 x half> [ %9320, %.lr.ph ], [ %7320, %185 ]
+
   ;#############################################################################
   ; Begin Loop
   ;#############################################################################
 
   call void @llvm.amdgcn.s.setprio(i16 3), !dbg !36
 
-  fence syncscope("workgroup") release, !dbg !37
-  tail call void @llvm.amdgcn.s.barrier(), !dbg !37
-  fence syncscope("workgroup") acquire, !dbg !37
-
   ;####################
   ; Load A 01 K0 pref=0
   ; Load B 01 K0 pref=0
   ; A0 K0
-  %315 = load <8 x half>, ptr addrspace(3) %176, align 16, !dbg !43
-  %316 = shufflevector <8 x half> %315, <8 x half> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>, !dbg !59
-  %317 = shufflevector <8 x half> %315, <8 x half> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>, !dbg !59
+  ;%315 = load <8 x half>, ptr addrspace(3) %176, align 16, !dbg !43
+  ;%316 = shufflevector <8 x half> %315, <8 x half> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>, !dbg !59
+  ;%317 = shufflevector <8 x half> %315, <8 x half> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>, !dbg !59
   ; B0 K0
-  %318 = load <8 x half>, ptr addrspace(3) %148, align 16, !dbg !37
-  %319 = shufflevector <8 x half> %318, <8 x half> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>, !dbg !59
-  %320 = shufflevector <8 x half> %318, <8 x half> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>, !dbg !59
+  ;%318 = load <8 x half>, ptr addrspace(3) %148, align 16, !dbg !37
+  ;%319 = shufflevector <8 x half> %318, <8 x half> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>, !dbg !59
+  ;%320 = shufflevector <8 x half> %318, <8 x half> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>, !dbg !59
+
   ; A1 K0
   %321 = load <8 x half>, ptr addrspace(3) %178, align 16, !dbg !43
   %322 = shufflevector <8 x half> %321, <8 x half> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>, !dbg !59
@@ -476,7 +483,7 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
   %336 = insertelement <4 x float> %335, float %187, i64 1, !dbg !59
   %337 = insertelement <4 x float> %336, float %188, i64 2, !dbg !59
   %338 = insertelement <4 x float> %337, float %189, i64 3, !dbg !59
-  %339 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %316, <4 x half> %319, <4 x float> %338, i32 0, i32 0, i32 0), !dbg !59
+  %339 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %8316, <4 x half> %319, <4 x float> %338, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
   %340 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %317, <4 x half> %320, <4 x float> %339, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
@@ -492,7 +499,7 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
   %348 = insertelement <4 x float> %347, float %203, i64 1, !dbg !59
   %349 = insertelement <4 x float> %348, float %204, i64 2, !dbg !59
   %350 = insertelement <4 x float> %349, float %205, i64 3, !dbg !59
-  %351 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %316, <4 x half> %325, <4 x float> %350, i32 0, i32 0, i32 0), !dbg !59
+  %351 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %8316, <4 x half> %325, <4 x float> %350, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
   %352 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %317, <4 x half> %326, <4 x float> %351, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
@@ -591,7 +598,7 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
   %400 = insertelement <4 x float> %399, float %219, i64 1, !dbg !59
   %401 = insertelement <4 x float> %400, float %220, i64 2, !dbg !59
   %402 = insertelement <4 x float> %401, float %221, i64 3, !dbg !59
-  %403 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %316, <4 x half> %362, <4 x float> %402, i32 0, i32 0, i32 0), !dbg !59
+  %403 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %8316, <4 x half> %362, <4 x float> %402, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
   %404 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %317, <4 x half> %363, <4 x float> %403, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
@@ -607,7 +614,7 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
   %412 = insertelement <4 x float> %411, float %235, i64 1, !dbg !59
   %413 = insertelement <4 x float> %412, float %236, i64 2, !dbg !59
   %414 = insertelement <4 x float> %413, float %237, i64 3, !dbg !59
-  %415 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %316, <4 x half> %365, <4 x float> %414, i32 0, i32 0, i32 0), !dbg !59
+  %415 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %8316, <4 x half> %365, <4 x float> %414, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
   %416 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %317, <4 x half> %366, <4 x float> %415, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
@@ -685,7 +692,7 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
   %456 = insertelement <4 x float> %455, float %251, i64 1, !dbg !59
   %457 = insertelement <4 x float> %456, float %252, i64 2, !dbg !59
   %458 = insertelement <4 x float> %457, float %253, i64 3, !dbg !59
-  %459 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %316, <4 x half> %394, <4 x float> %458, i32 0, i32 0, i32 0), !dbg !59
+  %459 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %8316, <4 x half> %394, <4 x float> %458, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
   %460 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %317, <4 x half> %395, <4 x float> %459, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
@@ -701,7 +708,7 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
   %468 = insertelement <4 x float> %467, float %267, i64 1, !dbg !59
   %469 = insertelement <4 x float> %468, float %268, i64 2, !dbg !59
   %470 = insertelement <4 x float> %469, float %269, i64 3, !dbg !59
-  %471 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %316, <4 x half> %397, <4 x float> %470, i32 0, i32 0, i32 0), !dbg !59
+  %471 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %8316, <4 x half> %397, <4 x float> %470, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
   %472 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %317, <4 x half> %398, <4 x float> %471, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
@@ -781,7 +788,7 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
   %516 = insertelement <4 x float> %515, float %283, i64 1, !dbg !59
   %517 = insertelement <4 x float> %516, float %284, i64 2, !dbg !59
   %518 = insertelement <4 x float> %517, float %285, i64 3, !dbg !59
-  %519 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %316, <4 x half> %450, <4 x float> %518, i32 0, i32 0, i32 0), !dbg !59
+  %519 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %8316, <4 x half> %450, <4 x float> %518, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
   %520 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %317, <4 x half> %451, <4 x float> %519, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
@@ -797,7 +804,7 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
   %528 = insertelement <4 x float> %527, float %299, i64 1, !dbg !59
   %529 = insertelement <4 x float> %528, float %300, i64 2, !dbg !59
   %530 = insertelement <4 x float> %529, float %301, i64 3, !dbg !59
-  %531 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %316, <4 x half> %453, <4 x float> %530, i32 0, i32 0, i32 0), !dbg !59
+  %531 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %8316, <4 x half> %453, <4 x float> %530, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
   %532 = tail call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16f16(<4 x half> %317, <4 x half> %454, <4 x float> %531, i32 0, i32 0, i32 0), !dbg !59
   tail call void @llvm.amdgcn.sched.barrier(i32 2038), !dbg !59
@@ -1239,6 +1246,20 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
   tail call void @llvm.amdgcn.sched.group.barrier(i32 512, i32 1, i32 0), !dbg !47
   tail call void @llvm.amdgcn.sched.group.barrier(i32   8, i32 4, i32 0), !dbg !47
 
+  fence syncscope("workgroup") release, !dbg !37
+  tail call void @llvm.amdgcn.s.barrier(), !dbg !37
+  fence syncscope("workgroup") acquire, !dbg !37
+
+  ; Local Prefetch for next iteration
+  ; A0 K0
+  %9315 = load <8 x half>, ptr addrspace(3) %176, align 16, !dbg !43
+  %9316 = shufflevector <8 x half> %9315, <8 x half> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>, !dbg !59
+  %9317 = shufflevector <8 x half> %9315, <8 x half> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>, !dbg !59
+  ; B0 K0
+  %9318 = load <8 x half>, ptr addrspace(3) %148, align 16, !dbg !37
+  %9319 = shufflevector <8 x half> %9318, <8 x half> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>, !dbg !59
+  %9320 = shufflevector <8 x half> %9318, <8 x half> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>, !dbg !59
+
   %779 = add nuw nsw i32 %314, 1, !dbg !36
   %exitcond.not = icmp eq i32 %314, %184, !dbg !36
   br i1 %exitcond.not, label %._crit_edge, label %185, !dbg !36
@@ -1384,6 +1405,9 @@ define amdgpu_kernel void @matmul_kernel(ptr addrspace(1) inreg nocapture readon
 ._crit_edge._crit_edge:                           ; preds = %._crit_edge
   %.pre = and i32 %32, 15, !dbg !28
   br label %1427, !dbg !59
+
+  ; Epilogue will be re-loading the prefetched values from LDS to reg.
+  ; This should be fine for correctness.
 
 908:                                              ; preds = %._crit_edge
   %909 = lshr i32 %32, 1, !dbg !37
