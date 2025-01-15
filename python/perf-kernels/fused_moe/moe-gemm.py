@@ -622,10 +622,11 @@ def run_benchmark(custom, args):
 
     benchmark = triton.testing.Benchmark(
         x_names=x_names, x_vals=x_vals_list, line_arg='metric', line_vals=line_vals, line_names=line_names,
-        styles=[('red', '-'), ('blue', '-'), ('yellow', '-')], ylabel='ms / TFLOPS / GB/s', plot_name='moe-gemm-benchmark', args={
-            'dtype': dtype, 'routed_weight': routed_weight, 'use_fp8_w8a8': use_fp8_w8a8, 'use_int8_w8a16':
-            use_int8_w8a16, 'fp8_type': fp8_type
-        })
+        styles=[('red', '-'), ('blue', '-'),
+                ('yellow', '-')], ylabel='ms / TFLOPS / GB/s', plot_name='moe-gemm-benchmark', args={
+                    'dtype': dtype, 'routed_weight': routed_weight, 'use_fp8_w8a8': use_fp8_w8a8, 'use_int8_w8a16':
+                    use_int8_w8a16, 'fp8_type': fp8_type
+                })
 
     @triton.testing.perf_report([benchmark])
     def bench_moe_gemm(M, N, K, E, top_k, dtype, routed_weight, metric, use_fp8_w8a8, use_int8_w8a16, fp8_type,
