@@ -584,7 +584,7 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, str
                 # Compute pointers for the first part (WKV_B[:,:qk_nope_head_dim, :]) to be absorbed into q computation at outer loop
                 wkv_b_ptrs1 = wkv_b_offset + offs_wkv_b_q[:, None] * stride_wkv_b_k + offs_dc[None, :] * stride_wkv_b_n
                 # Compute pointers for the second part (WKV_B[:,-v_head_dim:, :]) needed in the inner loop
-                wkv_b_ptrs2 = wkv_b_offset + offs_wkv_b_v[:, None] * stride_wkv_b_k + offs_dc[None, :] * stride_wkv_b_n
+                wkv_b_ptrs2 = wkv_b_offset + offs_wkv_b_v[None, :] * stride_wkv_b_k + offs_dc[:, None] * stride_wkv_b_n
 
                 # Compute pointers for all the scale tensors used in this kernel.
                 INT8_GEMM: tl.constexpr = INT8 & (not INT8_KV)
@@ -730,8 +730,7 @@ def attn_fwd(Q, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out, str
                         acc *= p_descale
                     acc *= v_descale
 
-                acc = tl.dot(acc.to(wkv_b.type.element_ty), wkv_b.trans())
-                
+                acc = tl.dot(acc.to(wkv_b.type.element_ty), wkv_b)
                 
                 # epilogue
                 # This helps the compiler do Newton Raphson on l_i vs on acc which is much larger.
