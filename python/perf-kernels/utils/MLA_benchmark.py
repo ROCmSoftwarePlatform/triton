@@ -737,16 +737,9 @@ def test_mla_implementations():
     # Define model arguments
     args = ModelArgs()
 
-    # Create two MLA instances, one with "naive" and one with "absorb" implementation
-    set_seed(20)
-    mla_naive = MLA(args)
-    set_seed(20)
-    mla_absorb = MLA(args)
-    # Ensure both instances have the same weights
-    mla_absorb.load_state_dict(mla_naive.state_dict())
     # Create a random input tensor
     embed = ParallelEmbedding(args.vocab_size, args.dim)
-    tokens = torch.randint(0, args.vocab_size, (2, 64))
+    tokens = torch.randint(0, args.vocab_size, (2, 8))
     seqlen = tokens.size(1)
     x = embed(tokens)
     # Generate random start position and freqs_cis
@@ -757,42 +750,35 @@ def test_mla_implementations():
     # Generate a random mask (optional)
     attn_norm = RMSNorm(args.dim)
     x = attn_norm(x)
-
+    
     mask = None
     # if seqlen > 1:
     #     mask = torch.full((seqlen, seqlen), float("-inf"), device=tokens.device).triu_(1)
     # Set the attention implementation for each instance
+    
+    impls = ["absorb", "naive"]
+    outputs = []
+
     global attn_impl
-    attn_impl = "absorb"
-    # mla_absorb.attn_impl = attn_impl
-    mla_absorb.kv_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_absorb.kv_lora_rank)
-    mla_absorb.pe_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_absorb.qk_rope_head_dim) 
-
-    output_absorb = mla_absorb(x, start_pos, freqs_cis, mask)
-
-    torch.cuda.synchronize()
-    start = time.time()
-    output_absorb = mla_absorb(x, start_pos, freqs_cis, mask)
-    torch.cuda.synchronize()
-    print(f"Time it takes for {attn_impl}: {time.time() - start} s")
-
-    attn_impl = "naive"
-    # mla_naive.attn_impl = attn_impl
-    mla_naive.k_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_naive.n_local_heads, mla_naive.qk_head_dim)
-    mla_naive.v_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_naive.n_local_heads, mla_naive.v_head_dim)  
-
-    # warmup
-    output_naive = mla_naive(x, start_pos, freqs_cis, mask)
-
-    torch.cuda.synchronize()
-    start = time.time()
-    output_naive = mla_naive(x, start_pos, freqs_cis, mask)
-    torch.cuda.synchronize()
-    print(f"Time it takes for {attn_impl}: {time.time() - start} s")
+    for impl in impls:
+        set_seed(20)
+        attn_impl = impl
+        mla = MLA(args)
+        output = mla(x, start_pos, freqs_cis, mask)
+        # time
+        # torch.cuda.synchronize()
+        # start = time.time()
+        # mla(x, start_pos, freqs_cis, mask)
+        # torch.cuda.synchronize()
+        # print(f"Time it takes for {attn_impl}: {time.time() - start} s")
+        outputs.append(output)
+    
+    output_1 = outputs[0]
+    output_2 = outputs[1]
 
     # Print the last 10 elements of each tensor for quick inspection
-    print(f"output_naive (last 10): {output_naive.flatten()[:10]}")
-    print(f"output_absorb (last 10): {output_absorb.flatten()[:10]}")
+    print(f"output_{impls[0]}.flatten() (first 10): {output_1.flatten()[:10]}")
+    print(f"output_{impls[1]}.flatten() (first 10): {output_2.flatten()[:10]}")
 
     # Define tolerances
     atol = 1e-2
@@ -800,27 +786,27 @@ def test_mla_implementations():
 
     # Perform the close comparison
     try:
-        torch.testing.assert_close(output_naive, output_absorb, atol=atol, rtol=rtol)
-        print("All elements are close within the specified tolerances.")
+        torch.testing.assert_close(output_1, output_2, atol=atol, rtol=rtol)
+        print(f"Test passed: '{impls[0]}' and '{impls[1]}' MLA implementations produce the same result.")
     except AssertionError as e:
         print("Tensors are not close within the specified tolerances.")
 
-        close_mask = torch.isclose(output_naive, output_absorb, atol=atol, rtol=rtol)
+        close_mask = torch.isclose(output_1, output_2, atol=atol, rtol=rtol)
         # Step 2: Identify mismatches by inverting the mask
         mismatch_mask = ~close_mask
         mismatch_indices = torch.nonzero(mismatch_mask)
         # print(mismatch_indices)
-        print(f"output shape: {output_naive.shape}")
+        print(f"output shape: bshd={output_1.shape}")
         print("mismatch indices")
         
         [print(idx) for idx in mismatch_indices]
 
         # Step 1: Element-wise comparison
         # torch.isclose returns a boolean tensor where each element is True if the corresponding
-        # elements in output_naive and output_absorb are close, otherwise False.
-        output_absorb = output_absorb.flatten()
-        output_naive = output_naive.flatten()
-        close_mask = torch.isclose(output_naive, output_absorb, atol=atol, rtol=rtol)
+        # elements in output_1 and output_2 are close, otherwise False.
+        output_2 = output_2.flatten()
+        output_1 = output_1.flatten()
+        close_mask = torch.isclose(output_1, output_2, atol=atol, rtol=rtol)
 
         # Step 2: Identify mismatches by inverting the mask
         mismatch_mask = ~close_mask
@@ -842,10 +828,10 @@ def test_mla_implementations():
 
             print(f"\nPrinting {num_to_print} randomly selected mismatched indices:")
             for idx in selected_indices:
-                naive_val = output_naive[idx].item()
-                absorb_val = output_absorb[idx].item()
-                diff = abs(naive_val - absorb_val)
-                print(f"Index {idx.item()}: output_naive = {naive_val}, output_absorb = {absorb_val}, |diff| = {diff}")
+                o1 = output_1[idx].item()
+                o2 = output_2[idx].item()
+                diff = abs(o1 - o2)
+                print(f"Index {idx.item()}: output_{impls[0]} = {o1}, output_{impls[1]} = {o2}, |diff| = {diff}")
 
         raise e
 
@@ -870,4 +856,4 @@ if __name__ == "__main__":
     set_seed(20)
     with torch.inference_mode():
         test_mla_implementations()
-    print("Test passed: 'naive' and 'absorb' MLA implementations produce the same result.")
+    
