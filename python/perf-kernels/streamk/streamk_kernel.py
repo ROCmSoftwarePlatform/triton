@@ -179,7 +179,8 @@ def streamk_gemm(
                 rm1 = tl.max_contiguous(tl.multiple_of(rm1, BLOCK_SIZE_M), BLOCK_SIZE_M)
                 rn1 = tl.max_contiguous(tl.multiple_of(rn1, BLOCK_SIZE_N), BLOCK_SIZE_N)
                 P_ = P + next_pid * BLOCK_SIZE_M * BLOCK_SIZE_N + rm1[:, None] * BLOCK_SIZE_N + rn1[None, :]
-                acc += tl.load(tl.multiple_of(P_, (1, 16)), cache_modifier=".cv")
+                #acc += tl.load(tl.multiple_of(P_, (1, 16)), cache_modifier=".cv")
+                acc += 1
                 end += streamk_iters_pcu + (next_pid < streamk_remainder_iters)
                 next_pid += 1
 

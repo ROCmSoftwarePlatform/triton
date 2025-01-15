@@ -1,0 +1,1 @@
+- {'M': 8192, 'N': 8192, 'K': 8192, 'rowMajorA': 'T', 'rowMajorB': 'F', 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1, 'num_warps': 8, 'num_stages': 2, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 2, 'NUM_SMS': 304}
