@@ -210,12 +210,13 @@ def flash_attention(q_nope, q_pe, kv, k_pe, wkv_b, qk_nope_head_dim, v_head_dim,
     q_pe = q_pe.permute((0, 2, 1, 3))
     o = torch.zeros((*q_nope.shape[:-1], v_head_dim), dtype=q_nope.dtype)
     Z, H, N, D = q_nope.shape
+    print("\nInput shapes")
     print(f"Q_NOPE shape: bhsd={Z, H, N, D}")
     print(f"Q_PE shape: btr={q_pe.shape}")
     print(f"KV shape: btc={kv.shape}")
     print(f"K_PE shape: btr={k_pe.shape}")
     print(f"WKV_B shape: b(d+d)c={wkv_b.shape}")
-    print("\n\n")
+    print("\n")
     _, _, _, input_metadata = input_helper(Z, H, H, N, N, D, q_nope.dtype, "bhsd", requires_grad=False)
     input_metadata.qk_nope_head_dim = qk_nope_head_dim
     input_metadata.v_head_dim = v_head_dim
@@ -733,21 +734,23 @@ class MLA(nn.Module):
 
         return x
 
+import time
+
 
 def test_mla_implementations():
     # Define model arguments
     args = ModelArgs()
 
     # Create two MLA instances, one with "naive" and one with "absorb" implementation
-    set_seed(0)
+    set_seed(20)
     mla_naive = MLA(args)
-    set_seed(0)
+    set_seed(20)
     mla_absorb = MLA(args)
     # Ensure both instances have the same weights
     mla_absorb.load_state_dict(mla_naive.state_dict())
     # Create a random input tensor
     embed = ParallelEmbedding(args.vocab_size, args.dim)
-    tokens = torch.randint(0, args.vocab_size, (8, 2))
+    tokens = torch.randint(0, args.vocab_size, (2, 128))
     x = embed(tokens)
     # Generate random start position and freqs_cis
     start_pos = 0
@@ -772,8 +775,14 @@ def test_mla_implementations():
 
     output_absorb = mla_absorb(x, start_pos, freqs_cis, mask)
 
-    attn_impl = "flash"
-    mla_naive.attn_impl = "flash"
+    torch.cuda.synchronize()
+    start = time.time()
+    output_absorb = mla_absorb(x, start_pos, freqs_cis, mask)
+    torch.cuda.synchronize()
+    print(f"Time it takes for {attn_impl}: {time.time() - start} s")
+
+    attn_impl = "naive"
+    mla_naive.attn_impl = "naive"
     mla_naive.k_cache = torch.zeros(args.max_batch_size, args.max_seq_len, mla_naive.n_local_heads,
                                     mla_naive.qk_head_dim, dtype=torch.bfloat16,
                                     device="cuda")  # Change to torch.bfloat16
@@ -781,7 +790,14 @@ def test_mla_implementations():
                                     mla_naive.v_head_dim, dtype=torch.bfloat16,
                                     device="cuda")  # Change to torch.bfloat16
 
+    # warmup
     output_naive = mla_naive(x, start_pos, freqs_cis, mask)
+
+    torch.cuda.synchronize()
+    start = time.time()
+    output_naive = mla_naive(x, start_pos, freqs_cis, mask)
+    torch.cuda.synchronize()
+    print(f"Time it takes for {attn_impl}: {time.time() - start} s")
 
     # Print the last 10 elements of each tensor for quick inspection
     print(f"output_naive (last 10): {output_naive.flatten()[:10]}")
@@ -850,7 +866,7 @@ def set_seed(seed: int = 0):
 
 
 if __name__ == "__main__":
-    set_seed(0)
+    set_seed(20)
     with torch.inference_mode():
         test_mla_implementations()
     print("Test passed: 'naive' and 'absorb' MLA implementations produce the same result.")
