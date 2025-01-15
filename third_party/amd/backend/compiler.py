@@ -204,7 +204,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
 
-        stream_max_depth = int(os.getenv("TRITON_HIP_STREAM_MAX_DEPTH", "0"))
+        stream_max_depth = int(os.getenv("TRITON_HIP_STREAM_MAX_DEPTH", "1"))
         stream_prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
