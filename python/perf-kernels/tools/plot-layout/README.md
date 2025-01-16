@@ -5,9 +5,10 @@ Here is the help info from the script.
 
 ```bash
 >$ python3 plot_layout.py -h
-usage: Draw triton layouts [-h] [-tensorShape TENSORSHAPE TENSORSHAPE] [-dotShape DOTSHAPE DOTSHAPE DOTSHAPE] [-plot {blocked,dot,wmma,lds}] [-dim0 DIM0] [-dim1 DIM1] [-sizePerThread SIZEPERTHREAD SIZEPERTHREAD] [-threadsPerWarp THREADSPERWARP THREADSPERWARP]
-                           [-warpsPerCTA WARPSPERCTA WARPSPERCTA] [-order ORDER ORDER] [-nonKDim {16,32}] [-kWidth {4,8,16,32}] [-kGroup {1,2}] [-dtype_a {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}] [-dtype_b {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}] [-mfmaTrans] [-scale]
-                           [-banks {32,64}] [-lds_layout {swizzle,padding,none}] [-lds_access {read,write,none}] [-mnContig] [-mfma_trans_load] [-wave_size {32,64}] [-o O] [-keep]
+usage: Draw triton layouts [-h] [-tensorShape TENSORSHAPE TENSORSHAPE] [-dotShape DOTSHAPE DOTSHAPE DOTSHAPE] [-plot {blocked,dot,wmma,lds}] [-dim0 DIM0] [-dim1 DIM1] [-sizePerThread SIZEPERTHREAD SIZEPERTHREAD]
+                           [-threadsPerWarp THREADSPERWARP THREADSPERWARP] [-warpsPerCTA WARPSPERCTA WARPSPERCTA] [-order ORDER ORDER] [-nonKDim {16,32}] [-kWidth {4,8,16,32}] [-kGroup {1,2}]
+                           [-dtype_a {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}] [-dtype_b {fp16,bf16,fp8,bf8,fp6,bf6,f4,i8}] [-mfmaTrans] [-scale] [-banks {32,64}] [-lds_layout {swizzle,padding,none}] [-lds_access {read,write,none}]
+                           [-mnContig] [-mfma_trans_load] [-swizzleVec {4,8,16,32}] [-padInterval PADINTERVAL] [-padAmount PADAMOUNT] [-wave_size {32,64}] [-o O] [-keep]
 
 options:
   -h, --help            show this help message and exit
@@ -39,6 +40,11 @@ options:
                         choose LDS access mode
   -mnContig             If set, the tensor is K x N and n-contig
   -mfma_trans_load      If set, use MFMA transpose load instructions
+  -swizzleVec {4,8,16,32}
+                        number of contiguous elements in a vector to swizzle
+  -padInterval PADINTERVAL
+                        Add padding for every padInterval bytes
+  -padAmount PADAMOUNT  Pad padAmount bytes for every padInterval bytes
   -wave_size {32,64}    choose the wmma instruction mode
   -o O                  output pdf file name (without surfix)
   -keep                 If set, keep the generated .tex file
@@ -132,15 +138,19 @@ python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access read -tensorSha
 python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access write -tensorShape 128 128 -kWidth 16 -dtype_a f4 -banks 32
 python3 plot_layout.py -plot lds -lds_layout none -lds_access read -tensorShape 128 32 -kWidth 4 -dtype_a fp16 -banks 64 -mnContig
 python3 plot_layout.py -plot lds -lds_layout swizzle -lds_access read -tensorShape 128 32 -kWidth 16 -dtype_a fp8 -banks 64 -mnContig -mfma_trans_load
+python3 plot_layout.py -plot lds -lds_layout padding -lds_access none -tensorShape 128 32 -kWidth 8 -dtype_a fp16 -banks 32 -padInterval 128 -padAmount 16
 ```
 
 Knobs
 - `kWidth`: the vector size (in unit of elements) when accessing LDS
 - `banks`: the number of banks in LDS. (64 for gfx950, 32 for pre-gfx950)
+- `dtype_a`: element data type
 - Three options for `-lds_layout`:
   - `none`: no swizzling, no padding
   - `swizzle`: apply the swizzling pattern, which is derived from tensor shape and kWidth.
-  - `padding`: tbd
+  - `padding`: pad `padAmount` bytes for every `padInterval` bytes of data
+    - `padAmount`: default is 0
+    - `padInterval`: default is 1
 - Three options for `-lds_access`:
   - `none`: do not plot access pattern
   - `read`: plot accessed elements at the first cycle of ds_read

@@ -286,13 +286,13 @@
   %% The number of the rows of the tensor that can share the same swizzling pattern
   \pgfmathsetmacro{\perPhase}{ceil(\elemsPerLDSRow/\colSize)}
   %% maxPhase: the total number of different swizzling patterns
-  \ifthenelse{\hasSwizzle=0}{
-    %% When swizzling is disabled
-    \pgfmathsetmacro{\maxPhase}{1}
-  }{
+  \ifthenelse{\hasSwizzle=1}{
     %% When vec is small enough, we want 16/perPhase different swizzling patterns
     %% When vec is large, we can only have 64 / \vec different swizzling pattern at most
     \pgfmathsetmacro{\maxPhase}{min(min(\mfmaNonKDim,\numThreadsSameCycle)/\perPhase,\banks*4/\bytesPerElem/\swizzleVec)}
+  }{
+    %% When swizzling is disabled
+    \pgfmathsetmacro{\maxPhase}{1}
   }
 
   %% Draw the vectors according to the swizzling pattern
@@ -319,6 +319,16 @@
       \pgfmathsetmacro{\vecIdInSwizzleVec}{int(mod(\vecIdInLDSRow, \vecsPerSwizzleVec))}
       \pgfmathsetmacro{\newSwizzleVecId}{\bitwiseXor{\swizzleVecIdInLDSRow}{\phase}}
       \pgfmathsetmacro{\LDSVec}{int(\newSwizzleVecId*\vecsPerSwizzleVec+\vecIdInSwizzleVec)}
+
+      %% Padding case needs to recompute \LDSVec and \LDSRow
+      %% Add padAmount bytes of padding after every padInterval bytes of data
+      \ifthenelse{\hasSwizzle=2}{
+        % global offset in unit of bytes
+        \pgfmathsetmacro{\offVecStartByte}{\row*\colSize/\vec*\vecInBytes+\gp*\vecInBytes}
+        \pgfmathsetmacro{\paddedVecStartByte}{int(\offVecStartByte/\padInterval)*\padAmount+\offVecStartByte}
+        \pgfmathsetmacro{\LDSRow}{int(\paddedVecStartByte/\banks/4)}
+        \pgfmathsetmacro{\LDSVec}{int(mod(int(\paddedVecStartByte), int(\banks*4))/\vecInBytes)}
+      }{}
 
       \coordinate (vec TL) at ($(TL)+(\LDSVec*\vecInBytes*\bsize, -\LDSRow*\elemH)$);
       \draw [ultra thin, fill=\vecColor] (vec TL) rectangle ++(\vecInBytes*\bsize, -\elemH)

@@ -129,6 +129,8 @@ def draw_lds_access_cmd(dim0, dim1, dtype, mfmaNonKDim, ldsConfig):
     trans = 1 if ldsConfig.mnContig else 0
     useMfmaTransLD = 1 if ldsConfig.mfmaTransLD else 0
     banks = ldsConfig.banks
+    padInterval = ldsConfig.padInterval
+    padAmount = ldsConfig.padAmount
 
     if trans:
         dim0Name = 'k'
@@ -162,11 +164,30 @@ def draw_lds_access_cmd(dim0, dim1, dtype, mfmaNonKDim, ldsConfig):
       In most cases, we can set swizzleVec = accessVec = kWidth according to the dtype.
       However, for mfmaNonKDim = 16, banks = 64, and kWidth = 8B, 32 threads will
       access LDS at the same cycle. In this case, we need to double swizzleVec = 16B.
+
+      Swizzling: works as suggested above.
+      Padding:   will have bank conflicts for ds_read_b128 due to non-linear thread ids
+                 are accessing LDS at the same cycle
+
     case 2: MN-contig in both HBM and LDS without using mfma_transpose_ld instructions (-mnContig)
       In this case, ds_read can only read one element at a time (i.e. accessVec is always 1).
       Therefore, we can always choose swizzleVec = 16B. kWidth does not matter. accessVec is always 1.
+      Note that in this case, only swizzling is supported and can help resolve bank conflicts.
+      But the performance bottleneck is scalar ds_read rather than bank conflicts.
+
     case 3: MN-contig in both HBM and LDS using mfma_transpose_ld instructions (-mnContig -mfma_trans_load)
+      In this case, ds_read is done in a special pattern so that the ds_read_b64_tr_bx instructions
+      can be used. Each thread will read 8B data, which corresponds to kWidth = 8B/elemInBytes.
+      The swizzleVec needs to be set to mfmaNonKDim.
+
+      Swizzling: currently, it leads to bank conflicts for nonKDim = 16 and
+                 if the read pattern follows the spec.
+                 For nonKDim = 32, swizzling does not have bank conflicts.
+      Padding:   It can help resolve bank conflicts for both nonKDim = 16 and 32.
+                 However, it leads to a lot of waste of LDS space.
+
     case 4: MN-contig in HBM and k-Contig in LDS (-inThreadTrans)
+      Not supported yet
     '''
 
     elemTypeInBytes = typeToBytes(dtype)
@@ -210,7 +231,8 @@ def draw_lds_access_cmd(dim0, dim1, dtype, mfmaNonKDim, ldsConfig):
     \\def\\dtype{{{dtype}}}
     \\def\\trans{{{trans}}}
     \\def\\useMfmaTransLD{{{useMfmaTransLD}}}
-
+    \\def\\padInterval{{{padInterval}}}
+    \\def\\padAmount{{{padAmount}}}
 
     \\def\\elemH{{0.18}}
     \\def\\elem{{0.18}}
@@ -411,6 +433,8 @@ def parse_args():
                         help='If set, use MFMA transpose load instructions')
     parser.add_argument("-swizzleVec", type=int, default=4, choices=[4, 8, 16, 32],
                         help='number of contiguous elements in a vector to swizzle')
+    parser.add_argument("-padInterval", type=int, default=1, help='Add padding for every padInterval bytes')
+    parser.add_argument("-padAmount", type=int, default=0, help='Pad padAmount bytes for every padInterval bytes')
     ## wmma instruction layout parameter
     parser.add_argument("-wave_size", type=int, default=32, choices=[32, 64], help='choose the wmma instruction mode')
     parser.add_argument("-o", type=str, default="myplot", help='output pdf file name (without surfix)')
@@ -448,8 +472,11 @@ class LDSConfig:
     swizzleVec: int
     accessVec: int
     kWidth: int
+    padInterval: int
+    padAmount: int
 
-    def __init__(self, banks, ldsLayout, ldsAccess, mnContig, mfmaTransLD, swizzleVec, accessVec, kWidth):
+    def __init__(self, banks, ldsLayout, ldsAccess, mnContig, mfmaTransLD, swizzleVec, accessVec, kWidth, padInterval,
+                 padAmount):
         self.banks = banks
         self.ldsLayout = ldsLayout
         self.ldsAccess = ldsAccess
@@ -458,12 +485,14 @@ class LDSConfig:
         self.swizzleVec = swizzleVec
         self.accessVec = accessVec
         self.kWidth = kWidth
+        self.padInterval = padInterval
+        self.padAmount = padAmount
         if self.swizzleVec < self.kWidth:
             self.swizzleVec = self.kWidth
 
     def print(self):
         print(
-            f"{self.banks=} {self.ldsLayout=} {self.ldsAccess=} {self.mnContig=} {self.mfmaTransLD=} {self.swizzleVec=} {self.accessVec=} {self.kWidth=}"
+            f"{self.banks=} {self.ldsLayout=} {self.ldsAccess=} {self.mnContig=} {self.mfmaTransLD=} {self.swizzleVec=} {self.accessVec=} {self.kWidth=} {self.padInterval} {self.padAmount}"
         )
 
 
@@ -496,6 +525,8 @@ def main():
     mnContig = args.mnContig
     mfmaTransLD = args.mfma_trans_load
     swizzleVec = args.swizzleVec
+    padInterval = args.padInterval
+    padAmount = args.padAmount
 
     waveSize = args.wave_size
 
@@ -506,7 +537,8 @@ def main():
 
     blockedConfig = BlockedConfig(sizePerThread, threadsPerWarp, warpsPerCTA, order)
     dotConfig = DotConfig(mfmaNonKDim, kWidth, kGroup, trans, warpsPerCTA)
-    ldsConfig = LDSConfig(banks, ldsLayout, ldsAccess, mnContig, mfmaTransLD, swizzleVec, kWidth, kWidth)
+    ldsConfig = LDSConfig(banks, ldsLayout, ldsAccess, mnContig, mfmaTransLD, swizzleVec, kWidth, kWidth, padInterval,
+                          padAmount)
 
     CTAShape = []
     if plot_mode == 'blocked':
