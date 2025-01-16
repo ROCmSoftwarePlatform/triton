@@ -210,13 +210,15 @@ def flash_attention(q_nope, q_pe, kv, k_pe, wkv_b, qk_nope_head_dim, v_head_dim,
     q_pe = q_pe.permute((0, 2, 1, 3))
     o = torch.zeros((*q_nope.shape[:-1], v_head_dim), dtype=q_nope.dtype)
     Z, H, N, D = q_nope.shape
-    print("\nInput shapes")
-    print(f"Q_NOPE shape: bhsd={Z, H, N, D}")
-    print(f"Q_PE shape: btr={q_pe.shape}")
-    print(f"KV shape: btc={kv.shape}")
-    print(f"K_PE shape: btr={k_pe.shape}")
-    print(f"WKV_B shape: b(d+d)c={wkv_b.shape}")
-    print("\n")
+    
+    # print("\nInput shapes")
+    # print(f"Q_NOPE shape: bhsd={Z, H, N, D}")
+    # print(f"Q_PE shape: btr={q_pe.shape}")
+    # print(f"KV shape: btc={kv.shape}")
+    # print(f"K_PE shape: btr={k_pe.shape}")
+    # print(f"WKV_B shape: b(d+d)c={wkv_b.shape}")
+    # print("\n")
+    
     _, _, _, input_metadata = input_helper(Z, H, H, N, N, D, q_nope.dtype, "bhsd", requires_grad=False)
     input_metadata.qk_nope_head_dim = qk_nope_head_dim
     input_metadata.v_head_dim = v_head_dim
@@ -228,7 +230,7 @@ def flash_attention(q_nope, q_pe, kv, k_pe, wkv_b, qk_nope_head_dim, v_head_dim,
 world_size = 1
 rank = 0
 block_size = 128
-gemm_impl: Literal["bf16", "fp8", "fp16"] = "fp16"
+gemm_impl: Literal["fp16", "fp8", "fp16"] = "fp16"
 attn_impl: Literal["naive", "absorb"] = "absorb"
 
 
@@ -269,7 +271,7 @@ class ModelArgs:
     """
     max_batch_size: int = 8
     max_seq_len: int = 4096 * 4
-    dtype: Literal["bf16", "fp8", "fp16"] = "fp16"
+    dtype: Literal["fp16", "fp8", "fp16"] = "fp16"
     vocab_size: int = 102400
     dim: int = 2048
     inter_dim: int = 10944
@@ -287,10 +289,10 @@ class ModelArgs:
     route_scale: float = 1.
     # mla
     q_lora_rank: int = 0
-    kv_lora_rank: int = 512 // 2
-    qk_nope_head_dim: int = 128 // 2
-    qk_rope_head_dim: int = 64 // 2
-    v_head_dim: int = 128 // 2
+    kv_lora_rank: int = 512
+    qk_nope_head_dim: int = 128
+    qk_rope_head_dim: int = 64
+    v_head_dim: int = 128
     # yarn
     original_seq_len: int = 4096
     rope_theta: float = 10000.0
@@ -386,9 +388,9 @@ class Linear(nn.Module):
         in_features (int): Number of input features.
         out_features (int): Number of output features.
         bias (bool): Whether to include a bias term. Defaults to False.
-        dtype (optional): Data type for the layer. Defaults to `torch.float16`.
+        dtype (optional): Data type for the layer. Defaults to `torch.bfloat16`.
     """
-    dtype = torch.float16  # Change default to torch.float16
+    dtype = torch.bfloat16  # Change default to torch.bfloat16
 
     def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype=None):
         super().__init__()
@@ -428,7 +430,7 @@ class ColumnParallelLinear(Linear):
         in_features (int): Number of input features.
         out_features (int): Total number of output features.
         bias (bool): Whether to include a bias term. Defaults to False.
-        dtype (optional): Data type for the layer. Defaults to `torch.float16`.
+        dtype (optional): Data type for the layer. Defaults to `torch.bfloat16`.
     """
 
     def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype=None):
@@ -458,7 +460,7 @@ class RowParallelLinear(Linear):
         in_features (int): Total number of input features.
         out_features (int): Number of output features.
         bias (bool): Whether to include a bias term. Defaults to False.
-        dtype (optional): Data type for the layer. Defaults to `torch.float16`.
+        dtype (optional): Data type for the layer. Defaults to `torch.bfloat16`.
     """
 
     def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype=None):
@@ -739,7 +741,7 @@ def test_mla_implementations():
 
     # Create a random input tensor
     embed = ParallelEmbedding(args.vocab_size, args.dim)
-    tokens = torch.randint(0, args.vocab_size, (2, 8))
+    tokens = torch.randint(0, args.vocab_size, (2, 8192))
     seqlen = tokens.size(1)
     x = embed(tokens)
     # Generate random start position and freqs_cis
@@ -756,7 +758,7 @@ def test_mla_implementations():
     #     mask = torch.full((seqlen, seqlen), float("-inf"), device=tokens.device).triu_(1)
     # Set the attention implementation for each instance
     
-    impls = ["absorb", "naive"]
+    impls = ["absorb", "flash"]
     outputs = []
 
     global attn_impl
@@ -766,11 +768,11 @@ def test_mla_implementations():
         mla = MLA(args)
         output = mla(x, start_pos, freqs_cis, mask)
         # time
-        # torch.cuda.synchronize()
-        # start = time.time()
-        # mla(x, start_pos, freqs_cis, mask)
-        # torch.cuda.synchronize()
-        # print(f"Time it takes for {attn_impl}: {time.time() - start} s")
+        torch.cuda.synchronize()
+        start = time.time()
+        mla(x, start_pos, freqs_cis, mask)
+        torch.cuda.synchronize()
+        print(f"Time it takes for {attn_impl}: {time.time() - start} s")
         outputs.append(output)
     
     output_1 = outputs[0]
@@ -799,7 +801,7 @@ def test_mla_implementations():
         print(f"output shape: bshd={output_1.shape}")
         print("mismatch indices")
         
-        [print(idx) for idx in mismatch_indices]
+        # [print(idx) for idx in mismatch_indices]
 
         # Step 1: Element-wise comparison
         # torch.isclose returns a boolean tensor where each element is True if the corresponding
@@ -841,7 +843,7 @@ import numpy as np
 
 
 def set_seed(seed: int = 0):
-    torch.set_default_dtype(torch.float16)
+    torch.set_default_dtype(torch.bfloat16)
     torch.set_default_device("cuda")
     torch.manual_seed(seed)
     random.seed(seed)
