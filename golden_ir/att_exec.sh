@@ -4,6 +4,6 @@
 TRITON_ALWAYS_COMPILE=1 python gemm_sub.py \
   --trans-b \
   --file config.yaml \
-  --sub matmul/6d_local_prefetch.llir \
+  --sub matmul/7e.llir \
   --verbose
 

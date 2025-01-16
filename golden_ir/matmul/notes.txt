@@ -1,0 +1,11 @@
+
+# 7e
+prefetching full tile
+scheduling loop backedge was difficult.
+
+4096 / 4206 = 97% efficient
+# this is plenty good
+
+Scheduling principles
+1 - don't end block with memory op, hide it's own latency within the block.
+
