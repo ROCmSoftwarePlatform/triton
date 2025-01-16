@@ -1,11 +1,8 @@
 
-# 7e
-prefetching full tile
+# 7g
+prefetching single tile
 scheduling loop backedge was difficult.
 
-4096 / 4206 = 97% efficient
-# this is plenty good
-
-Scheduling principles
-1 - don't end block with memory op, hide it's own latency within the block.
+4096 / 4162 = 98% efficient
+630 TFlops w/o pinning clocks. Running gemm_sub.py for 300 iter.
 
