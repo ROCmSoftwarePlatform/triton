@@ -13,4 +13,6 @@ removing triton_cache changes pass vs fail.
 
 TFlops - Scenario
 590 - 2c - prefetching and sb
+7f and 7g have same performance, and only interleave mfmas between ds_reads and global_loads slightly differently.
+630 - 7f is 98% efficient
 630 - 7g is 98% efficient

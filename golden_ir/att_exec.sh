@@ -4,6 +4,8 @@
 TRITON_ALWAYS_COMPILE=1 python gemm_sub.py \
   --trans-b \
   --file config.yaml \
-  --sub matmul/7g.llir \
+  --sub matmul/8m.llir \
   --verbose
 
+#  --sub matmul/7g.llir \
+#  --sub matmul/8j.llir \
