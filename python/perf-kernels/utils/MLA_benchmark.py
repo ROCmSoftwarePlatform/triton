@@ -741,7 +741,7 @@ def test_mla_implementations():
 
     # Create a random input tensor
     embed = ParallelEmbedding(args.vocab_size, args.dim)
-    tokens = torch.randint(0, args.vocab_size, (2, 8192))
+    tokens = torch.randint(0, args.vocab_size, (2, 128))
     seqlen = tokens.size(1)
     x = embed(tokens)
     # Generate random start position and freqs_cis

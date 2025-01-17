@@ -1916,11 +1916,10 @@ def run_benchmark(custom, args):
             plot_name = f'fused-attention-{mode}-layout{args.layout}'
 
     print_time = args.return_time
-    line_vals = ['triton', 'torch']  # 'Time (ms)' if print_time else 'TFLOPS'
+    line_vals = ['triton']  # 'Time (ms)' if print_time else 'TFLOPS'
     configs.append(
         triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
-                                 line_names=line_vals, styles=[('red', '-'),
-                                                               ('green', '-')], ylabel='ms', plot_name=plot_name,
+                                 line_names=line_vals, styles=[('red', '-')] * len(line_vals), ylabel='ms', plot_name=plot_name,
                                  args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode}))
 
     @triton.testing.perf_report(configs)
@@ -1976,6 +1975,27 @@ def run_benchmark(custom, args):
 
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
                                                                           is_causal=causal, scale=None)
+            out = fn()
+            print(f"output {provider}: {out.flatten()[:10]}")
+        elif "ck" in provider:
+            from flash_attn import flash_attn_func 
+            if HQ != HK:
+                k = k.view(k.shape[0], k.shape[1], -1, k.shape[2],
+                           k.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
+                v = v.view(v.shape[0], v.shape[1], -1, v.shape[2],
+                           v.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
+            q = q.permute((0,2,1,3))
+            k = k.permute((0,2,1,3))
+            v = v.permute((0,2,1,3))
+            
+            fn = lambda: flash_attn_func(q, k, v, dropout_p=0.0, causal=causal)
+            out = fn()
+            print(f"output {provider}: {out.flatten()[:10]}")
+        else:
+            out = fn()
+            print(f"output {provider}: {out[0].flatten()[:10]}")
+
+        
 
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         total_flops = 2 * flops_per_matmul
