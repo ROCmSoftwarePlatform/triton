@@ -367,10 +367,13 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaDa
 
     EVEN_K = K % config["BLOCK_SIZE_K"] == 0
 
-    moe_gemm_kernel[grid](a, b, c, a_descale, b_descale, a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2), c.stride(1),
-                          c.stride(2), stride_bse, stride_bsn, top_k, topk_weights, sorted_token_ids, expert_ids, EM, N, K, EVEN_K,
-                          MUL_ROUTED_WEIGHT=topk_weights is not None, use_fp8_w8a8=use_fp8_w8a8, use_int8_w8a16=use_int8_w8a16, **config)
+    moe_gemm_kernel[grid](a, b, c, a_descale,
+                          b_descale, a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2), c.stride(1),
+                          c.stride(2), stride_bse, stride_bsn, top_k, topk_weights, sorted_token_ids, expert_ids, EM, N,
+                          K, EVEN_K, MUL_ROUTED_WEIGHT=topk_weights is not None, use_fp8_w8a8=use_fp8_w8a8,
+                          use_int8_w8a16=use_int8_w8a16, **config)
     return c
+
 
 quantization_max_repr_val = {
     torch.int8: 127, torch.float8_e4m3fnuz: 240.0, torch.float8_e4m3fn: 448.0, torch.float8_e5m2fnuz: 57344.0,
