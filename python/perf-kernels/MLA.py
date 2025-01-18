@@ -529,7 +529,7 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out
         # We need to split the wkv_b into two along the d (if the whole wkv_b is of size h,d,dc: num heads, head dim, compressed head dim)
         offs_wkv_b_q = tl.arange(0, qk_nope_head_dim)
         offs_wkv_b_v = tl.arange(qk_nope_head_dim, qk_nope_head_dim + v_head_dim)
-        offs_dc = tl.arange(0, BLOCK_DC_MODEL)
+        offs_c = tl.arange(0, BLOCK_DC_MODEL)
         offs_q_pe_d = tl.arange(0, BLOCK_Q_PE_DMODEL)
         offs_k_pe_d = tl.arange(0, BLOCK_K_PE_DMODEL)
         offs_kv_d = tl.arange(0, BLOCK_KV_DMODEL)

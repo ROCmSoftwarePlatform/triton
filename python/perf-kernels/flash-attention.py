@@ -1916,7 +1916,7 @@ def run_benchmark(custom, args):
             plot_name = f'fused-attention-{mode}-layout{args.layout}'
 
     print_time = args.return_time
-    line_vals = ['triton']  # 'Time (ms)' if print_time else 'TFLOPS'
+    line_vals = ['triton', 'torch', 'ck']  # 'Time (ms)' if print_time else 'TFLOPS'
     configs.append(
         triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
                                  line_names=line_vals, styles=[('red', '-')] * len(line_vals), ylabel='ms', plot_name=plot_name,
@@ -1937,14 +1937,10 @@ def run_benchmark(custom, args):
         #     bias = None
         # bias = None
 
-        # Bwd pass only supports causal=True right now
-        if mode == 'bwd':
-            causal = True
-
         flops_per_matmul = 0
         if varlen:
             q, k, v, input_metadata = varlen_input_helper(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype,
-                                                          args.equal_seqlens)
+                                                        args.equal_seqlens)
             for i in range(0, input_metadata.num_contexts):
                 seqlen_q = input_metadata.cu_seqlens_q[i + 1] - input_metadata.cu_seqlens_q[i]
                 seqlen_k = input_metadata.cu_seqlens_k[i + 1] - input_metadata.cu_seqlens_k[i]
@@ -1955,18 +1951,29 @@ def run_benchmark(custom, args):
             flops_per_matmul = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * D_HEAD
         if causal:
             input_metadata.need_causal()
-        if int8:
-            q, k, v = quantize_input(q, k, v, input_metadata, quantize_p=quantize_p, int8_kv=int8_kv)
 
-        input_metadata.set_persistent(args.persistent)
-        o = torch.empty_like(q)
-        fn = lambda: attention(q, k, v, o, input_metadata)
-        if mode == 'bwd':
-            o, _ = fn()
-            do = torch.randn_like(o)
-            fn = lambda: o.backward(do, retain_graph=True)
+        # Bwd pass only supports causal=True right now
+        if "triton" in provider:
+            if mode == 'bwd':
+                causal = True
 
-        if "torch" in provider:
+            o = torch.empty_like(q)
+            
+            if int8:
+                q, k, v = quantize_input(q, k, v, input_metadata, quantize_p=quantize_p, int8_kv=int8_kv)
+
+            input_metadata.set_persistent(args.persistent)
+            
+            fn = lambda: attention(q, k, v, o, input_metadata)
+            if mode == 'bwd':
+                o, _ = fn()
+                do = torch.randn_like(o)
+                fn = lambda: o.backward(do, retain_graph=True)
+
+            #out = fn()
+            #print(f"output {provider}: {out[0].flatten()[:10]}")
+
+        elif "torch" in provider:
             if HQ != HK:
                 k = k.view(k.shape[0], k.shape[1], -1, k.shape[2],
                            k.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
@@ -1975,8 +1982,8 @@ def run_benchmark(custom, args):
 
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
                                                                           is_causal=causal, scale=None)
-            out = fn()
-            print(f"output {provider}: {out.flatten()[:10]}")
+            #out = fn()
+            #print(f"output {provider}: {out.flatten()[:10]}")
         elif "ck" in provider:
             from flash_attn import flash_attn_func 
             if HQ != HK:
@@ -1989,13 +1996,10 @@ def run_benchmark(custom, args):
             v = v.permute((0,2,1,3))
             
             fn = lambda: flash_attn_func(q, k, v, dropout_p=0.0, causal=causal)
-            out = fn()
-            print(f"output {provider}: {out.flatten()[:10]}")
+            #out = fn()
+            #print(f"output {provider}: {out.flatten()[:10]}")
         else:
-            out = fn()
-            print(f"output {provider}: {out[0].flatten()[:10]}")
-
-        
+            assert False, f"Unknown provider {provider}. Select among [{line_vals}]"
 
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         total_flops = 2 * flops_per_matmul
