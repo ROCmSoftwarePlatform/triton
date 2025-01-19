@@ -157,6 +157,7 @@ def torch_rmsnorm(x, g, ZERO_CENTERED_GAMMA, epsilon=1e-6):
     rms_norm = rms_norm.to(x.dtype)
     return rms_norm, rsigma
 
+
 @pytest.mark.parametrize('ZERO_CENTERED_GAMMA', [True, False])
 @pytest.mark.parametrize('M, N', [
     (1, 4),
@@ -180,7 +181,6 @@ def test_rmsnorm(M, N, ZERO_CENTERED_GAMMA):
     USE_BLOCKED = n_cols > blk_size
     NUM_PRGMS = min(n_rows, get_num_sms())
     g = torch.ones((1, N), device='cuda')
-  #  ZERO_CENTERED_GAMMA = True
 
     y_triton, rsigma_triton = triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size,
                                              USE_BLOCKED, NUM_PRGMS)
