@@ -69,21 +69,32 @@ if args.sub:
 
 
 @triton.jit
-def matmul_kernel(a_ptr, b_ptr, c_ptr, bias_ptr,
-                  M, N, K,
-                  stride_am, stride_ak, stride_bk, stride_bn, stride_cm,
-                  stride_cn, stride_bias,
-                  BLOCK_SIZE_M: tl.constexpr,
-                  BLOCK_SIZE_N: tl.constexpr,
-                  BLOCK_SIZE_K: tl.constexpr,
-                  SPLIT_K: tl.constexpr,
-                  GROUP_SIZE_M: tl.constexpr,
-                  BIAS: tl.constexpr,
-                  EVEN_K: tl.constexpr,
-                  GRID_MN: tl.constexpr,
-                  NUM_XCDS: tl.constexpr,
-                  USE_MASK: tl.constexpr
-                  ):
+def matmul_kernel(
+        a_ptr,
+        b_ptr,
+        c_ptr,
+        bias_ptr,
+        M,
+        N,
+        K,
+        stride_am,
+        stride_ak,
+        stride_bk,
+        stride_bn,
+        stride_cm,
+        stride_cn,
+        stride_bias,
+        BLOCK_SIZE_M: tl.constexpr,
+        BLOCK_SIZE_N: tl.constexpr,
+        BLOCK_SIZE_K: tl.constexpr,
+        SPLIT_K: tl.constexpr,
+        GROUP_SIZE_M: tl.constexpr,
+        BIAS: tl.constexpr,
+        EVEN_K: tl.constexpr,
+        GRID_MN: tl.constexpr,
+        NUM_XCDS: tl.constexpr,
+        USE_MASK: tl.constexpr
+        ):
     tl.assume(stride_am > 0)
     tl.assume(stride_ak > 0)
     tl.assume(stride_bk > 0)
