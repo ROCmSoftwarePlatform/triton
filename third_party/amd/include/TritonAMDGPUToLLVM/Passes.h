@@ -48,6 +48,9 @@ createTritonAMDGPULowerInstructionSchedHintsPass(StringRef arch,
                                                  int32_t numStages,
                                                  StringRef variant);
 
+std::unique_ptr<OperationPass<ModuleOp>>
+createTritonAMDGPURefineOpsPass(StringRef targetArch);
+
 #define GEN_PASS_REGISTRATION
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
 

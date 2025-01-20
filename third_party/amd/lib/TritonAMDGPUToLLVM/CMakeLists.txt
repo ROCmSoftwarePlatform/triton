@@ -22,6 +22,7 @@ add_triton_library(TritonAMDGPUToLLVM
     SPMDOpToLLVM.cpp
     SchedInstructions.cpp
     UpcastMXFPToLLVM.cpp
+    RefineOps.cpp
 
     DEPENDS
     TritonAMDGPUConversionPassIncGen
