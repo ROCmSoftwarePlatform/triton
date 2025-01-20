@@ -1872,17 +1872,30 @@ def varlen_benchmark_configs():
 
 def model_benchmark_configs(args):
     config_file = args.model_configs
+<<<<<<< HEAD
     configs = get_model_configs(config_path=config_file, model_families=["llama3", "mistral"], model=args.model)
     fa_configs = []
     batch_size = args.b
+=======
+    configs = get_model_configs(config_path=config_file, model_families=["llama3"], model=args.model)
+    fa_configs = []
+    batch_size = args.b if args.b else 1
+>>>>>>> main_perf
 
     for model_name, config in configs.items():
         HQ = config["num_attention_heads"]
         HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"]
+<<<<<<< HEAD
         N_CTX_Q = args.sq
         N_CTX_K = args.sk if args.sk else N_CTX_Q
         HEAD_DIM = config["hidden_size"] // HQ
         fa_configs.append((model_name, batch_size, HQ, HK, N_CTX_Q, N_CTX_K, HEAD_DIM))
+=======
+        max_ctx_len = config["max_ctx_len"]
+        N_CTX_Q = args.sq if args.sq else max_ctx_len
+        N_CTX_K = args.sk if args.sk else max_ctx_len
+        fa_configs.append((model_name, batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
+>>>>>>> main_perf
 
     return fa_configs
 
@@ -2023,10 +2036,16 @@ def parse_args():
     )
     parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
 
+<<<<<<< HEAD
     available_models = get_available_models(model_families=["llama3", "mistral"])  # Dynamically load model names
     model_help = (
         "Model name to benchmark. Select from: [" + ", ".join(available_models) +
         "]. Use 'all' to benchmark all models. Not providing runs the default benchmark script with custom configs.")
+=======
+    available_models = get_available_models(model_families=["llama3"])  # Dynamically load model names
+    model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
+                  "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
+>>>>>>> main_perf
     parser.add_argument('-model', type=str, default=None, help=model_help)
     parser.add_argument("-b", type=int, default=1)
     parser.add_argument("-hq", type=int, default=0)
