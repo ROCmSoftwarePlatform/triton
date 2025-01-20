@@ -267,7 +267,7 @@ def run_benchmark(args):
         g = torch.ones((1, N), device='cuda')
         ZERO_CENTERED_GAMMA = False
         if provider == 'torch':
-            ms = triton.testing.do_bench(lambda: torch_rmsnorm(x, g))
+            ms = triton.testing.do_bench(lambda: torch_rmsnorm(x, g, ZERO_CENTERED_GAMMA))
         if provider == 'triton':
             ms = triton.testing.do_bench(lambda: triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA,
                                                                 blk_size, USE_BLOCKED, NUM_PRGMS))
