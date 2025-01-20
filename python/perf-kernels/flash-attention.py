@@ -1874,12 +1874,12 @@ def model_benchmark_configs(args):
     config_file = args.model_configs
     configs = get_model_configs(config_path=config_file, model_families=["llama3", "mistral"], model=args.model)
     fa_configs = []
-    batch_size = args.b
+    batch_size = args.b if args.b else 1
 
     for model_name, config in configs.items():
         HQ = config["num_attention_heads"]
         HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"]
-        N_CTX_Q = args.sq
+        N_CTX_Q = args.sq if args.sq else 4096
         N_CTX_K = args.sk if args.sk else N_CTX_Q
         HEAD_DIM = config["hidden_size"] // HQ
         fa_configs.append((model_name, batch_size, HQ, HK, N_CTX_Q, N_CTX_K, HEAD_DIM))
@@ -2026,10 +2026,10 @@ def parse_args():
         "Model name to benchmark. Select from: [" + ", ".join(available_models) +
         "]. Use 'all' to benchmark all models. Not providing runs the default benchmark script with custom configs.")
     parser.add_argument('-model', type=str, default=None, help=model_help)
-    parser.add_argument("-b", type=int, default=1)
+    parser.add_argument("-b", type=int, default=0)
     parser.add_argument("-hq", type=int, default=0)
     parser.add_argument("-hk", type=int, default=0)
-    parser.add_argument("-sq", type=int, default=4096)
+    parser.add_argument("-sq", type=int, default=0)
     parser.add_argument("-sk", type=int, default=0)
     parser.add_argument("-equal_seqlens", action='store_true', default=False,
                         help='If specified, each context within the thd layout' \
