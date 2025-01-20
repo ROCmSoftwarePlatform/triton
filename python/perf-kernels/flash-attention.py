@@ -2031,7 +2031,7 @@ def parse_args():
     parser.add_argument("-b", type=int, default=1)
     parser.add_argument("-hq", type=int, default=0)
     parser.add_argument("-hk", type=int, default=0)
-    parser.add_argument("-sq", type=int, default=8192)
+    parser.add_argument("-sq", type=int, default=4096)
     parser.add_argument("-sk", type=int, default=0)
     parser.add_argument("-equal_seqlens", action='store_true', default=False,
                         help='If specified, each context within the thd layout' \
