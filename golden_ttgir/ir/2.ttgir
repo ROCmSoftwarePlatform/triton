@@ -129,20 +129,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %73 = arith.cmpi sge, %32, %c1_i32 : i32 loc(#loc28)
     %74 = ttg.local_load %72#4 : !ttg.memdesc<256x64xf16, #shared, #smem, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc29)
     %75 = ttg.local_load %72#5 : !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc38)
+
     %76 = scf.if %73 -> (tensor<256x256xf32, #mma>) {
       %86 = tt.dot %74, %75, %72#0 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<256x256xf32, #mma> loc(#loc56)
       scf.yield %86 : tensor<256x256xf32, #mma> loc(#loc56)
     } else {
       scf.yield %72#0 : tensor<256x256xf32, #mma> loc(#loc56)
     } loc(#loc56)
+
     %77 = arith.select %73, %76, %72#0 : tensor<256x256xf32, #mma> loc(#loc28)
+
     ttg.local_dealloc %67 : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> loc(#loc28)
     ttg.local_dealloc %68 : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> loc(#loc28)
-    %78 = arith.truncf %77 : tensor<256x256xf32, #mma> to tensor<256x256xf16, #mma> loc(#loc57)
 
     // DONE
 
-    // Calc Addr.
+    %aa77 = amdgpu.extract_slice %77 [  0,  0] : tensor<256x256xf32, #mma> to tensor<128x128xf32, #mma>
+    %ab77 = amdgpu.extract_slice %77 [  0,128] : tensor<256x256xf32, #mma> to tensor<128x128xf32, #mma>
+    %ba77 = amdgpu.extract_slice %77 [128,  0] : tensor<256x256xf32, #mma> to tensor<128x128xf32, #mma>
+    %bb77 = amdgpu.extract_slice %77 [128,128] : tensor<256x256xf32, #mma> to tensor<128x128xf32, #mma>
+
+    //%78 = arith.truncf %77 : tensor<256x256xf32, #mma> to tensor<256x256xf16, #mma> loc(#loc57)
+    %aa78 = arith.truncf %aa77 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma> loc(#loc57)
+    %ab78 = arith.truncf %ab77 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma> loc(#loc57)
+    %ba78 = arith.truncf %ba77 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma> loc(#loc57)
+    %bb78 = arith.truncf %bb77 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma> loc(#loc57)
+
     //%79 = tt.splat %arg9 : i32 -> tensor<256x1xi32, #mma> loc(#loc58)
     %a79 = tt.splat %arg9 : i32 -> tensor<128x1xi32, #mma> loc(#loc58)
     %b79 = tt.splat %arg9 : i32 -> tensor<128x1xi32, #mma> loc(#loc58)
@@ -176,17 +188,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %ba85 = tt.addptr %b83, %a84 : tensor<128x128x!tt.ptr<f16>, #mma>, tensor<128x128xi32, #mma> loc(#loc60)
     %bb85 = tt.addptr %b83, %b84 : tensor<128x128x!tt.ptr<f16>, #mma>, tensor<128x128xi32, #mma> loc(#loc60)
 
-    // split c in half
-    %86 = amdgpu.extract_slice %78 [   0,   0 ] : tensor<256x256xf16, #mma> to tensor<128x128xf16, #mma>
-    %87 = amdgpu.extract_slice %78 [   0, 128 ] : tensor<256x256xf16, #mma> to tensor<128x128xf16, #mma>
-    %88 = amdgpu.extract_slice %78 [ 128,   0 ] : tensor<256x256xf16, #mma> to tensor<128x128xf16, #mma>
-    %89 = amdgpu.extract_slice %78 [ 128, 128 ] : tensor<256x256xf16, #mma> to tensor<128x128xf16, #mma>
-
     // tt.store %85, %78 : tensor<256x256x!tt.ptr<f16>, #mma> loc(#loc61)
-    tt.store %aa85, %86 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
-    tt.store %ab85, %87 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
-    tt.store %ba85, %88 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
-    tt.store %bb85, %89 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
+    tt.store %aa85, %aa78 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
+    tt.store %ab85, %ab78 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
+    tt.store %ba85, %ba78 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
+    tt.store %bb85, %bb78 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
 
     tt.return loc(#loc62)
   } loc(#loc)

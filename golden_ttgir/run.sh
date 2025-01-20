@@ -5,7 +5,7 @@ rm -rf ~/.triton/cache/
 TRITON_ALWAYS_COMPILE=1 python gemm_sub.py \
   --trans-b \
   --file config.yaml \
-  --sub ir/1.ttgir \
+  --sub ir/6.ttgir \
   --verbose
 
 #  --use-mask \

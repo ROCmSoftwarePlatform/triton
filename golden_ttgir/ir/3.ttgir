@@ -15,6 +15,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32 loc(#loc1)
     %c64_i32 = arith.constant 64 : i32 loc(#loc1)
     %c63_i32 = arith.constant 63 : i32 loc(#loc1)
+    %c128_i32 = arith.constant 128 : i32 loc(#loc1)
     %c256_i32 = arith.constant 256 : i32 loc(#loc1)
     %c255_i32 = arith.constant 255 : i32 loc(#loc1)
     %c76_i32 = arith.constant 76 : i32 loc(#loc1)
@@ -127,22 +128,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       scf.yield %92, %86, %88, %95, %96, %97 : tensor<256x256xf32, #mma>, tensor<256x64x!tt.ptr<f16>, #blocked1>, tensor<64x256x!tt.ptr<f16>, #blocked>, i32, !ttg.memdesc<256x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc28)
     } loc(#loc28)
     %73 = arith.cmpi sge, %32, %c1_i32 : i32 loc(#loc28)
-    %74 = ttg.local_load %72#4 : !ttg.memdesc<256x64xf16, #shared, #smem, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc29)
-    %75 = ttg.local_load %72#5 : !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc38)
-    %76 = scf.if %73 -> (tensor<256x256xf32, #mma>) {
-      %86 = tt.dot %74, %75, %72#0 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<256x256xf32, #mma> loc(#loc56)
-      scf.yield %86 : tensor<256x256xf32, #mma> loc(#loc56)
-    } else {
-      scf.yield %72#0 : tensor<256x256xf32, #mma> loc(#loc56)
-    } loc(#loc56)
-    %77 = arith.select %73, %76, %72#0 : tensor<256x256xf32, #mma> loc(#loc28)
-    ttg.local_dealloc %67 : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> loc(#loc28)
-    ttg.local_dealloc %68 : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> loc(#loc28)
-    %78 = arith.truncf %77 : tensor<256x256xf32, #mma> to tensor<256x256xf16, #mma> loc(#loc57)
 
     // DONE
 
-    // Calc Addr.
+    %A0 = ttg.memdesc_subview %67[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable> loc(#loc29)
+    %A1 = ttg.memdesc_subview %67[%c0_i32, %c128_i32, %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable> loc(#loc29)
+
+    %B0 = ttg.memdesc_subview %68[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x128xf16, #shared1, #smem, mutable> loc(#loc38)
+    %B1 = ttg.memdesc_subview %68[%c0_i32, %c0_i32, %c128_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x128xf16, #shared1, #smem, mutable> loc(#loc38)
+
+    %a74 = ttg.local_load %A0 : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc29)
+    %b74 = ttg.local_load %A1 : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc29)
+
+    %a75 = ttg.local_load %B0 : !ttg.memdesc<64x128xf16, #shared1, #smem, mutable> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc38)
+    %b75 = ttg.local_load %B1 : !ttg.memdesc<64x128xf16, #shared1, #smem, mutable> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc38)
+
+    // keep this
+    %aa72 = amdgpu.extract_slice %72#0 [  0,  0] : tensor<256x256xf32, #mma> to tensor<128x128xf32, #mma>
+    %ab72 = amdgpu.extract_slice %72#0 [  0,128] : tensor<256x256xf32, #mma> to tensor<128x128xf32, #mma>
+    %ba72 = amdgpu.extract_slice %72#0 [128,  0] : tensor<256x256xf32, #mma> to tensor<128x128xf32, #mma>
+    %bb72 = amdgpu.extract_slice %72#0 [128,128] : tensor<256x256xf32, #mma> to tensor<128x128xf32, #mma>
+
+    // This can also be split into 3 if statements if desired.
+    //%76 = scf.if %73 -> (tensor<256x256xf32, #mma>) {
+    %76:4 = scf.if %73 -> (tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>) {
+      //%86 = tt.dot %74, %75, %72#0 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<256x256xf32, #mma> loc(#loc56)
+      %aa86 = tt.dot %a74, %a75, %aa72 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma> loc(#loc56)
+      %ab86 = tt.dot %a74, %b75, %ab72 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma> loc(#loc56)
+      %ba86 = tt.dot %b74, %a75, %ba72 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma> loc(#loc56)
+      %bb86 = tt.dot %b74, %b75, %bb72 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma> loc(#loc56)
+      scf.yield %aa86, %ab86, %ba86, %bb86 : tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma> loc(#loc56)
+    } else {
+      //scf.yield %72#0 : tensor<256x256xf32, #mma> loc(#loc56)
+      scf.yield %aa72, %ab72, %ba72, %bb72 : tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma> loc(#loc56)
+    } loc(#loc56)
+ 
+
+    ttg.local_dealloc %67 : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> loc(#loc28)
+    ttg.local_dealloc %68 : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> loc(#loc28)
+
+    //%78 = arith.truncf %77 : tensor<256x256xf32, #mma> to tensor<256x256xf16, #mma> loc(#loc57)
+    %aa78 = arith.truncf %76#0 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma> loc(#loc57)
+    %ab78 = arith.truncf %76#1 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma> loc(#loc57)
+    %ba78 = arith.truncf %76#2 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma> loc(#loc57)
+    %bb78 = arith.truncf %76#3 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma> loc(#loc57)
+
     //%79 = tt.splat %arg9 : i32 -> tensor<256x1xi32, #mma> loc(#loc58)
     %a79 = tt.splat %arg9 : i32 -> tensor<128x1xi32, #mma> loc(#loc58)
     %b79 = tt.splat %arg9 : i32 -> tensor<128x1xi32, #mma> loc(#loc58)
@@ -176,17 +206,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %ba85 = tt.addptr %b83, %a84 : tensor<128x128x!tt.ptr<f16>, #mma>, tensor<128x128xi32, #mma> loc(#loc60)
     %bb85 = tt.addptr %b83, %b84 : tensor<128x128x!tt.ptr<f16>, #mma>, tensor<128x128xi32, #mma> loc(#loc60)
 
-    // split c in half
-    %86 = amdgpu.extract_slice %78 [   0,   0 ] : tensor<256x256xf16, #mma> to tensor<128x128xf16, #mma>
-    %87 = amdgpu.extract_slice %78 [   0, 128 ] : tensor<256x256xf16, #mma> to tensor<128x128xf16, #mma>
-    %88 = amdgpu.extract_slice %78 [ 128,   0 ] : tensor<256x256xf16, #mma> to tensor<128x128xf16, #mma>
-    %89 = amdgpu.extract_slice %78 [ 128, 128 ] : tensor<256x256xf16, #mma> to tensor<128x128xf16, #mma>
-
     // tt.store %85, %78 : tensor<256x256x!tt.ptr<f16>, #mma> loc(#loc61)
-    tt.store %aa85, %86 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
-    tt.store %ab85, %87 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
-    tt.store %ba85, %88 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
-    tt.store %bb85, %89 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
+    tt.store %aa85, %aa78 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
+    tt.store %ab85, %ab78 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
+    tt.store %ba85, %ba78 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
+    tt.store %bb85, %bb78 : tensor<128x128x!tt.ptr<f16>, #mma> loc(#loc61)
 
     tt.return loc(#loc62)
   } loc(#loc)
