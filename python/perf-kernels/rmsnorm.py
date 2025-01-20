@@ -64,7 +64,10 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, outpu
 
             # Accumulate sum of squares
             n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
-            sum_squares: tl.float32 = 0.
+            # older version of triton doesn't accept below init
+            # sum_squares: tl.float32 = 0.
+            # however, with type promoting rule in triton, sum_squares should be always fp32 with below init
+            sum_squares = 0.
             for blk_idx in tl.range(0, n_cols_blks, num_stages=2):
                 cols = blk_idx * BLOCK_SIZE + col_offsets
                 input_ptrs = row_input_ptr + cols
