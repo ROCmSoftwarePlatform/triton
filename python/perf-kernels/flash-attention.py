@@ -1881,7 +1881,8 @@ def model_benchmark_configs(args):
         HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"]
         N_CTX_Q = args.sq
         N_CTX_K = args.sk if args.sk else N_CTX_Q
-        fa_configs.append((model_name, batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
+        HEAD_DIM = config["hidden_size"] // HQ
+        fa_configs.append((model_name, batch_size, HQ, HK, N_CTX_Q, N_CTX_K, HEAD_DIM))
 
     return fa_configs
 
@@ -1901,6 +1902,7 @@ def run_benchmark(custom, args):
     varlen = args.layout == 'thd'
     configs = []
     plot_name = f'fused-attention-{mode}-d{head_size}-layout{args.layout}'
+    extra_args ={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode}
     if custom:
         x_vals_list = [(args.b, args.hq, hk, args.sq, sk)]
     else:
@@ -1908,19 +1910,20 @@ def run_benchmark(custom, args):
             x_vals_list = varlen_benchmark_configs()
         else:
             x_vals_list = nonvarlen_benchmark_configs()
+            
 
         if args.model:
             x_vals_list = model_benchmark_configs(args)
-            x_names = ['model', 'BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K']
+            x_names = ['model', 'BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K', 'D_HEAD']
             plot_name = f'fused-attention-{mode}-layout{args.layout}'
+            extra_args ={'dtype': dtype, 'causal': causal, 'mode': mode}
 
     print_time = args.return_time
     line_vals = ['triton', 'torch']  # 'Time (ms)' if print_time else 'TFLOPS'
     configs.append(
         triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
-                                 line_names=line_vals, styles=[('red', '-'),
-                                                               ('green', '-')], ylabel='ms', plot_name=plot_name,
-                                 args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode}))
+                                 line_names=line_vals, styles=[('red', '-')] * len(line_vals), ylabel='ms', plot_name=plot_name,
+                                 args=extra_args))
 
     @triton.testing.perf_report(configs)
     def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda",
@@ -1955,18 +1958,24 @@ def run_benchmark(custom, args):
             flops_per_matmul = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * D_HEAD
         if causal:
             input_metadata.need_causal()
-        if int8:
-            q, k, v = quantize_input(q, k, v, input_metadata, quantize_p=quantize_p, int8_kv=int8_kv)
+        
+        
+        if "triton" in provider:
+            
+            o = torch.empty_like(q)
+            
+            if int8:
+                q, k, v = quantize_input(q, k, v, input_metadata, quantize_p=quantize_p, int8_kv=int8_kv)
 
-        input_metadata.set_persistent(args.persistent)
-        o = torch.empty_like(q)
-        fn = lambda: attention(q, k, v, o, input_metadata)
-        if mode == 'bwd':
-            o, _ = fn()
-            do = torch.randn_like(o)
-            fn = lambda: o.backward(do, retain_graph=True)
+            input_metadata.set_persistent(args.persistent)
+            
+            fn = lambda: attention(q, k, v, o, input_metadata)
+            if mode == 'bwd':
+                o, _ = fn()
+                do = torch.randn_like(o)
+                fn = lambda: o.backward(do, retain_graph=True)
 
-        if "torch" in provider:
+        elif "torch" in provider:
             if HQ != HK:
                 k = k.view(k.shape[0], k.shape[1], -1, k.shape[2],
                            k.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
@@ -1974,6 +1983,9 @@ def run_benchmark(custom, args):
                            v.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
                                                                           is_causal=causal, scale=None)
+
+        else:
+            assert False, f"Unknown provider {provider} in flash-attention."
 
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         total_flops = 2 * flops_per_matmul
