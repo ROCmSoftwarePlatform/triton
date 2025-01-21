@@ -2021,7 +2021,7 @@ def parse_args():
     )
     parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
 
-    available_models = get_available_models(model_families=["llama3", "mistral"])  # Dynamically load model names
+    available_models = get_available_models(model_families=["llama3"])  # Dynamically load model names
     model_help = (
         "Model name to benchmark. Select from: [" + ", ".join(available_models) +
         "]. Use 'all' to benchmark all models. Not providing runs the default benchmark script with custom configs.")
