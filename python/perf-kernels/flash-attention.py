@@ -1959,14 +1959,10 @@ def run_benchmark(custom, args):
             input_metadata.need_causal()
 
         if "triton" in provider:
-
             o = torch.empty_like(q)
-
             if int8:
                 q, k, v = quantize_input(q, k, v, input_metadata, quantize_p=quantize_p, int8_kv=int8_kv)
-
             input_metadata.set_persistent(args.persistent)
-
             fn = lambda: attention(q, k, v, o, input_metadata)
             if mode == 'bwd':
                 o, _ = fn()
