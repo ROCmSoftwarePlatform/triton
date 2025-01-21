@@ -1921,7 +1921,7 @@ def run_benchmark(custom, args):
     line_vals = ['triton', 'torch']  # 'Time (ms)' if print_time else 'TFLOPS'
     configs.append(
         triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
-                                 line_names=line_vals, styles=[('green', '-'),('red', '-')], ylabel='ms',
+                                 line_names=line_vals, styles=[('green', '-'), ('red', '-')], ylabel='ms',
                                  plot_name=plot_name, args=extra_args))
 
     @triton.testing.perf_report(configs)
