@@ -779,6 +779,36 @@ def input_helper_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, 
     return q_nope, q_pe, kv, k_pe, v, wkv_b, input_metadata
 
 
+def sanity_check(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, causal, use_alibi, layout, dtype=torch.float32):
+    torch.manual_seed(20)
+    q_nope, q_pe, kv, k_pe, v, wkv_b, input_metadata = input_helper_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, dtype, layout)
+    
+    for x, x_name in zip([q_nope, q_pe, kv, k_pe, v, wkv_b], ["q_nope", "q_pe", "kv", "k_pe", "v", "wkv_b"]):
+        print(f"{x_name}: {x.shape}")
+
+    # naive implementation    
+    q = torch.cat([q_nope, q_pe], dim=-1)
+    kv_proj = torch.einsum("hdc,btc->bhtd", wkv_b, kv)
+    kv_proj = kv_proj.view(B, H, S, qk_nope_head_dim + v_head_dim)
+    k_nope, v = torch.split(kv_proj, [qk_nope_head_dim, v_head_dim], dim=-1)
+    k = torch.cat([k_nope, k_pe.expand(-1, H, -1, -1)], dim=-1)
+    scores = torch.einsum("bhsd,bhtd->bhst", q, k) # * input_metadata.sm_scale
+    scores = scores.softmax(dim=-1, dtype=torch.float32).type_as(q_nope)
+    naive_out = torch.einsum("bhst,bhtd->bhsd", scores, v)
+    print(f"naive_out (first 10): {naive_out.flatten()[:10]}")
+
+    # absorb implementation
+    wkv_b = wkv_b.view(H, -1, kv_lora_rank)
+    q_nope = torch.einsum("bhsd,hdc->bhsc", q_nope, wkv_b[:, :qk_nope_head_dim])
+    scores = (torch.einsum("bhsc,btc->bhst", q_nope, kv) +
+                torch.einsum("bhsr,btr->bhst", q_pe, k_pe.squeeze(1)))  # * input_metadata.sm_scale
+    scores = scores.softmax(dim=-1, dtype=torch.float32).type_as(q_nope)
+    x = torch.einsum("bhst,btc->bhsc", scores, kv)
+    absorb_out = torch.einsum("bhsc,hdc->bhsd", x, wkv_b[:, -v_head_dim:])
+    print(f"absorb_out (first 10): {absorb_out.flatten()[:10]}")
+
+    torch.testing.assert_close(naive_out, absorb_out, atol=2e-2, rtol=2e-2)
+
 
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim', [
     (8, 16, 128, 512, 128, 64, 128),
@@ -787,7 +817,8 @@ def input_helper_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, 
 @pytest.mark.parametrize('use_alibi', [False])
 @pytest.mark.parametrize('layout', ['bhsd'])
 @pytest.mark.parametrize('ref_impl', ['naive', 'absorb'])
-def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, causal, use_alibi, layout, dtype=torch.float16, ref_impl="naive"):
+def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, causal, use_alibi, layout, dtype=torch.float32, ref_impl="naive"):
+    import time
     torch.manual_seed(20)
     q_nope, q_pe, kv, k_pe, v, wkv_b, input_metadata = input_helper_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, dtype, layout)
     if causal:
@@ -798,9 +829,18 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
     for x, x_name in zip([q_nope, q_pe, kv, k_pe, v, wkv_b], ["q_nope", "q_pe", "kv", "k_pe", "v", "wkv_b"]):
         print(f"{x_name}: {x.shape}")
 
-    # triton implementation
-    tri_out, _, _ = attention(q_nope, q_pe, kv, k_pe.squeeze(1), o, wkv_b, input_metadata)
+    # warmup (let autotuning happen)
+    attention(q_nope, q_pe, kv, k_pe.squeeze(1), o, wkv_b, input_metadata)
 
+    # triton implementation
+    torch.cuda.synchronize()
+    start = time.time()
+    tri_out, _, _ = attention(q_nope, q_pe, kv, k_pe.squeeze(1), o, wkv_b, input_metadata)
+    torch.cuda.synchronize()
+    print(f"time for triton: {time.time()-start}")
+
+    torch.cuda.synchronize()
+    start = time.time()
     # ref implementation    
     if ref_impl=="naive":
         q = torch.cat([q_nope, q_pe], dim=-1)
@@ -823,6 +863,10 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
     else:
         x = torch.einsum("bhst,btc->bhsc", scores, kv)
         ref_out = torch.einsum("bhsc,hdc->bhsd", x, wkv_b[:, -v_head_dim:])
+
+    torch.cuda.synchronize()
+    print(f"time for ref: {time.time()-start}")
+
 
     torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
@@ -881,7 +925,9 @@ def main():
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
 
-    test_op_fwd(8, 16, 2, 512, 128, 64, 128, False, False, "bhsd", ref_impl="absorb")
+    # sanity_check(8, 16, 128, 512, 128, 64, 128, False, False, "bhsd")
+
+    test_op_fwd(8, 16, 128, 512, 128, 64, 128, False, False, "bhsd", ref_impl="naive")
 
 
 if __name__ == '__main__':
