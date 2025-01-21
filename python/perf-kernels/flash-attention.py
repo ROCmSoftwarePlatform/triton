@@ -1872,7 +1872,7 @@ def varlen_benchmark_configs():
 
 def model_benchmark_configs(args):
     config_file = args.model_configs
-    configs = get_model_configs(config_path=config_file, model_families=["llama3", "mistral"], model=args.model)
+    configs = get_model_configs(config_path=config_file, model_families=["llama3"], model=args.model)
     fa_configs = []
     batch_size = args.b if args.b else 1
 
