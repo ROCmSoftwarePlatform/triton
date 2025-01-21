@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [main_perf]
-    merge_group:
-      branches: [main_perf]
-      types: [checks_requested]
+  merge_group:
+    branches: [main_perf]
+    types: [checks_requested]
 
 concurrency:
   group: ${{ github.ref }}
@@ -140,3 +140,55 @@ jobs:
           python ./python/perf-kernels/rmsnorm.py
           python ./python/perf-kernels/layernorm.py
           python ./python/perf-kernels/multreduce_matmul_kernel.py bench
+
+  Integration-Tests-AMD-Upstream_Triton:
+    needs: Runner-Preparation-AMD
+    if: needs.Runner-Preparation-AMD.outputs.matrix-HIP != ''
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation-AMD.outputs.matrix-HIP)}}
+    container:
+      image: rocm/pytorch:latest
+      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
+      - name: Update PATH
+        run: |
+          echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
+      - name: Install pip dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install lit matplotlib pandas
+      - name: Install Upstream Triton
+        run: |
+            pip uninstall -y triton
+            pip install matplotlib pandas pytest
+            git clone https://github.com/triton-lang/triton
+            cd triton
+            pip install --verbose -e python
+            cd ..
+      - name: Run Perf Kernels Unit Tests
+        run: |
+          pytest -vvv ./python/perf-kernels/flash-attention.py
+          pytest -vvvv ./python/perf-kernels/softmax.py
+          pytest -vvv ./python/perf-kernels/rmsnorm.py
+          pytest -vvv ./python/perf-kernels/layernorm.py
+          pytest -vvv ./python/perf-kernels/fused_moe/moe-gemm.py
+          sh ./python/perf-kernels/streamk/utils/unittest.sh
+          pytest -vvv ./python/perf-kernels/multreduce_matmul_kernel.py
+      - name: Run Perf Kernels Benchmark
+        run: |
+          python ./python/perf-kernels/flash-attention.py
+          python ./python/perf-kernels/softmax.py
+          python ./python/perf-kernels/rmsnorm.py
+          python ./python/perf-kernels/layernorm.py
+          python ./python/perf-kernels/multreduce_matmul_kernel.py bench
+
