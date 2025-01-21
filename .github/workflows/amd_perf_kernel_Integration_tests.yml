@@ -191,4 +191,3 @@ jobs:
           python ./python/perf-kernels/rmsnorm.py
           python ./python/perf-kernels/layernorm.py
           python ./python/perf-kernels/multreduce_matmul_kernel.py bench
-
