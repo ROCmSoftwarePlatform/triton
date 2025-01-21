@@ -139,8 +139,10 @@ def print_gpu(prefix, val=None):
 
 # acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs
 @triton.jit
-def _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs, 
-                    wkv_b_ptrs1, wkv_b_ptrs2, stride_kv_k, stride_wkv_b_k,
+def _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs, 
+                    q_nope_wkv_b_ptrs1, wkv_b_ptrs2, 
+                    stride_q_nope_wkv_b_k,
+                    stride_kv_k, stride_wkv_b_k,
                     stride_kv_n, stride_k_pe_n, stride_bn, start_m,
                     actual_seqlen_k, actual_seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
                     block_min, block_max, offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope, q_descale,
@@ -190,15 +192,13 @@ def _attn_fwd_inner(acc, l_i, m_i, q_nope, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs,
 
         for k in range(0, tl.cdiv(K, BLOCK_K)):
             #if EVEN_K:
-            wkv_b_k_1 = tl.load(wkv_b_ptrs1 + k * BLOCK_K * stride_wkv_b_k)
+            q_nope_wkv_b_k = tl.load(q_nope_wkv_b_ptrs1 + k * BLOCK_K * stride_q_nope_wkv_b_k)
             # kv_k = tl.load(kv_ptrs + k * BLOCK_K * stride_kv_k)
             kv_k = load_fn(kv_ptrs + k * BLOCK_K * stride_kv_k, None, k_offs_n, None, actual_seqlen_k)
             # else:
             #     
             #     
-            k_k = tl.dot(wkv_b_k_1, kv_k) # keys subset
-          
-            qk += tl.dot(q_nope.to(k_k.type.element_ty), k_k)
+            qk += tl.dot(q_nope_wkv_b_k, kv_k)
             
 
         qk += tl.dot(q_pe, k_pe)
@@ -279,13 +279,14 @@ autotune_configs, autotune_keys = get_cdna_autotune_configs()
     'EVEN_K': lambda args: args['kv_lora_rank'] % args['BLOCK_K'] == 0,
 })
 @triton.jit
-def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
+def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, bias, SM_SCALE: tl.constexpr, L, Out,
             stride_q_nope_b, stride_q_nope_h, stride_q_nope_s, stride_q_nope_d,  # strides for Q_NOPE: bhsd
             stride_q_pe_b, stride_q_pe_h, stride_q_pe_s, stride_q_pe_r,  # strides for Q_PE: bhsr
             stride_kv_b, stride_kv_t, stride_kv_c,  # strides for KV: btc
             stride_k_pe_b, stride_k_pe_t, stride_k_pe_r,  # strides for K_PE: btr
             stride_ob, stride_oh, stride_os, stride_od, # strides for O: bhsd
-            stride_wkv_b_h, stride_wkv_b_d, stride_wkv_b_c, # strides for WKV_B: h(d+d)c  
+            stride_wkv_b_h, stride_wkv_b_d, stride_wkv_b_c, # strides for WKV_B: h(d+d)c
+            stride_q_nope_wkv_b_b, stride_q_nope_wkv_b_h, stride_q_nope_wkv_b_s, stride_q_nope_wkv_b_c,
             stride_bz, stride_bh, stride_bm, stride_bn, 
             stride_az, stride_ah, 
             kv_lora_rank: tl.constexpr, qk_nope_head_dim: tl.constexpr, qk_rope_head_dim: tl.constexpr, v_head_dim: tl.constexpr,
@@ -481,7 +482,22 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out
                 q_nope = tl.load(q_ptrs, mask=q_ptrs_mask, other=0.0)
                 q_pe = tl.load(q_pe_ptrs, mask=q_pe_ptrs_mask, other=0.0)
         
+                q_wkv_b_offset = Q_NOPE_WKV_B + off_z * stride_q_nope_wkv_b_b + off_h_q * stride_q_nope_wkv_b_h + cu_seqlens_q_start * stride_q_nope_wkv_b_s
+                q_wkv_b_ptrs = q_wkv_b_offset + offs_m[:, None] * stride_q_nope_wkv_b_s + offs_k[None, :] * stride_q_nope_wkv_b_c
 
+                
+                for k in range(0, tl.cdiv(kv_lora_rank, BLOCK_K)):
+                    #if EVEN_K:
+                    wkv_b_k_1 = tl.load(wkv_b_ptrs1 + k * BLOCK_K * stride_wkv_b_c)
+                    # else:
+                    #     
+                    #     
+                    q_wkv_b_k = tl.dot(q_nope, wkv_b_k_1)
+                    # TODO: store back to some accumulator tensor in parts
+                    tl.store(q_wkv_b_ptrs + k * BLOCK_K * stride_q_nope_wkv_b_c, q_wkv_b_k)
+                
+                
+                
                 if INT8:
                     k_descale = tl.load(k_descale_ptrs)
                     v_descale = tl.load(v_descale_ptrs)
@@ -520,11 +536,16 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out
                 # Compute for full blocks. Here we set causal to false regardless of its actual
                 # value because there is no masking. Similarly we do not need padding.
 
+                
+
+
                 if n_full_blocks > 0:
                     block_max = (n_blocks - masked_blocks) * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(
-                        acc, l_i, m_i, q_nope, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs, 
-                        wkv_b_ptrs1, wkv_b_ptrs2, stride_kv_c, stride_wkv_b_c,
+                        acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs, 
+                        q_wkv_b_ptrs, wkv_b_ptrs2, 
+                        stride_q_nope_wkv_b_c,
+                        stride_kv_c, stride_wkv_b_c,
                         stride_kv_t, stride_k_pe_t, 
                         stride_bn, start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
                         # _, _, offs_n_causal, masked_blocks, n_extra_tokens, _
@@ -553,8 +574,10 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, bias, SM_SCALE: tl.constexpr, L, Out
                     if RETURN_ENCODED_SOFTMAX:
                         encoded_sm_ptrs += n_full_blocks * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(
-                        acc, l_i, m_i, q_nope, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs, 
-                        wkv_b_ptrs1, wkv_b_ptrs2, stride_kv_c, stride_wkv_b_c,
+                        acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs, 
+                        q_wkv_b_ptrs, wkv_b_ptrs2, 
+                        stride_q_nope_wkv_b_c,
+                        stride_kv_c, stride_wkv_b_c,
                         stride_kv_t, stride_k_pe_t, 
                         stride_bn, start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
                         block_min, block_max, offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope, q_descale,
@@ -731,9 +754,12 @@ class _attention(torch.autograd.Function):
 
         atomic_counter = torch.zeros([1], device=q_nope.device, dtype=torch.int32)
 
+        q_nope_wkv_b = torch.zeros( (*q_nope.shape[:-1], kv_lora_rank), dtype=q_nope.dtype, device=q_nope.device)
+        q_nope_wkv_b_strides = (q_nope_wkv_b.stride(0), q_nope_wkv_b.stride(1), q_nope_wkv_b.stride(2), q_nope_wkv_b.stride(3))
+
         attn_fwd[grid](
-            q_nope, q_pe, kv, k_pe, wkv_b, metadata.bias, metadata.sm_scale, M, o, *q_nope_strides, *q_pe_strides, *kv_strides,
-            *k_pe_strides, *o_strides, *wkv_b_strides, *bias_strides, *alibi_strides, 
+            q_nope, q_pe, kv, k_pe, wkv_b, q_nope_wkv_b, metadata.bias, metadata.sm_scale, M, o, *q_nope_strides, *q_pe_strides, *kv_strides,
+            *k_pe_strides, *o_strides, *wkv_b_strides, *q_nope_wkv_b_strides, *bias_strides, *alibi_strides, 
             kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim,
             q_descale, k_descale, p_scale, p_descale, v_descale, metadata.cu_seqlens_q,
             metadata.cu_seqlens_k, dropout_p=metadata.dropout_p, philox_seed=philox_seed,
