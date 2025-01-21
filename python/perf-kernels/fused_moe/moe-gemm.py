@@ -117,9 +117,9 @@ def silu_and_mul_kernel(A, Out, stride_am, stride_an, stride_cm, stride_cn, EM: 
 
 @triton.jit
 def moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn, topk_weights_ptr,
-              off_experts, offs_bn, token_mask, offs_k, offs_token, K: tl.constexpr,
-              MUL_ROUTED_WEIGHT: tl.constexpr, use_fp8_w8a8: tl.constexpr, use_int8_w8a16: tl.constexpr,
-              BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
+              off_experts, offs_bn, token_mask, offs_k, offs_token, K: tl.constexpr, MUL_ROUTED_WEIGHT: tl.constexpr,
+              use_fp8_w8a8: tl.constexpr, use_int8_w8a16: tl.constexpr, BLOCK_SIZE_M: tl.constexpr,
+              BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
     if use_int8_w8a16:
