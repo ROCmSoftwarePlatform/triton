@@ -927,7 +927,7 @@ def main():
 
     # sanity_check(8, 16, 128, 512, 128, 64, 128, False, False, "bhsd")
 
-    test_op_fwd(8, 16, 128, 512, 128, 64, 128, False, False, "bhsd", ref_impl="naive")
+    test_op_fwd(8, 16, 4096, 512, 128, 64, 128, False, False, "bhsd", ref_impl="naive")
 
 
 if __name__ == '__main__':
