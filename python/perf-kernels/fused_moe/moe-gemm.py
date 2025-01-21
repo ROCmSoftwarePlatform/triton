@@ -149,7 +149,7 @@ def moe_gemm_kernel(
             b = tl.load(b_ptrs, mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K), other=0.0)
 
         if use_int8_w8a16:
-            accumulator = tl.dot(a, b.to(Out.dtype.element_ty), acc=accumulator)
+            accumulator = tl.dot(a, b.to(a.dtype), acc=accumulator)
         elif use_fp8_w8a8:
             accumulator += tl.dot(a, b)
         else:
