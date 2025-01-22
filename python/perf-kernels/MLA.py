@@ -139,7 +139,8 @@ def print_gpu(prefix, val=None):
 
 # acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs
 @triton.jit
-def _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs, 
+def _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs,
+                    kv_offs_k, kv_offs_c,  
                     q_nope_wkv_b_ptrs1, wkv_b_ptrs2, 
                     stride_q_nope_wkv_b_k,
                     stride_kv_k, stride_wkv_b_k,
@@ -194,7 +195,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs,
             #if EVEN_K:
             q_nope_wkv_b_k = tl.load(q_nope_wkv_b_ptrs1 + k * BLOCK_K * stride_q_nope_wkv_b_k)
             # kv_k = tl.load(kv_ptrs + k * BLOCK_K * stride_kv_k)
-            kv_k = load_fn(kv_ptrs + k * BLOCK_K * stride_kv_k, None, k_offs_n, None, actual_seqlen_k)
+            kv_k = load_fn(kv_ptrs + kv_offs_k + k * BLOCK_K * stride_kv_k, None, k_offs_n, None, actual_seqlen_k)
             # else:
             #     
             #     
@@ -228,17 +229,20 @@ def _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs,
         # update m_i and l_i
         m_i = m_ij
 
-        for k in range(0, tl.cdiv(K, BLOCK_K)):
-            #if EVEN_K:
-            wkv_b_k_2 = tl.load(wkv_b_ptrs2 + k * BLOCK_K * stride_wkv_b_k)
-            # kv_k = tl.load(kv_ptrs + k * BLOCK_K * stride_kv_k)
-            kv_k = load_fn(kv_ptrs + k * BLOCK_K * stride_kv_k, None, k_offs_n, None, actual_seqlen_k)
-            # else:
-            #     
-            # 
-            v_k = tl.dot(wkv_b_k_2, kv_k).trans() # values k subset
+        kv = load_fn(kv_ptrs + kv_offs_c, None, k_offs_n, None, actual_seqlen_k)
+        acc += tl.dot(p.to(kv.type.element_ty), kv.trans())
+
+        # for k in range(0, tl.cdiv(K, BLOCK_K)):
+        #     #if EVEN_K:
+        #     # wkv_b_k_2 = tl.load(wkv_b_ptrs2 + k * BLOCK_K * stride_wkv_b_k)
+        #     # kv_k = tl.load(kv_ptrs + k * BLOCK_K * stride_kv_k)
+        #     kv_k = load_fn(kv_ptrs + k * BLOCK_K * stride_kv_k, None, k_offs_n, None, actual_seqlen_k)
+        #     # else:
+        #     #     
+        #     # 
+        #     # v_k = tl.dot(wkv_b_k_2, kv_k).trans() # values k subset
             
-            acc += tl.dot(p.to(v_k.type.element_ty), v_k)
+        #     acc += tl.dot(p.to(kv_k.type.element_ty), kv_k.trans())
 
         kv_ptrs += BLOCK_N * stride_kv_n
         k_pe_ptrs += BLOCK_N * stride_k_pe_n
@@ -253,12 +257,12 @@ def _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs,
 
 def get_cdna_autotune_configs():
     return [
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-                      num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-                      num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-                      num_stages=1, num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+        #               num_stages=1, num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+        #               num_stages=1, num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+        #               num_stages=1, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
                       num_stages=1, num_warps=4),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K',
@@ -335,7 +339,7 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, bias, SM_SCALE: tl.con
         offs_v_d = tl.arange(0, v_head_dim)
         offs_wkv_b_qk = tl.arange(0, qk_nope_head_dim)
         offs_wkv_b_v = tl.arange(qk_nope_head_dim, qk_nope_head_dim + v_head_dim)
-        # offs_c = tl.arange(0, kv_lora_rank)
+        offs_c = tl.arange(0, kv_lora_rank)
         offs_r = tl.arange(0, qk_rope_head_dim)
         offs_k = tl.arange(0, BLOCK_K)
 
@@ -382,7 +386,7 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, bias, SM_SCALE: tl.con
                 if n_blocks <= 0:
                     o_offset = Out + off_z * stride_ob + off_h_q * stride_oh + cu_seqlens_q_start * stride_os
                     o_ptrs = o_offset + offs_m[:, None] * stride_os + offs_q_d[None, :] * stride_od
-                    acc = tl.zeros([BLOCK_M, v_head_dim], dtype=Out.type.element_ty)
+                    acc = tl.zeros([BLOCK_M, kv_lora_rank], dtype=Out.type.element_ty)
                     o_ptrs_mask = (offs_m[:, None] < seqlen_q).broadcast_to([BLOCK_M, v_head_dim])
                     # We still need to write 0s to the result
                     tl.store(o_ptrs, acc, mask=o_ptrs_mask)
@@ -418,8 +422,13 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, bias, SM_SCALE: tl.con
                 q_ptrs = q_offset + offs_m[:, None] * stride_q_nope_s + offs_q_d[None, :] * stride_q_nope_d
 
                 kv_offset = KV + off_z * stride_kv_b + cu_seqlens_kv_start * stride_kv_t
-                kv_ptrs = kv_offset + offs_k[:, None] * stride_kv_c + offs_n[None, :] * stride_kv_t
-                
+                kv_ptrs = kv_offset + offs_n[None, :] * stride_kv_t
+
+                kv_offs_k = offs_k[:, None] * stride_kv_c
+
+                kv_offs_c = offs_c[:, None] * stride_kv_c
+
+
                 # pointers for position embeddings
                 k_pe_offset = K_PE + off_z * stride_k_pe_b + cu_seqlens_kv_start * stride_k_pe_r
                 k_pe_ptrs = k_pe_offset + offs_r[:, None] * stride_k_pe_r + offs_n[None, :] * stride_k_pe_t
@@ -430,7 +439,7 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, bias, SM_SCALE: tl.con
                 # weight matrix:                
                 wkv_b_offset = WKV_B + off_h_q * stride_wkv_b_h 
                 wkv_b_ptrs1 = wkv_b_offset + offs_wkv_b_qk[:, None] * stride_wkv_b_d + offs_k[None, :] * stride_wkv_b_c
-                wkv_b_ptrs2 = wkv_b_offset + offs_wkv_b_v[:, None] * stride_wkv_b_d + offs_k[None, :] * stride_wkv_b_c
+                wkv_b_ptrs2 = wkv_b_offset + offs_wkv_b_v[:, None] * stride_wkv_b_d + offs_c[None, :] * stride_wkv_b_c
 
                 # Compute pointers for all the scale tensors used in this kernel.
                 INT8_GEMM: tl.constexpr = INT8 & (not INT8_KV)
@@ -471,7 +480,7 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, bias, SM_SCALE: tl.con
                 # initialize pointer to m and l
                 m_i = tl.full([BLOCK_M], float("-inf"), dtype=tl.float32)
                 l_i = tl.full([BLOCK_M], 1.0, dtype=tl.float32)
-                acc = tl.zeros([BLOCK_M, v_head_dim], dtype=tl.float32)
+                acc = tl.zeros([BLOCK_M, kv_lora_rank], dtype=tl.float32)
                 # scale sm_scale by log_2(e) and use 2^x in the loop as we do not
                 # have native e^x support in HW.
                 QK_SCALE: tl.constexpr = SM_SCALE * 1.44269504089
@@ -536,13 +545,11 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, bias, SM_SCALE: tl.con
                 # Compute for full blocks. Here we set causal to false regardless of its actual
                 # value because there is no masking. Similarly we do not need padding.
 
-                
-
-
                 if n_full_blocks > 0:
                     block_max = (n_blocks - masked_blocks) * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(
-                        acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs, 
+                        acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs,
+                        kv_offs_k, kv_offs_c, 
                         q_wkv_b_ptrs, wkv_b_ptrs2, 
                         stride_q_nope_wkv_b_c,
                         stride_kv_c, stride_wkv_b_c,
@@ -575,6 +582,7 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, bias, SM_SCALE: tl.con
                         encoded_sm_ptrs += n_full_blocks * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(
                         acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs, 
+                        kv_offs_k, kv_offs_c, 
                         q_wkv_b_ptrs, wkv_b_ptrs2, 
                         stride_q_nope_wkv_b_c,
                         stride_kv_c, stride_wkv_b_c,
@@ -592,6 +600,54 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, bias, SM_SCALE: tl.con
                     if USE_P_SCALE:
                         acc *= p_descale
                     acc *= v_descale
+
+                # computations that fill up the acc
+
+                # acc is BLOCK_M x c 
+                # we need to acc * wkv_b (: c x d)
+                # need to split in c dimension
+                # how to access acc[:,:K_BLOCK]?
+
+                wkv_b2 = tl.load(wkv_b_ptrs2)
+                acc = acc.to(wkv_b2.type.element_ty)
+
+
+                acc = acc.reshape((BLOCK_M, kv_lora_rank//2, 2), can_reorder=True)
+                acc_k1, acc_k2 = acc.split()
+                acc_k1 = acc_k1.reshape((BLOCK_M, kv_lora_rank//4, 2), can_reorder=True)
+                acc_k2 = acc_k2.reshape((BLOCK_M, kv_lora_rank//4, 2), can_reorder=True)
+                acc_k11, acc_k12 = acc_k1.split()
+                acc_k21, acc_k22 = acc_k2.split()
+
+                
+                wkv_b2 = wkv_b2.reshape((v_head_dim, kv_lora_rank//2, 2), can_reorder=True)
+                wkv_b2_k1, wkv_b2_k2 = wkv_b2.split()
+                wkv_b2_k1 = wkv_b2_k1.reshape((v_head_dim, kv_lora_rank//4, 2), can_reorder=True)
+                wkv_b2_k2 = wkv_b2_k2.reshape((v_head_dim, kv_lora_rank//4, 2), can_reorder=True)
+                wkv_b2_k11, wkv_b2_k12 = wkv_b2_k1.split()
+                wkv_b2_k21, wkv_b2_k22 = wkv_b2_k2.split()
+
+                acc = (
+                    tl.dot(acc_k11, wkv_b2_k11.trans()) +
+                    tl.dot(acc_k12, wkv_b2_k12.trans()) +
+                    tl.dot(acc_k21, wkv_b2_k21.trans()) +
+                    tl.dot(acc_k22, wkv_b2_k22.trans())
+                )
+
+
+                # for k in range(0, tl.cdiv(kv_lora_rank, BLOCK_K)):
+                #     #if EVEN_K:
+                #     wkv_b_k_2 = tl.load(wkv_b_ptrs2 + k * BLOCK_K * stride_wkv_b_c)
+                #     # else:
+                #     #     
+                #     #
+                #     acc_k = tl.load()    
+                #     pv = tl.dot(acc, wkv_b_k_2)
+                #     # TODO: store back to some accumulator tensor in parts
+                #     tl.store(q_wkv_b_ptrs + k * BLOCK_K * stride_q_nope_wkv_b_c, q_wkv_b_k)
+
+                
+
                 
                 # epilogue
                 # This helps the compiler do Newton Raphson on l_i vs on acc which is much larger.
