@@ -239,10 +239,11 @@ def moe_gemm_kernel(
     b_ptrs = B + off_experts * stride_be + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     if use_silu_activation:
-        accumulator = moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn,
-                                topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K,
-                                MUL_ROUTED_WEIGHT, use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N,
-                                BLOCK_SIZE_K)
+        silu_acc = moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn,
+                             topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K,
+                             MUL_ROUTED_WEIGHT, use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
+
+        silu_acc = (silu_acc / (1.0 + tl.exp2(-(silu_acc * 1.44269504089))))
 
         offs_bn += N
         b_ptrs = B + off_experts * stride_be + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
@@ -251,18 +252,16 @@ def moe_gemm_kernel(
                             topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K,
                             MUL_ROUTED_WEIGHT, use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
 
-        scaled_accumulator = (accumulator * 1.44269504089).to(tl.float32)
-        accumulator = ((accumulator / (1.0 + tl.exp2(-scaled_accumulator))) * mul_acc).to(accumulator.dtype)
+        acc = (silu_acc * mul_acc).to(tl.float32)
     else:
-        accumulator = moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn,
-                                topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K,
-                                MUL_ROUTED_WEIGHT, use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N,
-                                BLOCK_SIZE_K)
+        acc = moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn,
+                        topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K, MUL_ROUTED_WEIGHT,
+                        use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
 
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     out_ptrs = Out + stride_cm * offs_token[:, None] + stride_cn * offs_cn[None, :]
     c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
-    tl.store(out_ptrs, accumulator.to(dtype), mask=c_mask)
+    tl.store(out_ptrs, acc.to(dtype), mask=c_mask)
 
 
 def _moe_align_block_size(topk_ids: torch.Tensor, num_experts: int, top_k: int, block_size: int,
