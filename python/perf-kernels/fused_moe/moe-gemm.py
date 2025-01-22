@@ -49,6 +49,7 @@ class MetaData():
 
     def check_args(self, a, b, o):
         if self.use_silu_activation:
+            assert b.shape[1] % 2 == 0
             assert a.shape[-1] == b.shape[-1] and b.shape[1] == (o.shape[-1] * 2)
         else:
             a.shape[-1] == b.shape[-1] and b.shape[1] == o.shape[-1]
@@ -233,32 +234,40 @@ def moe_gemm_kernel(
     token_mask = (offs_token >= 0) & (offs_token < EM)
 
     off_experts = tl.load(expert_ids_ptr + pid_m)
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
     offs_k = tl.arange(0, BLOCK_SIZE_K)
+    if use_silu_activation:
+        BLOCK_SIZE_HALF: tl.constexpr = BLOCK_SIZE_N // 2
+        i = tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
+        # [0, 0, 1, 1, ..., BLOCK_SIZE_HALF - 1, BLOCK_SIZE_HALF - 1]
+        i_floor = i // 2
+        offs_half = (pid_n * (BLOCK_SIZE_N // 2) + i_floor) % (N // 2)
+        # (i % 2): [0, 1, 0, 1,...] (alternating)
+        # (i % 2) * (N // 2) : [0, (N // 2), 0, (N // 2),...]
+        # So offs_bn now takes element from the first BLOCK_SIZE_HALF half and the second BLOCK_SIZE_HALF half in an alternating way (This allows us to do reshape without permute)
+        offs_bn = offs_half + (i % 2) * (N // 2)
+    else:
+        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
     a_ptrs = A + (offs_token[:, None] // top_k * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = B + off_experts * stride_be + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     if use_silu_activation:
-        silu_acc = moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn,
+        merged_acc = moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn,
                              topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K,
                              MUL_ROUTED_WEIGHT, use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
 
+        # TODO is it possible to do pointer arithemic to get rid of the permute
+        silu_acc, mul_acc = merged_acc.reshape(BLOCK_SIZE_M, BLOCK_SIZE_HALF, 2).split()
         silu_acc = (silu_acc / (1.0 + tl.exp2(-(silu_acc * 1.44269504089))))
-
-        offs_bn += N
-        b_ptrs = B + off_experts * stride_be + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-
-        mul_acc = moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn,
-                            topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K,
-                            MUL_ROUTED_WEIGHT, use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
-
         acc = (silu_acc * mul_acc).to(tl.float32)
     else:
         acc = moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn,
                         topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K, MUL_ROUTED_WEIGHT,
                         use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
 
-    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    if use_silu_activation:
+        offs_cn = pid_n * BLOCK_SIZE_HALF + tl.arange(0, BLOCK_SIZE_HALF)
+    else:
+        offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     out_ptrs = Out + stride_cm * offs_token[:, None] + stride_cn * offs_cn[None, :]
     c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
     tl.store(out_ptrs, acc.to(dtype), mask=c_mask)
@@ -450,10 +459,10 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaDa
 
     topk_ids, num_tokens_post_padded, topk_weights, sorted_token_ids, expert_ids, config = metadata.topk_ids, metadata.num_tokens_post_padded, metadata.topk_weights, metadata.sorted_token_ids, metadata.expert_ids, metadata.config
 
-    if metadata.use_silu_activation:
-        # we don't want to mutate the config but rather copy it
-        config = config.copy()
-        config['BLOCK_SIZE_N'] = config['BLOCK_SIZE_N'] // 2
+    # if metadata.use_silu_activation:
+    #     # we don't want to mutate the config but rather copy it
+    #     config = config.copy()
+    #     config['BLOCK_SIZE_N'] = config['BLOCK_SIZE_N'] // 2
 
     use_fp8_w8a8, use_int8_w8a16 = metadata.use_fp8_w8a8, metadata.use_int8_w8a16
     a_descale, b_descale = None, None
@@ -468,9 +477,9 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaDa
     _, top_k = topk_ids.shape
 
     EM = num_tokens_post_padded.item()
-    _, _, K = b.shape
+    _, N, K = b.shape
     # This will actually be N // 2 with the silu fusion
-    N = c.shape[-1]
+    # N = c.shape[-1]
 
     grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
 
@@ -593,9 +602,13 @@ def silu_and_mul_torch(input):
 @pytest.mark.parametrize("M, N, K, top_k, E", [
     (64, 14336, 4096, 2, 8),
     (16, 14336, 1, 2, 4),
+    (256, 14336, 1, 2, 4),
+    (2048, 14336, 1, 2, 4),
     (1, 14336, 128, 2, 4),
     (16, 14336, 128, 1, 4),
     (16, 14336, 128, 1, 1),
+    (64, 70, 128, 2, 8),
+    (64, 30, 128, 2, 8),
     (64, 7186, 128, 2, 8),
     (64, 3584, 128, 2, 8),
     (64, 1792, 128, 2, 8),
