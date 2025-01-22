@@ -317,8 +317,8 @@ matmul(a, b, c, bias, use_bias)
 start_event = torch.cuda.Event(enable_timing=True)
 end_event = torch.cuda.Event(enable_timing=True)
 start_event.record()
-#num_repeats = 300
-num_repeats = 1
+num_repeats = 300
+#num_repeats = 1
 for _ in range(num_repeats):
   runner(*kernel_args, **kernel_kwargs)
 end_event.record()
