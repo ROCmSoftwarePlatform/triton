@@ -244,7 +244,7 @@ def moe_gemm_kernel(
         # (i % 2): [0, 1, 0, 1,...] (alternating)
         # (i % 2) * (N // 2) : [0, (N // 2), 0, (N // 2),...]
         # So offs_bn now takes element from the first BLOCK_SIZE_HALF half and the second BLOCK_SIZE_HALF half in an alternating way (This allows us to do reshape without permute)
-        offs_bn = offs_half + (i % 2) * (N // 2)
+        offs_bn = (offs_half + (i % 2) * (N // 2)) % N
     else:
         offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
     a_ptrs = A + (offs_token[:, None] // top_k * stride_am + offs_k[None, :] * stride_ak)
@@ -252,10 +252,10 @@ def moe_gemm_kernel(
 
     if use_silu_activation:
         merged_acc = moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn,
-                             topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K,
-                             MUL_ROUTED_WEIGHT, use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
+                               topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K,
+                               MUL_ROUTED_WEIGHT, use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N,
+                               BLOCK_SIZE_K)
 
-        # TODO is it possible to do pointer arithemic to get rid of the permute
         silu_acc, mul_acc = merged_acc.reshape(BLOCK_SIZE_M, BLOCK_SIZE_HALF, 2).split()
         silu_acc = (silu_acc / (1.0 + tl.exp2(-(silu_acc * 1.44269504089))))
         acc = (silu_acc * mul_acc).to(tl.float32)
@@ -266,10 +266,11 @@ def moe_gemm_kernel(
 
     if use_silu_activation:
         offs_cn = pid_n * BLOCK_SIZE_HALF + tl.arange(0, BLOCK_SIZE_HALF)
+        c_mask = token_mask[:, None] & (offs_cn[None, :] < N // 2)
     else:
         offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+        c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
     out_ptrs = Out + stride_cm * offs_token[:, None] + stride_cn * offs_cn[None, :]
-    c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
     tl.store(out_ptrs, acc.to(dtype), mask=c_mask)
 
 
