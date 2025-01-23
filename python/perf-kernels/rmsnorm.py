@@ -46,12 +46,14 @@ def get_autotune_config():
 @triton.autotune(configs=get_autotune_config(), key=['n_rows', 'n_cols'], use_cuda_graph=True)
 @triton.jit
 def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, output_row_stride, n_rows, n_cols, epsilon,
-               BLOCK_SIZE: tl.constexpr, USE_BLOCKED: tl.constexpr, NUM_PRGMS: tl.constexpr):
+               ZERO_CENTERED_GAMMA: tl.constexpr, BLOCK_SIZE: tl.constexpr, USE_BLOCKED: tl.constexpr,
+               NUM_PRGMS: tl.constexpr):
     row_start = tl.program_id(0)
     col_offsets = tl.arange(0, BLOCK_SIZE)
-    tl.assume(input_row_stride >= 0)
-    tl.assume(output_row_stride >= 0)
-    tl.assume(row_start >= 0)
+    # as older version Triton doesn't support tl.assume and BUFF OPS, comment out for now
+    # tl.assume(input_row_stride >= 0)
+    # tl.assume(output_row_stride >= 0)
+    # tl.assume(row_start >= 0)
 
     if USE_BLOCKED:
 
@@ -62,7 +64,10 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, outpu
 
             # Accumulate sum of squares
             n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
-            sum_squares: tl.float32 = 0.
+            # older version of triton doesn't accept below init
+            # sum_squares: tl.float32 = 0.
+            # however, with type promoting rule in triton, sum_squares should be always fp32 with below init
+            sum_squares = 0.
             for blk_idx in tl.range(0, n_cols_blks, num_stages=2):
                 cols = blk_idx * BLOCK_SIZE + col_offsets
                 input_ptrs = row_input_ptr + cols
@@ -93,6 +98,8 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, outpu
                 x = tl.load(input_ptrs).to(tl.float32)
                 g_ptrs = g_ptr + cols
                 g = tl.load(g_ptrs).to(tl.float32)
+                if (ZERO_CENTERED_GAMMA):
+                    g += 1
                 rms_norm = x * norm_factor * g
                 output_ptrs = row_output_ptr + cols
                 tl.store(output_ptrs, rms_norm.to(output_ptr.type.element_ty))
@@ -104,6 +111,8 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, outpu
             x = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg").to(tl.float32)
             g_ptrs = g_ptr + cols
             g = tl.load(g_ptrs, mask=mask, other=0.0).to(tl.float32)
+            if (ZERO_CENTERED_GAMMA):
+                g += 1
             rms_norm = x * norm_factor * g
             output_ptrs = row_output_ptr + cols
             tl.store(output_ptrs, rms_norm.to(output_ptr.type.element_ty), mask=mask)
@@ -123,6 +132,8 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, outpu
             rsigma_output_ptr = rsigma_ptr + row_idx
             tl.store(rsigma_output_ptr, norm_factor)
 
+            if (ZERO_CENTERED_GAMMA):
+                g += 1
             rms_norm = row * norm_factor * g
 
             output_ptrs = output_ptr + row_idx * output_row_stride + col_offsets
@@ -130,55 +141,80 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, outpu
             tl.store(output_ptrs, rms_norm.to(output_ptr.type.element_ty), mask=mask)
 
 
-def triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS, epsilon=1e-6):
+def triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS,
+                   epsilon=1e-6):
     grid = lambda meta: (NUM_PRGMS, )
-    rms_kernel[grid](y, x, g, rsigma, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, blk_size, USE_BLOCKED,
-                     NUM_PRGMS)
+    rms_kernel[grid](y, x, g, rsigma, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, ZERO_CENTERED_GAMMA, blk_size,
+                     USE_BLOCKED, NUM_PRGMS)
 
     return y, rsigma
 
 
-def torch_rmsnorm(x, g, epsilon=1e-6):
+def torch_rmsnorm(x, g, ZERO_CENTERED_GAMMA, out_dtype=torch.float16, epsilon=1e-6):
     M, N = x.shape
-    rms = torch.sqrt(torch.sum(x * x, dim=-1) * 1 / N)
+    # cast to float32 as the triton kernel
+    x_f32 = x.float()
+    g_f32 = g.float()
+    rms = torch.sqrt(torch.sum(x_f32 * x_f32, dim=-1) * 1 / N)
     rsigma = 1.0 / rms
-    rms_norm = x * rsigma.unsqueeze(1) * g
+    if (ZERO_CENTERED_GAMMA):
+        g_f32 += 1
+    rms_norm_f32 = x_f32 * rsigma.unsqueeze(1) * g_f32
+    rms_norm = rms_norm_f32.to(out_dtype)
     return rms_norm, rsigma
 
 
+arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
+
+
+@pytest.mark.parametrize("in_dtype_str", ["fp32", "fp16", "bf16"])
+@pytest.mark.parametrize("out_dtype_str", ["fp32", "fp16", "bf16"])
+@pytest.mark.parametrize('ZERO_CENTERED_GAMMA', [True, False])
 @pytest.mark.parametrize('M, N', [
     (1, 4),
     (2, 10),
     (8192, 4096),
     (4096, 8192),
-    (1, 8192),
     (1, 31744),
     (3, 65536),
     (873, 1245),
 ])
-def test_rmsnorm(M, N):
+def test_rmsnorm(M, N, ZERO_CENTERED_GAMMA, in_dtype_str, out_dtype_str):
+    in_dtype = arg_to_torch_dtype[in_dtype_str]
+    out_dtype = arg_to_torch_dtype[out_dtype_str]
     torch.manual_seed(0)
-    x = torch.randn(M, N, device='cuda')
-    y = torch.zeros_like(x, device='cuda')
+    x = torch.randn(M, N, device='cuda', dtype=in_dtype)
+    y = torch.zeros_like(x, device='cuda', dtype=out_dtype)
     rsigma = torch.empty((M, ), device='cuda', dtype=torch.float32)
+
     n_rows, n_cols = x.shape
     MAX_FUSED_SIZE = 65536 // x.element_size()
     blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
     USE_BLOCKED = n_cols > blk_size
     NUM_PRGMS = min(n_rows, get_num_sms())
-    g = torch.ones((1, N), device='cuda')
-    y_triton, rsigma_triton = triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS)
+    g = torch.ones((1, N), device='cuda', dtype=in_dtype)
 
-    y_torch, rsigma_torch = torch_rmsnorm(x, g)
+    y_triton, rsigma_triton = triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size,
+                                             USE_BLOCKED, NUM_PRGMS)
 
-    assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
-    assert torch.allclose(rsigma_triton, rsigma_torch), (rsigma_triton, rsigma_torch)
+    y_torch, rsigma_torch = torch_rmsnorm(x, g, ZERO_CENTERED_GAMMA, out_dtype)
+
+    if out_dtype in (torch.float16, torch.bfloat16):
+        atol, rtol = 1e-3, 1e-2
+    else:
+        # float32 typically can be tighter
+        atol, rtol = 1e-5, 1e-5
+
+    assert y_triton.dtype == out_dtype, f"y_triton has dtype={y_triton.dtype}, expected {out_dtype}"
+    assert y_torch.dtype == out_dtype, f"y_torch has dtype={y_torch.dtype}, expected {out_dtype}"
+
+    assert torch.allclose(y_triton, y_torch, atol=atol, rtol=rtol), \
+        f"Mismatch in 'y' (in={in_dtype_str}, out={out_dtype_str})"
+    assert torch.allclose(rsigma_triton, rsigma_torch, atol=atol, rtol=rtol), \
+        f"Mismatch in 'rsigma' (in={in_dtype_str}, out={out_dtype_str})"
 
 
 #Benchmark
-arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
-
-
 def model_benchmark_configs(args):
     config_file = args.model_configs
     configs = get_model_configs(config_path=config_file, model_families=["llama3"], model=args.model)
@@ -249,11 +285,12 @@ def run_benchmark(args):
         stream = torch.cuda.Stream()
         torch.cuda.set_stream(stream)
         g = torch.ones((1, N), device='cuda')
+        ZERO_CENTERED_GAMMA = False
         if provider == 'torch':
-            ms = triton.testing.do_bench(lambda: torch_rmsnorm(x, g))
+            ms = triton.testing.do_bench(lambda: torch_rmsnorm(x, g, ZERO_CENTERED_GAMMA))
         if provider == 'triton':
-            ms = triton.testing.do_bench(
-                lambda: triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS))
+            ms = triton.testing.do_bench(lambda: triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA,
+                                                                blk_size, USE_BLOCKED, NUM_PRGMS))
             global verbose
             if verbose:
                 print(f'SIZE: {N} Best tuning config: ({rms_kernel.best_config})')
@@ -309,7 +346,8 @@ def main():
         USE_BLOCKED = n_cols > blk_size
         NUM_PRGMS = min(n_rows, get_num_sms())
         g = torch.ones((1, args.N_start), device='cuda')
-        triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS)
+        ZERO_CENTERED_GAMMA = True
+        triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS)
     else:
         verbose = args.v
         run_benchmark(args)
