@@ -460,11 +460,6 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaDa
 
     topk_ids, num_tokens_post_padded, topk_weights, sorted_token_ids, expert_ids, config = metadata.topk_ids, metadata.num_tokens_post_padded, metadata.topk_weights, metadata.sorted_token_ids, metadata.expert_ids, metadata.config
 
-    # if metadata.use_silu_activation:
-    #     # we don't want to mutate the config but rather copy it
-    #     config = config.copy()
-    #     config['BLOCK_SIZE_N'] = config['BLOCK_SIZE_N'] // 2
-
     use_fp8_w8a8, use_int8_w8a16 = metadata.use_fp8_w8a8, metadata.use_int8_w8a16
     a_descale, b_descale = None, None
     stride_bse = None
@@ -479,8 +474,6 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaDa
 
     EM = num_tokens_post_padded.item()
     _, N, K = b.shape
-    # This will actually be N // 2 with the silu fusion
-    # N = c.shape[-1]
 
     grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
 
