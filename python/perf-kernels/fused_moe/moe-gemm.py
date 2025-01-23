@@ -917,7 +917,6 @@ def parse_args():
     parser.add_argument("-fp8_type", default='e5m2')
     parser.add_argument("-use_silu_activation", action='store_true', default=False)
     parser.add_argument("-use_silu_activation_non_fused", action='store_true', default=False)
-    parser.add_argument("-return_time", action='store_true', default=False, help='Return time instead of TFLOPs')
     args = parser.parse_args()
     return args
 
