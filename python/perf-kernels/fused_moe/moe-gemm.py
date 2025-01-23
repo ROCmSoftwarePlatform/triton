@@ -118,9 +118,9 @@ def silu_and_mul_kernel(A, Out, stride_am, stride_an, stride_cm, stride_cn, EM: 
 
 @triton.jit
 def moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn, topk_weights_ptr,
-              off_experts, offs_bn, token_mask, offs_k, offs_token, K: tl.constexpr, MUL_ROUTED_WEIGHT: tl.constexpr,
-              use_fp8_w8a8: tl.constexpr, use_int8_w8a16: tl.constexpr, BLOCK_SIZE_M: tl.constexpr,
-              BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
+              off_experts, offs_bn, token_mask, offs_k, offs_token, K: tl.constexpr, EVEN_K: tl.constexpr,
+              MUL_ROUTED_WEIGHT: tl.constexpr, use_fp8_w8a8: tl.constexpr, use_int8_w8a16: tl.constexpr,
+              BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
     if use_int8_w8a16:
@@ -133,8 +133,12 @@ def moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse
 
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Masking ensures we don't load from invalid tokens or indices
-        a = tl.load(a_ptrs, mask=(token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K)), other=0.0)
-        b = tl.load(b_ptrs, mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K), other=0.0)
+        if EVEN_K:
+            a = tl.load(a_ptrs, mask=(token_mask[:, None]), other=0.0)
+            b = tl.load(b_ptrs)
+        else:
+            a = tl.load(a_ptrs, mask=(token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K)), other=0.0)
+            b = tl.load(b_ptrs, mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K), other=0.0)
 
         if use_int8_w8a16:
             accumulator = tl.dot(a, b.to(a.type), acc=accumulator)
@@ -180,6 +184,7 @@ def moe_gemm_kernel(
     EM: tl.constexpr,
     N: tl.constexpr,
     K: tl.constexpr,
+    EVEN_K: tl.constexpr,
     MUL_ROUTED_WEIGHT: tl.constexpr,
     use_fp8_w8a8: tl.constexpr,
     use_int8_w8a16: tl.constexpr,
@@ -252,7 +257,7 @@ def moe_gemm_kernel(
 
     if use_silu_activation:
         merged_acc = moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn,
-                               topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K,
+                               topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K, EVEN_K,
                                MUL_ROUTED_WEIGHT, use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N,
                                BLOCK_SIZE_K)
 
@@ -261,8 +266,8 @@ def moe_gemm_kernel(
         acc = (silu_acc * mul_acc).to(tl.float32)
     else:
         acc = moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn,
-                        topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K, MUL_ROUTED_WEIGHT,
-                        use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
+                        topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K, EVEN_K,
+                        MUL_ROUTED_WEIGHT, use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
 
     if use_silu_activation:
         offs_cn = pid_n * BLOCK_SIZE_HALF + tl.arange(0, BLOCK_SIZE_HALF)
@@ -475,6 +480,7 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaDa
     EM = num_tokens_post_padded.item()
     _, N, K = b.shape
 
+    EVEN_K = K % config["BLOCK_SIZE_K"] == 0
     grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
 
     if metadata.use_silu_activation:
@@ -486,7 +492,7 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaDa
 
     moe_gemm_kernel[grid](a, b, c, a_descale, b_descale, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
                           b.stride(2), stride_cm, stride_cn, stride_bse, stride_bsn, top_k, topk_weights,
-                          sorted_token_ids, expert_ids, EM, N, K, MUL_ROUTED_WEIGHT=topk_weights is not None,
+                          sorted_token_ids, expert_ids, EM, N, K, EVEN_K, MUL_ROUTED_WEIGHT=topk_weights is not None,
                           use_fp8_w8a8=use_fp8_w8a8, use_int8_w8a16=use_int8_w8a16,
                           use_silu_activation=metadata.use_silu_activation, **config)
     return c
