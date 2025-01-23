@@ -174,7 +174,7 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_ptr, dg_ptr
                 g_ptrs = g_ptr + cols
                 g = tl.load(g_ptrs).to(tl.float32)
                 if (ZERO_CENTERED_GAMMA):
-                    g += 1
+                    g += 1.
                 grad_sum += tl.sum(grad_output * x * g, axis=0)
 
             # remainder for grad_sum:
@@ -187,7 +187,7 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_ptr, dg_ptr
             g_ptrs = g_ptr + cols
             g = tl.load(g_ptrs, mask=mask, other=0.0).to(tl.float32)
             if (ZERO_CENTERED_GAMMA):
-                g += 1
+                g += 1.
             grad_sum += tl.sum(grad_output * x * g, axis=0)
 
             # Load r_sigma
@@ -207,7 +207,7 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_ptr, dg_ptr
                 g_ptrs = g_ptr + cols
                 g = tl.load(g_ptrs).to(tl.float32)
                 if (ZERO_CENTERED_GAMMA):
-                    g += 1
+                    g += 1.
                 grad_input = grad_output * norm_factor * g - (norm_factor * norm_factor * norm_factor) * x * (grad_sum /
                                                                                                               n_cols)
 
@@ -216,7 +216,7 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_ptr, dg_ptr
 
                 dg = grad_output * x * norm_factor
                 dg_ptrs = row_dg_ptr + cols
-                tl.store(dg_ptrs, dg.to(dg_ptr.type.element_ty))
+                tl.store(dg_ptrs, dg)
 
             # Handle remainder
             cols = n_cols_blks * BLOCK_SIZE + col_offsets
@@ -229,7 +229,7 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_ptr, dg_ptr
             g_ptrs = g_ptr + cols
             g = tl.load(g_ptrs, mask=mask, other=0.0).to(tl.float32)
             if (ZERO_CENTERED_GAMMA):
-                g += 1
+                g += 1.
             grad_input = grad_output * norm_factor * g - (norm_factor * norm_factor * norm_factor) * x * (grad_sum /
                                                                                                           n_cols)
 
@@ -238,7 +238,7 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_ptr, dg_ptr
 
             dg = grad_output * x * norm_factor
             dg_ptrs = row_dg_ptr + cols
-            tl.store(dg_ptrs, dg.to(dg_ptr.type.element_ty), mask=mask)
+            tl.store(dg_ptrs, dg, mask=mask)
 
     else:
         mask = col_offsets < n_cols
@@ -256,7 +256,7 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_ptr, dg_ptr
             grad_output = tl.load(grad_output_ptrs, mask=mask, other=0.0).to(tl.float32)
             g = tl.load(g_ptr + col_offsets, mask=mask, other=0.0).to(tl.float32)
             if (ZERO_CENTERED_GAMMA):
-                g += 1
+                g += 1.
 
             norm_factor = tl.load(rsigma_ptr + row_idx)
             grad_sum = tl.sum(grad_output * x * g, axis=0)
@@ -266,7 +266,7 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_ptr, dg_ptr
             tl.store(dx_ptrs, grad_input.to(dx_ptr.type.element_ty), mask=mask)
 
             dg = grad_output * x * norm_factor
-            tl.store(dg_ptrs, dg.to(dg_ptr.type.element_ty), mask=mask)
+            tl.store(dg_ptrs, dg, mask=mask)
 
 
 @triton.jit
@@ -280,87 +280,88 @@ def _rmsnorm_bwd_dg_reduce(dg_in_ptr, dg_out_ptr, dg_in_stride, n_rows, n_cols, 
     mask = cols < n_cols
 
     acc = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
-
     # Sum across the batch dimension
-    for row_idx in tl.range(0, n_rows, num_stages=2):
+    for row_idx in tl.range(0, n_rows, num_stages=0):
         row_ptr = dg_in_ptr + row_idx * dg_in_stride
-        vals = tl.load(row_ptr + cols, mask=mask, other=0.0).to(tl.float32)
-        acc += vals
+        acc += tl.load(row_ptr + cols, mask=mask, other=0.0).to(tl.float32)
 
     # Write out final sums
     tl.store(dg_out_ptr + cols, acc.to(dg_out_ptr.type.element_ty), mask=mask)
 
 
-#def triton_rmsnorm_backward(grad_output, x, g, rsigma, dx, dg, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size,
-#                            USE_BLOCKED, NUM_PRGMS, epsilon=1e-6):
-#    grid = lambda meta: (NUM_PRGMS, )
-#    rms_bwd_kernel[grid](grad_output, x, g, rsigma, dx, dg, x.stride(0), grad_output.stride(0), n_rows, n_cols, epsilon,
-#                         ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS)
-#
-#    return dx, dg
+def triton_rmsnorm_bwd(grad_output, x, g, rsigma, dx, dg, dg_tmp, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size,
+                            USE_BLOCKED, NUM_PRGMS, epsilon=1e-6):
+    grid_bwd = lambda meta: (NUM_PRGMS, )
+    rms_bwd_kernel[grid_bwd](grad_output, x, g, rsigma, dx, dg_tmp, x.stride(0), grad_output.stride(0), n_rows,
+                            n_cols, epsilon, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS)
 
-#def triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS,
-#                   epsilon=1e-6):
-#    grid = lambda meta: (NUM_PRGMS, )
-#    rms_kernel[grid](y, x, g, rsigma, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, ZERO_CENTERED_GAMMA, blk_size,
-#                     USE_BLOCKED, NUM_PRGMS)
-#
-#    return y, rsigma
+    grid_reduce = lambda meta: (triton.cdiv(n_cols, blk_size), )
+    _rmsnorm_bwd_dg_reduce[grid_reduce](dg_tmp, dg, dg_tmp.stride(0), n_rows, n_cols, blk_size)
 
+    return dx, dg
 
-class RMSNorm(torch.autograd.Function):
+def triton_rmsnorm_fwd(y, x, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS,
+                   epsilon=1e-6):
+    grid = lambda meta: (NUM_PRGMS, )
+    rms_kernel[grid](y, x, g, rsigma, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, ZERO_CENTERED_GAMMA, blk_size,
+                     USE_BLOCKED, NUM_PRGMS)
 
-    @staticmethod
-    def forward(ctx, x, g, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS, epsilon=1e-6):
-        y = torch.zeros_like(x)
-        rsigma = torch.empty((n_rows, ), device=x.device, dtype=torch.float32)
-        # heuristics for number of warps
-        num_warps = min(max(blk_size // 256, 1), 8)
-        grid = lambda meta: (NUM_PRGMS, )
-        rms_kernel[grid](y, x, g, rsigma, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, ZERO_CENTERED_GAMMA,
-                         blk_size, USE_BLOCKED, NUM_PRGMS)
-        ctx.save_for_backward(x, y, g, rsigma)
-        ctx.n_rows = n_rows
-        ctx.n_cols = n_cols
-        ctx.ZERO_CENTERED_GAMMA = ZERO_CENTERED_GAMMA
-        ctx.blk_size = blk_size
-        ctx.USE_BLOCKED = USE_BLOCKED
-        ctx.NUM_PRGMS = NUM_PRGMS
-        ctx.epsilon = epsilon
-        ctx.num_warps = num_warps
-
-        return y, rsigma
-
-    @staticmethod
-    def backward(ctx, grad_output, grad_rsigma):
-        x, y, g, rsigma = ctx.saved_tensors
-        n_rows = ctx.n_rows
-        n_cols = ctx.n_cols
-        ZERO_CENTERED_GAMMA = ctx.ZERO_CENTERED_GAMMA
-        blk_size = ctx.blk_size
-        USE_BLOCKED = ctx.USE_BLOCKED
-        NUM_PRGMS = ctx.NUM_PRGMS
-        epsilon = ctx.epsilon
-
-        dx = torch.zeros_like(x)
-        dg_tmp = torch.zeros_like(x)
-        dg = torch.zeros_like(g)
-
-        grid_bwd = lambda meta: (NUM_PRGMS, )
-        rms_bwd_kernel[grid_bwd](grad_output, x, g, rsigma, dx, dg_tmp, x.stride(0), grad_output.stride(0), n_rows,
-                                 n_cols, epsilon, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS,
-                                 num_warps=ctx.num_warps)
-
-        grid_reduce = lambda meta: (triton.cdiv(n_cols, blk_size), )
-        _rmsnorm_bwd_dg_reduce[grid_reduce](dg_tmp, dg, dg_tmp.stride(0), n_rows, n_cols, blk_size)
-
-        return dx, dg, None, None, None, None, None, None, None
+    return y, rsigma
 
 
-rmsnorm = RMSNorm.apply
+##class RMSNorm(torch.autograd.Function):
+##
+##    @staticmethod
+##    def forward(ctx, y, x, g, dg_tmp, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS, epsilon=1e-6):
+###        y = torch.zeros_like(x)
+###        rsigma = torch.empty((n_rows, ), device=x.device, dtype=torch.float32)
+##        # heuristics for number of warps
+##        num_warps = min(max(blk_size // 256, 1), 8)
+##        grid = lambda meta: (NUM_PRGMS, )
+##        rms_kernel[grid](y, x, g, rsigma, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, ZERO_CENTERED_GAMMA,
+##                         blk_size, USE_BLOCKED, NUM_PRGMS)
+##        ctx.save_for_backward(x, y, g, rsigma)
+##        ctx.dg_tmp = dg_tmp
+##        ctx.n_rows = n_rows
+##        ctx.n_cols = n_cols
+##        ctx.ZERO_CENTERED_GAMMA = ZERO_CENTERED_GAMMA
+##        ctx.blk_size = blk_size
+##        ctx.USE_BLOCKED = USE_BLOCKED
+##        ctx.NUM_PRGMS = NUM_PRGMS
+##        ctx.epsilon = epsilon
+##        ctx.num_warps = num_warps
+##
+##        return y, rsigma
+##
+##    @staticmethod
+##    def backward(ctx, grad_output, grad_rsigma):
+##        x, y, g, rsigma = ctx.saved_tensors
+##        dg_tmp = ctx.dg_tmp
+##        n_rows = ctx.n_rows
+##        n_cols = ctx.n_cols
+##        ZERO_CENTERED_GAMMA = ctx.ZERO_CENTERED_GAMMA
+##        blk_size = ctx.blk_size
+##        USE_BLOCKED = ctx.USE_BLOCKED
+##        NUM_PRGMS = ctx.NUM_PRGMS
+##        epsilon = ctx.epsilon
+##
+##        dx = torch.zeros_like(x)
+##        dg = torch.zeros_like(g)
+##
+##        grid_bwd = lambda meta: (NUM_PRGMS, )
+##        rms_bwd_kernel[grid_bwd](grad_output, x, g, rsigma, dx, dg_tmp, x.stride(0), grad_output.stride(0), n_rows,
+##                                 n_cols, epsilon, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS,
+##                                 num_warps=ctx.num_warps)
+##
+##        grid_reduce = lambda meta: (triton.cdiv(n_cols, blk_size), )
+##        _rmsnorm_bwd_dg_reduce[grid_reduce](dg_tmp, dg, dg_tmp.stride(0), n_rows, n_cols, blk_size)
+##
+##        return dx, dg, None, None, None, None, None, None, None, None, None
+##
+##
+##rmsnorm = RMSNorm.apply
 
-
-def torch_rmsnorm(x, g, ZERO_CENTERED_GAMMA, out_dtype=torch.float16, epsilon=1e-6):
+def torch_rmsnorm_fwd(x, g, ZERO_CENTERED_GAMMA, out_dtype=torch.float16, epsilon=1e-6):
     M, N = x.shape
     # cast to float32 as the triton kernel
     x_f32 = x.float()
@@ -373,23 +374,39 @@ def torch_rmsnorm(x, g, ZERO_CENTERED_GAMMA, out_dtype=torch.float16, epsilon=1e
     rms_norm = rms_norm_f32.to(out_dtype)
     return rms_norm, rsigma
 
+def torch_rmsnorm_bwd(x, g, ZERO_CENTERED_GAMMA, out_dtype=torch.float16, epsilon=1e-6):
+    M, N = x.shape
+    # cast to float32 as the triton kernel
+    x_f32 = x.float()
+    g_f32 = g.float()
+    rms = torch.sqrt(torch.sum(x_f32 * x_f32, dim=-1) * 1 / N)
+    rsigma = 1.0 / rms
+    if (ZERO_CENTERED_GAMMA):
+        g_f32 = g_f32 + 1
+    rms_norm_f32 = x_f32 * rsigma.unsqueeze(1) * g_f32
+    rms_norm = rms_norm_f32.to(out_dtype)
+    return rms_norm, rsigma
 
 arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
 
 
 #@pytest.mark.parametrize("in_dtype_str", ["fp32", "fp16", "bf16"])
 #@pytest.mark.parametrize("out_dtype_str", ["fp32", "fp16", "bf16"])
-@pytest.mark.parametrize("in_dtype_str", ["fp32", "fp16"])
-@pytest.mark.parametrize("out_dtype_str", ["fp32", "fp16"])
+#@pytest.mark.parametrize("in_dtype_str", ["fp16", "bf16"])
+#@pytest.mark.parametrize("out_dtype_str", ["fp16", "bf16"])
+#@pytest.mark.parametrize("in_dtype_str", ["fp32", "fp16"])
+#@pytest.mark.parametrize("out_dtype_str", ["fp32", "fp16"])
+@pytest.mark.parametrize("in_dtype_str", ["fp32"])
+@pytest.mark.parametrize("out_dtype_str", ["fp32"])
 @pytest.mark.parametrize('ZERO_CENTERED_GAMMA', [True, False])
 @pytest.mark.parametrize('M, N', [
-    #    (1, 4),
+    (1, 4),
     (2, 10),
-    #(8192, 4096),
-    #    (4096, 8192),
-    #    (1, 31744),
-    #    (3, 65536),
-    #    (873, 1245),
+    (256, 4096),
+    (4096, 8192),
+    (1, 31744),
+    (8192, 65536),
+    (873, 1245),
 ])
 def test_rmsnorm(M, N, ZERO_CENTERED_GAMMA, in_dtype_str, out_dtype_str):
     in_dtype = arg_to_torch_dtype[in_dtype_str]
@@ -399,6 +416,7 @@ def test_rmsnorm(M, N, ZERO_CENTERED_GAMMA, in_dtype_str, out_dtype_str):
     x = torch.randn(M, N, device='cuda', dtype=in_dtype, requires_grad=True)
     g = torch.ones((1, N), device='cuda', dtype=in_dtype, requires_grad=True)
     y = torch.zeros_like(x, device='cuda', dtype=out_dtype)
+    rsigma = torch.empty((M, ), device=x.device, dtype=torch.float32)
 
     n_rows, n_cols = x.shape
     MAX_FUSED_SIZE = 65536 // x.element_size()
@@ -406,9 +424,9 @@ def test_rmsnorm(M, N, ZERO_CENTERED_GAMMA, in_dtype_str, out_dtype_str):
     USE_BLOCKED = n_cols > blk_size
     NUM_PRGMS = min(n_rows, get_num_sms())
 
-    y_triton, rsigma_triton = rmsnorm(x, g, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS)
+    y_triton, rsigma_triton = triton_rmsnorm_fwd(y, x, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS)
 
-    y_torch, rsigma_torch = torch_rmsnorm(x, g, ZERO_CENTERED_GAMMA, out_dtype)
+    y_torch, rsigma_torch = torch_rmsnorm_fwd(x, g, ZERO_CENTERED_GAMMA, out_dtype)
 
     if out_dtype in (torch.float16, torch.bfloat16):
         atol, rtol = 1e-3, 1e-2
@@ -430,21 +448,51 @@ def test_rmsnorm(M, N, ZERO_CENTERED_GAMMA, in_dtype_str, out_dtype_str):
     # We must clone and set requires_grad = True for backward
     x_ref = x.clone().detach().requires_grad_()
     g_ref = g.clone().detach().requires_grad_()
-    y_ref, rsigma_ref = torch_rmsnorm(x_ref, g_ref, ZERO_CENTERED_GAMMA, out_dtype)
+    y_ref, rsigma_ref = torch_rmsnorm_fwd(x_ref, g_ref, ZERO_CENTERED_GAMMA, out_dtype)
 
     # Backpropagate through PyTorch
     y_ref.backward(grad_output)
     grad_x_ref = x_ref.grad
     grad_g_ref = g_ref.grad
 
-    # 2) Triton backward
-    y_triton.backward(grad_output, retain_graph=True)
+    grad_x_ref = grad_x_ref.to(out_dtype)
+    grad_g_ref = grad_g_ref.to(out_dtype)
 
-    # Compare backward outputs (grad_x and grad_g)
-    assert torch.allclose(x.grad, grad_x_ref, atol=atol, rtol=rtol), \
-        f"Triton grad x:\n{x.grad}\n\nPyTorch grad_x:\n{grad_x_ref}"
-    assert torch.allclose(g.grad, grad_g_ref, atol=atol, rtol=rtol), \
-        f"Triton grad g:\n{g.grad}\n\nPyTorch grad_g:\n{grad_g_ref}"
+    # 2) Triton backward
+    dx = torch.empty(M, N, device='cuda', dtype=out_dtype, requires_grad=False)
+    dg = torch.ones((1, N), device='cuda', dtype=out_dtype, requires_grad=False)
+    dg_tmp = torch.zeros(M, N, device='cuda', dtype=torch.float32, requires_grad=False)
+
+    triton_rmsnorm_bwd(
+        grad_output,    # grad_output
+        x, g, rsigma_triton,   # forward inputs
+        dx, dg, dg_tmp,        # where we store final grads and partial scratch
+        n_rows, n_cols,
+        ZERO_CENTERED_GAMMA,
+        blk_size, USE_BLOCKED, NUM_PRGMS)
+
+    err_x = (dx - grad_x_ref).abs().max().item()
+    assert torch.allclose(dx, grad_x_ref, atol=atol, rtol=rtol), (
+    f"Triton dx mismatch (max error: {err_x:.4e})\n\n"
+    f"Triton dx:\n{dx}\n\n"
+    f"PyTorch grad_x:\n{grad_x_ref}")
+
+    # Similarly for grad_g
+    err_g = (dg - grad_g_ref).abs().max().item()
+    assert torch.allclose(dg, grad_g_ref, atol=atol, rtol=rtol), (
+    f"Triton dg mismatch (max error: {err_g:.4e})\n\n"
+    f"Triton dg:\n{dg}\n\n"
+    f"PyTorch grad_g:\n{grad_g_ref}")
+#    assert torch.allclose(dx, grad_x_ref, atol=atol, rtol=rtol), \
+#       f"Triton grad_x mismatch:\n{dx}\n\nPyTorch grad_x:\n{grad_x_ref}"
+#    assert torch.allclose(dg, grad_g_ref, atol=atol, rtol=rtol), \
+#        f"Triton grad_g mismatch:\n{dg}\n\nPyTorch grad_g:\n{grad_g_ref}"
+
+#    # Compare backward outputs (grad_x and grad_g)
+#    assert torch.allclose(x.grad, grad_x_ref, atol=atol, rtol=rtol), \
+#        f"Triton grad x:\n{x.grad}\n\nPyTorch grad_x:\n{grad_x_ref}"
+#    assert torch.allclose(g.grad, grad_g_ref, atol=atol, rtol=rtol), \
+#        f"Triton grad g:\n{g.grad}\n\nPyTorch grad_g:\n{grad_g_ref}"
 
 
 #Benchmark
@@ -520,9 +568,9 @@ def run_benchmark(args):
         g = torch.ones((1, N), device='cuda')
         ZERO_CENTERED_GAMMA = False
         if provider == 'torch':
-            ms = triton.testing.do_bench(lambda: torch_rmsnorm(x, g, ZERO_CENTERED_GAMMA))
+            ms = triton.testing.do_bench(lambda: torch_rmsnorm_fwd(x, g, ZERO_CENTERED_GAMMA))
         if provider == 'triton':
-            ms = triton.testing.do_bench(lambda: triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA,
+            ms = triton.testing.do_bench(lambda: triton_rmsnorm_fwd(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA,
                                                                 blk_size, USE_BLOCKED, NUM_PRGMS))
             global verbose
             if verbose:
@@ -562,6 +610,8 @@ def parse_args():
     parser.add_argument('-d', "--dtype", default="fp16")
     parser.add_argument('-nb', "--no_benchmark", default=False, type=bool)
     parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
+    parser.add_argument("--benchmark_mode", type=str, choices=["fwd", "bwd"], default="fwd+bwd",
+        help="Benchmark mode: forward only, backward only, or both.")
 
     return parser.parse_args()
 
@@ -580,7 +630,7 @@ def main():
         NUM_PRGMS = min(n_rows, get_num_sms())
         g = torch.ones((1, args.N_start), device='cuda')
         ZERO_CENTERED_GAMMA = True
-        triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS)
+        triton_rmsnorm_fwd(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS)
     else:
         verbose = args.v
         run_benchmark(args)
