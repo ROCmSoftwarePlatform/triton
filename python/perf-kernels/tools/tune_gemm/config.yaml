@@ -1,4 +1,1 @@
-- {'M': 4864, 'N': 8192, 'K': 4160, 'rowMajorA': 'T', 'rowMajorB': 'N', 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'SPLIT_K': 1, 'num_warps': 8, 'num_stages': 2, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 2, 'instruction_sched_variant': "none"}
-- {'M': 4864, 'N': 8192, 'K': 4160, 'rowMajorA': 'T', 'rowMajorB': 'N', 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'SPLIT_K': 1, 'num_warps': 4, 'num_stages': 2, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 2, 'instruction_sched_variant': "none"}
 - {'M': 4864, 'N': 8192, 'K': 4160, 'rowMajorA': 'T', 'rowMajorB': 'N', 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'SPLIT_K': 1, 'num_warps': 4, 'num_stages': 2, 'waves_per_eu': 0, 'matrix_instr_nonkdim': 16, 'kpack': 2, 'instruction_sched_variant': "local-prefetch"}
-

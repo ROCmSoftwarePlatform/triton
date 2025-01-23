@@ -4,14 +4,12 @@ rm -rf ~/.triton/cache/
 
 TRITON_ALWAYS_COMPILE=1 python gemm_sub.py \
   --trans-b \
+  --sub irp/2.ttgir \
   --file config.yaml \
-  --sub ir/7.ttgir \
   --verbose
 
+#  --sub ir/7.ttgir \
 #  --use-mask \
-#  --sub versions/2d_global_loads.llir \
-#  --sub versions/3_regions.llir \
-#  --sub versions/2d_global_loads.llir \
 # remember groupm of llir must match grid launch
 
 #  --use-mask \
