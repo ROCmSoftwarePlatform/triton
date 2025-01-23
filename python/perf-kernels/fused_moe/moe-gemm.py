@@ -19,6 +19,10 @@ from utils.benchmark_utils import get_available_models, get_model_configs  # noq
 M_THRESHOLD_SMALL = 256
 M_THRESHOLD_MEDIUM = 1024
 
+quantization_max_repr_val = {torch.int8: 127, torch.float8_e4m3fnuz: 240.0, torch.float8_e5m2fnuz: 57344.0}
+
+supported_fp8 = [torch.float8_e4m3fnuz, torch.float8_e5m2fnuz]
+
 
 class MetaData():
     use_fp8_w8a8 = False
@@ -47,6 +51,8 @@ class MetaData():
         assert a.shape[-1] == b.shape[-1] and b.shape[1] == o.shape[-1]
 
         assert not (self.use_fp8_w8a8 and self.use_int8_w8a16)
+        if self.use_fp8_w8a8:
+            assert self.fp8_type in supported_fp8
 
 
 @triton.jit
@@ -375,12 +381,6 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaDa
     return c
 
 
-quantization_max_repr_val = {
-    torch.int8: 127, torch.float8_e4m3fnuz: 240.0, torch.float8_e4m3fn: 448.0, torch.float8_e5m2fnuz: 57344.0,
-    torch.float8_e5m2: 57344.0
-}
-
-
 def quantize_tensor(tensor: torch.Tensor, dtype, dim=()) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     quantize_dim = [i for i in range(tensor.dim()) if i not in dim]
     max_vals = tensor.abs().amax(dim=quantize_dim, keepdim=True)
@@ -495,8 +495,7 @@ def test_correctness(M: int, N: int, K: int, top_k: int, E: int, routed_weight: 
 ])
 @pytest.mark.parametrize('routed_weight', [True, False])
 @pytest.mark.parametrize('use_fp8_w8a8', [True])
-# triton does not support torch.float8_e4m3fn
-@pytest.mark.parametrize('fp8_type', [torch.float8_e5m2, torch.float8_e5m2fnuz])
+@pytest.mark.parametrize('fp8_type', [torch.float8_e4m3fnuz, torch.float8_e5m2fnuz])
 def test_correctness_fp8(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool, use_fp8_w8a8, fp8_type,
                          dtype=torch.float16):
     torch.manual_seed(20)
@@ -700,14 +699,14 @@ def parse_args():
     parser.add_argument("-int8_w8a16", action='store_true', default=False)
     parser.add_argument("-fp8_w8a8", action='store_true', default=False)
     parser.add_argument("-dtype", default='fp16')
-    parser.add_argument("-fp8_type", default='e5m2')
+    parser.add_argument("-fp8_type", default='e5m2fnuz')
     args = parser.parse_args()
     return args
 
 
 arg_to_torch_dtype = {
-    'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32, "e5m2": torch.float8_e5m2, "e5m2fnuz":
-    torch.float8_e5m2fnuz, "e4m3fn": torch.float8_e4m3fn, "e4m3fnuz": torch.float8_e4m3fnuz
+    'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32, "e5m2fnuz": torch.float8_e5m2fnuz, "e4m3fnuz":
+    torch.float8_e4m3fnuz
 }
 
 
