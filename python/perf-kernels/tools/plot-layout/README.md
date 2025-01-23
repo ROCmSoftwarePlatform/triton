@@ -54,7 +54,8 @@ options:
 This script does not require torch or triton to be installed. The only package
 it depends on is latex. On Ubuntu, do
 ```bash
-sudo apt install texlive-full
+sudo apt-get install texlive-latex-base texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra
+
 ```
 
 ## Draw blocked layout (`-plot blocked`)
