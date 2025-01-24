@@ -19,7 +19,14 @@ from utils.benchmark_utils import get_available_models, get_model_configs  # noq
 M_THRESHOLD_SMALL = 256
 M_THRESHOLD_MEDIUM = 1024
 
-quantization_max_repr_val = {torch.int8: 127, torch.float8_e4m3fnuz: 240.0, torch.float8_e5m2fnuz: 57344.0}
+dtype_max = {
+    dtype: (torch.finfo(dtype) if dtype.is_floating_point else torch.iinfo(dtype)).max
+    for dtype in [
+        torch.float8_e5m2fnuz,
+        torch.float8_e4m3fnuz,
+        torch.int8,
+    ]
+}
 
 supported_fp8 = [torch.float8_e4m3fnuz, torch.float8_e5m2fnuz]
 
@@ -52,7 +59,7 @@ class MetaData():
 
         assert not (self.use_fp8_w8a8 and self.use_int8_w8a16)
         if self.use_fp8_w8a8:
-            assert self.fp8_type in supported_fp8
+            assert self.fp8_type in supported_fp8, f"fp8 type {self.fp8_type} not supported"
 
 
 @triton.jit
@@ -384,7 +391,7 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaDa
 def quantize_tensor(tensor: torch.Tensor, dtype, dim=()) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     quantize_dim = [i for i in range(tensor.dim()) if i not in dim]
     max_vals = tensor.abs().amax(dim=quantize_dim, keepdim=True)
-    max_repr_val = quantization_max_repr_val[dtype]
+    max_repr_val = dtype_max[dtype]
     # Avoid division by zero
     max_vals[max_vals == 0] = 1e-8
 
@@ -393,9 +400,10 @@ def quantize_tensor(tensor: torch.Tensor, dtype, dim=()) -> tuple[torch.Tensor, 
 
     # Quantize the tensor
     tensor = tensor * scale
-    tensor = tensor.round_()
+    if dtype == torch.int8:
+        tensor = tensor.round_()
     tensor.clamp_(-max_repr_val, max_repr_val)
-    tensor_quantized = tensor.to(torch.int8)
+    tensor_quantized = tensor.to(dtype)
 
     scale = scale.squeeze(dim=quantize_dim)
 
