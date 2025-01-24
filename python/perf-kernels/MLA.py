@@ -138,12 +138,12 @@ def print_gpu(prefix, val=None):
 
 # acc, l_i, m_i, q_nope, q_pe, wkv_b, kv_ptrs, k_pe_ptrs, bias_ptrs
 @triton.jit
-def _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, kv_offs_k, kv_offs_c, q_nope_wkv_b_ptrs1, wkv_b_ptrs2,
-                    stride_q_nope_wkv_b_k, stride_kv_k, stride_wkv_b_k, stride_kv_n, stride_k_pe_n, start_m,
-                    actual_seqlen_k, actual_seqlen_q, block_min, block_max, offs_n_causal, masked_blocks,
+def _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, kv_offs_k, kv_offs_c, q_nope_wkv_b_ptrs1,
+                    stride_q_nope_wkv_b_k, stride_kv_k, stride_kv_n, stride_k_pe_n,
+                    actual_seqlen_k, block_min, block_max, offs_n_causal,
                     n_extra_tokens, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
                     BLOCK_K: tl.constexpr, K: tl.constexpr, EVEN_K: tl.constexpr, OFFS_M: tl.constexpr,
-                    OFFS_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, MASK_STEPS: tl.constexpr, QK_SCALE: tl.constexpr):
+                    OFFS_N: tl.constexpr, MASK_STEPS: tl.constexpr, QK_SCALE: tl.constexpr):
 
     # loop over k, v, and update accumulator
     for start_n in range(block_min, block_max, BLOCK_N):
@@ -253,12 +253,12 @@ def splitKdot(a, b, acc, M: tl.constexpr, N: tl.constexpr, split_k: tl.constexpr
 
 def get_cdna_autotune_configs():
     return [
-        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-        #               num_stages=1, num_warps=4),
-        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-        #               num_stages=1, num_warps=4),
-        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-        #               num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
         triton.Config(
             {'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
             num_stages=1, num_warps=4),
@@ -457,16 +457,15 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, SM_SCALE: tl.constexpr
                 if n_full_blocks > 0:
                     block_max = (n_blocks - masked_blocks) * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, kv_offs_k, kv_offs_c,
-                                                    q_wkv_b_ptrs, wkv_b_ptrs2, stride_q_nope_wkv_b_c, stride_kv_c,
-                                                    stride_wkv_b_c, stride_kv_t, stride_k_pe_t, start_m, seqlen_k,
-                                                    seqlen_q,
-                                                    # _, _, offs_n_causal, masked_blocks, n_extra_tokens, _
-                                                    block_min, block_max, 0, 0, 0,
+                                                    q_wkv_b_ptrs, stride_q_nope_wkv_b_c, stride_kv_c,
+                                                    stride_kv_t, stride_k_pe_t, seqlen_k,
+                                                    # _, _, offs_n_causal, n_extra_tokens, _
+                                                    block_min, block_max, 0, 0,
                                                     # IS_CAUSAL, ....
                                                     False, BLOCK_M, BLOCK_N, BLOCK_K, kv_lora_rank, EVEN_K, offs_m,
                                                     offs_n,
-                                                    # _, MASK_STEPS, ...
-                                                    PRE_LOAD_V, False, QK_SCALE)
+                                                    # MASK_STEPS, ...
+                                                    False, QK_SCALE)
                     block_min = block_max
                     block_max = n_blocks * BLOCK_N
 
@@ -480,13 +479,13 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, SM_SCALE: tl.constexpr
                     kv_ptrs += n_full_blocks * BLOCK_N * stride_kv_t
                     k_pe_ptrs += n_full_blocks * BLOCK_N * stride_k_pe_t
                     acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, kv_offs_k, kv_offs_c,
-                                                    q_wkv_b_ptrs, wkv_b_ptrs2, stride_q_nope_wkv_b_c, stride_kv_c,
-                                                    stride_wkv_b_c, stride_kv_t, stride_k_pe_t, start_m, seqlen_k,
-                                                    seqlen_q, block_min, block_max, offs_n_causal, masked_blocks,
+                                                    q_wkv_b_ptrs, stride_q_nope_wkv_b_c, stride_kv_c,
+                                                    stride_kv_t, stride_k_pe_t, seqlen_k,
+                                                    block_min, block_max, offs_n_causal,
                                                     n_extra_tokens, IS_CAUSAL, BLOCK_M, BLOCK_N, BLOCK_K, kv_lora_rank,
                                                     EVEN_K, offs_m, offs_n,
-                                                    # _, MASK_STEPS, ...
-                                                    PRE_LOAD_V, True, QK_SCALE)
+                                                    # MASK_STEPS, ...
+                                                    True, QK_SCALE)
 
                 acc = acc.to(q_nope.type.element_ty)
 
@@ -657,7 +656,7 @@ def input_helper_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, 
 
     wkv_b = torch.randn(wkv_b_tensor_shape, dtype=dtype, device="cuda", requires_grad=requires_grad)
 
-    sm_scale = 1.0  # qk_nope_head_dim**-0.5
+    sm_scale = qk_nope_head_dim**-0.5
 
     return q_nope, q_pe, kv, k_pe, v, wkv_b, sm_scale
 
@@ -804,7 +803,6 @@ arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': tor
 
 def main():
     # args = parse_args()
-
     test_op_fwd(8, 16, 128, 512, 128, 64, 128, causal=True, layout="bhsd", dtype=torch.float32, ref_impl="absorb")
 
 
