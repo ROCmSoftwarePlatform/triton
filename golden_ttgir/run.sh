@@ -4,7 +4,7 @@ rm -rf ~/.triton/cache/
 
 TRITON_ALWAYS_COMPILE=1 python gemm_sub.py \
   --trans-b \
-  --sub irp/2.ttgir \
+  --sub irp/4.ttgir \
   --file config.yaml \
   --verbose
 
