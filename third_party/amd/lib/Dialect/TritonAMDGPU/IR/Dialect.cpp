@@ -133,4 +133,23 @@ LogicalResult ExtractSliceOp::verify() {
 
   return success();
 }
+
+LogicalResult ConcatOp::verify() {
+  auto sources = getSources();
+  auto dims = getDims();
+
+  auto expectedNumSources =
+      std::accumulate(dims.begin(), dims.end(), 1, std::multiplies<int32_t>());
+  if (sources.size() != expectedNumSources) {
+    return emitError() << "dims spec [" << dims
+                       << "] does not match the number of provided sources ["
+                       << sources.size() << "]";
+  }
+
+  // TODO: check whether all sources and the result have the same encoding
+
+  // TODO: check whether assembled sources match the result dimensions
+
+  return success();
+}
 } // namespace mlir::triton::amdgpu
