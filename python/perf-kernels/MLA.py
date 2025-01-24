@@ -621,6 +621,7 @@ class _attention(torch.autograd.Function):
         atomic_counter = torch.zeros([1], device=q_nope.device, dtype=torch.int32)
 
         q_nope_wkv_b = torch.zeros((*q_nope.shape[:-1], kv_lora_rank), dtype=q_nope.dtype, device=q_nope.device)
+        # q_nope_wkv_b = torch.zeros((*q_nope.shape[:-1], kv_lora_rank), dtype=torch.float32, device=q_nope.device)
         q_nope_wkv_b_strides = (q_nope_wkv_b.stride(0), q_nope_wkv_b.stride(1), q_nope_wkv_b.stride(2),
                                 q_nope_wkv_b.stride(3))
 
@@ -709,8 +710,8 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
 
     o = torch.empty_like(q_nope)
 
-    for x, x_name in zip([q_nope, q_pe, kv, k_pe, v, wkv_b], ["q_nope", "q_pe", "kv", "k_pe", "v", "wkv_b"]):
-        print(f"{x_name}: {x.shape}")
+    # for x, x_name in zip([q_nope, q_pe, kv, k_pe, v, wkv_b], ["q_nope", "q_pe", "kv", "k_pe", "v", "wkv_b"]):
+    #     print(f"{x_name}: {x.shape}")
 
     # warmup (let autotuning happen)
     attention(q_nope, q_pe, kv, k_pe.squeeze(1), o, wkv_b, causal, sm_scale)
@@ -720,11 +721,12 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
     start = time.time()
     tri_out, _, _ = attention(q_nope, q_pe, kv, k_pe.squeeze(1), o, wkv_b, causal, sm_scale)
     torch.cuda.synchronize()
-    print(f"time for triton: {time.time()-start}")
+    # print(f"time for triton: {time.time()-start}")
 
     torch.cuda.synchronize()
     start = time.time()
     # ref implementation
+    # q_nope, q_pe, kv, k_pe, v, wkv_b = q_nope.float(), q_pe.float(), kv.float(), k_pe.float(), v.float(), wkv_b.float()
     if ref_impl == "naive":
         q = torch.cat([q_nope, q_pe], dim=-1)
         # kv = self.wkv_b(self.kv_norm(kv))
@@ -732,32 +734,56 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
         kv = kv.view(B, H, S, qk_nope_head_dim + v_head_dim)
         k_nope, v = torch.split(kv, [qk_nope_head_dim, v_head_dim], dim=-1)
         k = torch.cat([k_nope, k_pe.expand(-1, H, -1, -1)], dim=-1)
-        scores = torch.einsum("bhsd,bhtd->bhst", q, k) * sm_scale
+        scores = torch.einsum("bhsd,bhtd->bhst", q, k).float() * sm_scale
     else:
         wkv_b = wkv_b.view(H, -1, kv_lora_rank)
+        # TODO Do we want this to be in fp32????? (kernel)
+        '''
+        tri_out: tensor([-0.2969, 15.5625,  4.6875, -7.2188, -8.7500], device='cuda:0',
+        dtype=torch.bfloat16)
+        ref_out: tensor([-0.4727, 15.5625,  4.6562, -7.3125, -8.5000], device='cuda:0',
+            dtype=torch.bfloat16)
+
+        dtype: torch.float16
+        tri_out: tensor([  2.2227,  14.7266,   6.1055,  -7.1992, -12.8672], device='cuda:0',
+            dtype=torch.float16)
+        ref_out: tensor([  2.0137,  14.7891,   5.9844,  -7.2031, -12.5156], device='cuda:0',
+            dtype=torch.float16)
+
+        dtype: torch.float32
+        tri_out: tensor([  2.1601,  14.7411,   6.0716,  -7.1933, -12.7727], device='cuda:0')
+        ref_out: tensor([  2.1600,  14.7411,   6.0715,  -7.1933, -12.7725], device='cuda:0')
+        '''
         q_nope = torch.einsum("bhsd,hdc->bhsc", q_nope, wkv_b[:, :qk_nope_head_dim])
-        scores = (torch.einsum("bhsc,btc->bhst", q_nope, kv) +
-                  torch.einsum("bhsr,btr->bhst", q_pe, k_pe.squeeze(1))) * sm_scale
+
+        scores = (torch.einsum("bhsc,btc->bhst", q_nope.float(), kv.float()) +
+                  torch.einsum("bhsr,btr->bhst", q_pe.float(), k_pe.squeeze(1).float())) * sm_scale
 
     if causal:
         mask = torch.full((S, S), float("-inf"), device=q_nope.device).triu_(1)
         scores += mask.unsqueeze(0)
 
-    scores = scores.softmax(dim=-1).type_as(q_nope)
+    scores = scores.softmax(dim=-1)
 
     if ref_impl == "naive":
-        ref_out = torch.einsum("bhst,bhtd->bhsd", scores, v)
+        ref_out = torch.einsum("bhst,bhtd->bhsd", scores, v.float()).to(dtype)
     else:
-        x = torch.einsum("bhst,btc->bhsc", scores, kv)
+        x = torch.einsum("bhst,btc->bhsc", scores, kv.float()).to(dtype)
         ref_out = torch.einsum("bhsc,hdc->bhsd", x, wkv_b[:, -v_head_dim:])
 
     torch.cuda.synchronize()
-    print(f"time for ref: {time.time()-start}")
-    print(f"ref out type {ref_out.dtype}")
-    print(f"tri out type {tri_out.dtype}")
+    # print(f"time for ref: {time.time()-start}")
+    # print(f"ref out type {ref_out.dtype}")
+    # print(f"tri out type {tri_out.dtype}")
 
-    print(f"ref_out (first 10): {ref_out.flatten()[:10]}")
-    print(f"tri_out (first 10): {tri_out.flatten()[:10]}")
+    # print(f"ref_out (first 10): {ref_out.flatten()[:10]}")
+    # print(f"tri_out (first 10): {tri_out.flatten()[:10]}")
+
+    # return tri_out
+
+    print(f"dtype: {dtype}")
+    print(f"tri_out: {tri_out[0, 0, 60, 0:5]}")
+    print(f"ref_out: {ref_out[0, 0, 60, 0:5]}")
 
     torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
@@ -803,7 +829,13 @@ arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': tor
 
 def main():
     # args = parse_args()
-    test_op_fwd(8, 16, 128, 512, 128, 64, 128, causal=True, layout="bhsd", dtype=torch.float32, ref_impl="absorb")
+    # test_op_fwd(1, 1, 128, 512, 128, 64, 128, causal=True, layout="bhsd", dtype=torch.bfloat16, ref_impl="absorb")
+
+    bf16test = test_op_fwd(1, 1, 64, 512, 128, 64, 128, causal=True, layout="bhsd", dtype=torch.bfloat16, ref_impl="absorb")
+    fp16test = test_op_fwd(1, 1, 64, 512, 128, 64, 128, causal=True, layout="bhsd", dtype=torch.float16, ref_impl="absorb")
+    fp32test = test_op_fwd(1, 1, 64, 512, 128, 64, 128, causal=True, layout="bhsd", dtype=torch.float32, ref_impl="absorb")
+
+    # torch.testing.assert_close(fp32test, fp16test.to(fp32test.dtype), atol=2e-2, rtol=2e-2)
 
 
 if __name__ == '__main__':
