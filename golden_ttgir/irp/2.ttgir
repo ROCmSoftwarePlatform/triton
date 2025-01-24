@@ -1,7 +1,33 @@
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
 
-//tail call void @llvm.amdgcn.sched.barrier(i32 1030), !dbg !59 ; mfma+lds+global
+//                   hex  dec
+//  NONE =        0x0000,   0
+//  ALL_ALU =     0x0001,   1
+//  VALU =        0x0002,   2
+//  SALU =        0x0004,   4
+//  MFMA =        0x0008,   8
+//  ALL_VMEM =    0x0010,  16
+//  VMEM_READ =   0x0020,  32
+//  VMEM_WRITE =  0x0040,  64
+//  ALL_DS =      0x0080,  128
+//  DS_READ =     0x0100,  256
+//  DS_WRITE =    0x0200,  512
+//  TRANSCEND =   0x0400, 1024
+
+// example
+// 2047 - (1+8+16+32+64+128+256+512) = 1030
+
+  //rocdl.sched.barrier 1030 // global+lds+mfma; translates to 0x406
+  //rocdl.sched.barrier 2038 // mfma
+  //rocdl.sched.barrier 1142 // mfma+lds
+  //rocdl.sched.barrier 1926 // mfma+global
+  //rocdl.sched.barrier 1039 // lds+global
+  //rocdl.sched.barrier 1030 // mfma+lds+global
+  //rocdl.sched.barrier 1791 // ds_read
+  //rocdl.sched.barrier 1535 // ds_writ
+  //rocdl.sched.barrier 1503 // global_load + ds_write
+
 
 #loc = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":72:0)
 #mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 16], isTransposed = true}>
@@ -22,94 +48,94 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c76_i32 = arith.constant 76 : i32 loc(#loc1)
     %c8_i32 = arith.constant 8 : i32 loc(#loc1)
     %c0_i32 = arith.constant 0 : i32 loc(#loc1)
-    %0 = tt.get_program_id x : i32 loc(#loc2)
-    %1 = arith.remsi %0, %c8_i32 : i32 loc(#loc3)
-    %2 = arith.muli %1, %c76_i32 : i32 loc(#loc4)
-    %3 = arith.divsi %0, %c8_i32 : i32 loc(#loc5)
-    %4 = arith.addi %2, %3 : i32 loc(#loc6)
-    %5 = arith.addi %arg5, %c255_i32 : i32 loc(#loc56)
-    %6 = arith.divsi %5, %c256_i32 : i32 loc(#loc57)
-    %7 = arith.muli %6, %c4_i32 : i32 loc(#loc10)
-    %8 = arith.divsi %4, %7 : i32 loc(#loc11)
-    %9 = arith.muli %8, %c4_i32 : i32 loc(#loc12)
-    %10 = arith.remsi %4, %7 : i32 loc(#loc13)
-    %11 = arith.addi %arg4, %c255_i32 : i32 loc(#loc58)
-    %12 = arith.divsi %11, %c256_i32 : i32 loc(#loc59)
-    %13 = arith.subi %12, %9 : i32 loc(#loc15)
-    %14 = arith.minsi %13, %c4_i32 : i32 loc(#loc16)
-    %15 = arith.remsi %10, %14 : i32 loc(#loc17)
-    %16 = arith.addi %9, %15 : i32 loc(#loc18)
-    %17 = arith.muli %16, %c256_i32 : i32 loc(#loc19)
-    %18 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc20)
-    %19 = tt.expand_dims %18 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked> loc(#loc21)
-    %20 = arith.muli %17, %arg7 : i32 loc(#loc21)
-    %21 = tt.splat %arg7 : i32 -> tensor<256x1xi32, #blocked> loc(#loc21)
-    %22 = arith.muli %19, %21 : tensor<256x1xi32, #blocked> loc(#loc21)
-    %23 = tt.addptr %arg0, %20 : !tt.ptr<f16>, i32 loc(#loc21)
-    %24 = tt.broadcast %22 : tensor<256x1xi32, #blocked> -> tensor<256x64xi32, #blocked> loc(#loc22)
-    %25 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc23)
-    %26 = tt.expand_dims %25 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked> loc(#loc22)
-    %27 = tt.broadcast %26 : tensor<1x64xi32, #blocked> -> tensor<256x64xi32, #blocked> loc(#loc22)
-    %28 = arith.addi %27, %24 : tensor<256x64xi32, #blocked> loc(#loc22)
-    %29 = tt.addptr %23, %c64_i32 : !tt.ptr<f16>, i32 loc(#loc24)
-    %30 = arith.addi %arg6, %c63_i32 : i32 loc(#loc60)
-    %31 = arith.divsi %30, %c64_i32 : i32 loc(#loc61)
-    %32 = arith.cmpi sgt, %31, %c0_i32 : i32 loc(#loc26)
-    %33 = tt.splat %32 : i1 -> tensor<256x64xi1, #blocked> loc(#loc26)
+    %0 = tt.get_program_id x : i32 loc(#loc1)
+    %1 = arith.remsi %0, %c8_i32 : i32 loc(#loc1)
+    %2 = arith.muli %1, %c76_i32 : i32 loc(#loc1)
+    %3 = arith.divsi %0, %c8_i32 : i32 loc(#loc1)
+    %4 = arith.addi %2, %3 : i32 loc(#loc1)
+    %5 = arith.addi %arg5, %c255_i32 : i32 loc(#loc1)
+    %6 = arith.divsi %5, %c256_i32 : i32 loc(#loc1)
+    %7 = arith.muli %6, %c4_i32 : i32 loc(#loc1)
+    %8 = arith.divsi %4, %7 : i32 loc(#loc1)
+    %9 = arith.muli %8, %c4_i32 : i32 loc(#loc1)
+    %10 = arith.remsi %4, %7 : i32 loc(#loc1)
+    %11 = arith.addi %arg4, %c255_i32 : i32 loc(#loc1)
+    %12 = arith.divsi %11, %c256_i32 : i32 loc(#loc1)
+    %13 = arith.subi %12, %9 : i32 loc(#loc1)
+    %14 = arith.minsi %13, %c4_i32 : i32 loc(#loc1)
+    %15 = arith.remsi %10, %14 : i32 loc(#loc1)
+    %16 = arith.addi %9, %15 : i32 loc(#loc1)
+    %17 = arith.muli %16, %c256_i32 : i32 loc(#loc1)
+    %18 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc1)
+    %19 = tt.expand_dims %18 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked> loc(#loc1)
+    %20 = arith.muli %17, %arg7 : i32 loc(#loc1)
+    %21 = tt.splat %arg7 : i32 -> tensor<256x1xi32, #blocked> loc(#loc1)
+    %22 = arith.muli %19, %21 : tensor<256x1xi32, #blocked> loc(#loc1)
+    %23 = tt.addptr %arg0, %20 : !tt.ptr<f16>, i32 loc(#loc1)
+    %24 = tt.broadcast %22 : tensor<256x1xi32, #blocked> -> tensor<256x64xi32, #blocked> loc(#loc1)
+    %25 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc1)
+    %26 = tt.expand_dims %25 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked> loc(#loc1)
+    %27 = tt.broadcast %26 : tensor<1x64xi32, #blocked> -> tensor<256x64xi32, #blocked> loc(#loc1)
+    %28 = arith.addi %27, %24 : tensor<256x64xi32, #blocked> loc(#loc1)
+    %29 = tt.addptr %23, %c64_i32 : !tt.ptr<f16>, i32 loc(#loc1)
+    %30 = arith.addi %arg6, %c63_i32 : i32 loc(#loc1)
+    %31 = arith.divsi %30, %c64_i32 : i32 loc(#loc1)
+    %32 = arith.cmpi sgt, %31, %c0_i32 : i32 loc(#loc1)
+    %33 = tt.splat %32 : i1 -> tensor<256x64xi1, #blocked> loc(#loc1)
     // GR[0]
-    %34 = amdgpu.buffer_load %23[%28], %33 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> loc(#loc27)
-    %35 = arith.cmpi sgt, %31, %c1_i32 : i32 loc(#loc26)
-    %36 = tt.splat %35 : i1 -> tensor<256x64xi1, #blocked> loc(#loc26)
-    %37 = amdgpu.buffer_load %29[%28], %36 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> loc(#loc27)
-    %38 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> loc(#loc28)
-    %39 = tt.expand_dims %38 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<64x1xi32, #blocked1> loc(#loc29)
-    %40 = tt.broadcast %39 : tensor<64x1xi32, #blocked1> -> tensor<64x256xi32, #blocked1> loc(#loc30)
-    %41 = arith.divsi %10, %14 : i32 loc(#loc31)
-    %42 = arith.muli %41, %c256_i32 : i32 loc(#loc32)
-    %43 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> loc(#loc20)
-    %44 = tt.expand_dims %43 {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> -> tensor<1x256xi32, #blocked1> loc(#loc30)
-    %45 = arith.muli %42, %arg8 : i32 loc(#loc30)
-    %46 = tt.splat %arg8 : i32 -> tensor<1x256xi32, #blocked1> loc(#loc30)
-    %47 = arith.muli %44, %46 : tensor<1x256xi32, #blocked1> loc(#loc30)
-    %48 = tt.broadcast %47 : tensor<1x256xi32, #blocked1> -> tensor<64x256xi32, #blocked1> loc(#loc30)
-    %49 = tt.addptr %arg1, %45 : !tt.ptr<f16>, i32 loc(#loc30)
-    %50 = arith.addi %48, %40 : tensor<64x256xi32, #blocked1> loc(#loc30)
-    %51 = tt.addptr %49, %c64_i32 : !tt.ptr<f16>, i32 loc(#loc33)
-    %52 = tt.splat %32 : i1 -> tensor<64x256xi1, #blocked1> loc(#loc26)
+    %34 = amdgpu.buffer_load %23[%28], %33 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> loc(#loc1)
+    %35 = arith.cmpi sgt, %31, %c1_i32 : i32 loc(#loc1)
+    %36 = tt.splat %35 : i1 -> tensor<256x64xi1, #blocked> loc(#loc1)
+    %37 = amdgpu.buffer_load %29[%28], %36 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> loc(#loc1)
+    %38 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> loc(#loc1)
+    %39 = tt.expand_dims %38 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<64x1xi32, #blocked1> loc(#loc1)
+    %40 = tt.broadcast %39 : tensor<64x1xi32, #blocked1> -> tensor<64x256xi32, #blocked1> loc(#loc1)
+    %41 = arith.divsi %10, %14 : i32 loc(#loc1)
+    %42 = arith.muli %41, %c256_i32 : i32 loc(#loc1)
+    %43 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> loc(#loc1)
+    %44 = tt.expand_dims %43 {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> -> tensor<1x256xi32, #blocked1> loc(#loc1)
+    %45 = arith.muli %42, %arg8 : i32 loc(#loc1)
+    %46 = tt.splat %arg8 : i32 -> tensor<1x256xi32, #blocked1> loc(#loc1)
+    %47 = arith.muli %44, %46 : tensor<1x256xi32, #blocked1> loc(#loc1)
+    %48 = tt.broadcast %47 : tensor<1x256xi32, #blocked1> -> tensor<64x256xi32, #blocked1> loc(#loc1)
+    %49 = tt.addptr %arg1, %45 : !tt.ptr<f16>, i32 loc(#loc1)
+    %50 = arith.addi %48, %40 : tensor<64x256xi32, #blocked1> loc(#loc1)
+    %51 = tt.addptr %49, %c64_i32 : !tt.ptr<f16>, i32 loc(#loc1)
+    %52 = tt.splat %32 : i1 -> tensor<64x256xi1, #blocked1> loc(#loc1)
     // GR[1]
-    %53 = amdgpu.buffer_load %49[%50], %52 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> loc(#loc34)
-    %54 = tt.splat %35 : i1 -> tensor<64x256xi1, #blocked1> loc(#loc26)
-    %55 = amdgpu.buffer_load %51[%50], %54 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> loc(#loc34)
-    %56 = arith.cmpi sgt, %arg7, %c0_i32 : i32 loc(#loc35)
-    llvm.intr.assume %56 : i1 loc(#loc36)
-    llvm.intr.assume %true : i1 loc(#loc37)
-    llvm.intr.assume %true : i1 loc(#loc38)
-    %57 = arith.cmpi sgt, %arg8, %c0_i32 : i32 loc(#loc39)
-    llvm.intr.assume %57 : i1 loc(#loc40)
-    %58 = arith.cmpi sgt, %arg9, %c0_i32 : i32 loc(#loc41)
-    llvm.intr.assume %58 : i1 loc(#loc42)
-    llvm.intr.assume %true : i1 loc(#loc43)
-    %59 = arith.cmpi sgt, %arg10, %c0_i32 : i32 loc(#loc44)
-    llvm.intr.assume %59 : i1 loc(#loc45)
-    %60 = arith.cmpi sgt, %16, %c0_i32 : i32 loc(#loc46)
-    llvm.intr.assume %60 : i1 loc(#loc47)
-    %61 = arith.cmpi sgt, %41, %c0_i32 : i32 loc(#loc48)
-    llvm.intr.assume %61 : i1 loc(#loc49)
-    %62 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma}>> loc(#loc20)
-    %63 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #mma}>> loc(#loc20)
-    %64 = tt.expand_dims %62 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma}>> -> tensor<256x1xi32, #mma> loc(#loc50)
-    %65 = tt.expand_dims %63 {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #mma}>> -> tensor<1x256xi32, #mma> loc(#loc51)
-    %66 = ttg.local_alloc  : () -> !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> loc(#loc27)
-    %67 = ttg.local_alloc  : () -> !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> loc(#loc34)
+    %53 = amdgpu.buffer_load %49[%50], %52 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> loc(#loc1)
+    %54 = tt.splat %35 : i1 -> tensor<64x256xi1, #blocked1> loc(#loc1)
+    %55 = amdgpu.buffer_load %51[%50], %54 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> loc(#loc1)
+    %56 = arith.cmpi sgt, %arg7, %c0_i32 : i32 loc(#loc1)
+    llvm.intr.assume %56 : i1 loc(#loc1)
+    llvm.intr.assume %true : i1 loc(#loc1)
+    llvm.intr.assume %true : i1 loc(#loc1)
+    %57 = arith.cmpi sgt, %arg8, %c0_i32 : i32 loc(#loc1)
+    llvm.intr.assume %57 : i1 loc(#loc1)
+    %58 = arith.cmpi sgt, %arg9, %c0_i32 : i32 loc(#loc1)
+    llvm.intr.assume %58 : i1 loc(#loc1)
+    llvm.intr.assume %true : i1 loc(#loc1)
+    %59 = arith.cmpi sgt, %arg10, %c0_i32 : i32 loc(#loc1)
+    llvm.intr.assume %59 : i1 loc(#loc1)
+    %60 = arith.cmpi sgt, %16, %c0_i32 : i32 loc(#loc1)
+    llvm.intr.assume %60 : i1 loc(#loc1)
+    %61 = arith.cmpi sgt, %41, %c0_i32 : i32 loc(#loc1)
+    llvm.intr.assume %61 : i1 loc(#loc1)
+    %62 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma}>> loc(#loc1)
+    %63 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #mma}>> loc(#loc1)
+    %64 = tt.expand_dims %62 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma}>> -> tensor<256x1xi32, #mma> loc(#loc1)
+    %65 = tt.expand_dims %63 {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #mma}>> -> tensor<1x256xi32, #mma> loc(#loc1)
+    %66 = ttg.local_alloc  : () -> !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> loc(#loc1)
+    %67 = ttg.local_alloc  : () -> !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> loc(#loc1)
     // LW[0]
-    %68 = ttg.memdesc_subview %66[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc27)
-    ttg.local_store %34, %68 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc27)
-    %69 = ttg.memdesc_subview %67[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc34)
-    ttg.local_store %53, %69 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc34)
+    %68 = ttg.memdesc_subview %66[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc1)
+    ttg.local_store %34, %68 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc1)
+    %69 = ttg.memdesc_subview %67[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc1)
+    ttg.local_store %53, %69 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc1)
     // LR[0]
-    %70 = ttg.local_load %68 : !ttg.memdesc<256x64xf16, #shared, #smem, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc27)
-    %71 = ttg.local_load %69 : !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc34)
-    %72 = arith.subi %31, %c2_i32 : i32 loc(#loc26)
+    %70 = ttg.local_load %68 : !ttg.memdesc<256x64xf16, #shared, #smem, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %71 = ttg.local_load %69 : !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %72 = arith.subi %31, %c2_i32 : i32 loc(#loc1)
 
     //////////////////////////////////////////////////////////////////////////////
 
@@ -132,25 +158,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
           !tt.ptr<f16>) : i32 {
 
       // LW[K+1]
-      %w102 = ttg.memdesc_subview %66[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc27)
-      ttg.local_store %arg14, %w102 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc27)
-      %w103 = ttg.memdesc_subview %67[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc34)
-      ttg.local_store %arg15, %w103 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc34)
+      %w102 = ttg.memdesc_subview %66[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc1)
+      ttg.local_store %arg14, %w102 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc1)
+      %w103 = ttg.memdesc_subview %67[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc1)
+      ttg.local_store %arg15, %w103 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc1)
 
-      rocdl.sched.barrier 1030 // global+lds+mfma
+      //rocdl.sched.barrier 1030 // global+lds+mfma;        530 TFlops
+      //rocdl.sched.barrier    0 // BB;                     400 TFlops
+      rocdl.sched.barrier 1503 // global_load + ds_write;  97 TFlops; working correctly
 
       // GR[K+2]
-      %g96 = tt.addptr %arg18, %c64_i32 : !tt.ptr<f16>, i32 loc(#loc24)
-      %g97 = amdgpu.buffer_load %g96[%28] {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> loc(#loc27)
-      %g98 = tt.addptr %arg19, %c64_i32 : !tt.ptr<f16>, i32 loc(#loc33)
-      %g104 = amdgpu.buffer_load %g98[%50] {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> loc(#loc34)
+      %g96 = tt.addptr %arg18, %c64_i32 : !tt.ptr<f16>, i32 loc(#loc1)
+      %g97 = amdgpu.buffer_load %g96[%28] {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> loc(#loc1)
+      %g98 = tt.addptr %arg19, %c64_i32 : !tt.ptr<f16>, i32 loc(#loc1)
+      %g104 = amdgpu.buffer_load %g98[%50] {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> loc(#loc1)
+
+      //rocdl.sched.barrier 1030 // global+lds+mfma;       530 TFlops
 
       // DOT[K] has 256 mfmas
-      %d105 = tt.dot %arg16, %arg17, %arg12 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<256x256xf32, #mma> loc(#loc52)
+      %d105 = tt.dot %arg16, %arg17, %arg12 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<256x256xf32, #mma> loc(#loc1)
+
+      //rocdl.sched.barrier 1030 // global+lds+mfma;       530 TFlops
 
       // LR[K+1] 16*2 ds_read_b128
-      %l106 = ttg.local_load %w102 : !ttg.memdesc<256x64xf16, #shared, #smem, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc27)
-      %l107 = ttg.local_load %w103 : !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc34)
+      %l106 = ttg.local_load %w102 : !ttg.memdesc<256x64xf16, #shared, #smem, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %l107 = ttg.local_load %w103 : !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
 
       scf.yield
           %d105,
@@ -168,100 +200,130 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
             tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>,
             tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>,
             !tt.ptr<f16>,
-            !tt.ptr<f16> loc(#loc26)
-    } loc(#loc26)
+            !tt.ptr<f16> loc(#loc1)
+    } loc(#loc1)
 
     //////////////////////////////////////////////////////////////////////////////
 
     // LR[K-1]
-    %79 = ttg.memdesc_subview %66[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc27)
-    ttg.local_store %73#2, %79 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc27)
-    %80 = ttg.memdesc_subview %67[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc34)
-    ttg.local_store %73#3, %80 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc34)
+    %79 = ttg.memdesc_subview %66[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc1)
+    ttg.local_store %73#2, %79 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc1)
+    %80 = ttg.memdesc_subview %67[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc1)
+    ttg.local_store %73#3, %80 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc1)
     
     // LR[K-1]
-    %82 = ttg.local_load %79 : !ttg.memdesc<256x64xf16, #shared, #smem, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc27)
-    %83 = ttg.local_load %80 : !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc34)
+    %82 = ttg.local_load %79 : !ttg.memdesc<256x64xf16, #shared, #smem, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %83 = ttg.local_load %80 : !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
     // Dot[K-2]
-    %84 = tt.dot %73#4, %73#5, %73#0 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<256x256xf32, #mma> loc(#loc52)
+    %84 = tt.dot %73#4, %73#5, %73#0 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<256x256xf32, #mma> loc(#loc1)
     // Dot[K-1]
-    %86 = tt.dot %82, %83, %84 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<256x256xf32, #mma> loc(#loc52)
+    %86 = tt.dot %82, %83, %84 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<256x256xf32, #mma> loc(#loc1)
 
-    ttg.local_dealloc %66 : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> loc(#loc26)
-    ttg.local_dealloc %67 : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> loc(#loc26)
-    %87 = arith.truncf %86 : tensor<256x256xf32, #mma> to tensor<256x256xf16, #mma> loc(#loc53)
+    ttg.local_dealloc %66 : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> loc(#loc1)
+    ttg.local_dealloc %67 : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> loc(#loc1)
+
+    // epilogue c data
+    %ec = arith.truncf %86 : tensor<256x256xf32, #mma> to tensor<256x256xf16, #mma> loc(#loc1)
+    %ec00 = amdgpu.extract_slice %ec [   0,   0 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec01 = amdgpu.extract_slice %ec [   0,  64 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec02 = amdgpu.extract_slice %ec [   0, 128 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec03 = amdgpu.extract_slice %ec [   0, 192 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec10 = amdgpu.extract_slice %ec [  64,   0 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec11 = amdgpu.extract_slice %ec [  64,  64 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec12 = amdgpu.extract_slice %ec [  64, 128 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec13 = amdgpu.extract_slice %ec [  64, 192 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec20 = amdgpu.extract_slice %ec [ 128,   0 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec21 = amdgpu.extract_slice %ec [ 128,  64 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec22 = amdgpu.extract_slice %ec [ 128, 128 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec23 = amdgpu.extract_slice %ec [ 128, 192 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec30 = amdgpu.extract_slice %ec [ 192,   0 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec31 = amdgpu.extract_slice %ec [ 192,  64 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec32 = amdgpu.extract_slice %ec [ 192, 128 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
+    %ec33 = amdgpu.extract_slice %ec [ 192, 192 ] : tensor<256x256xf16, #mma> to tensor<64x64xf16, #mma>
 
     // Global write.
-    %88 = arith.muli %arg9, %17 : i32 loc(#loc50)
-    %89 = tt.splat %arg9 : i32 -> tensor<256x1xi32, #mma> loc(#loc50)
-    %90 = arith.muli %89, %64 : tensor<256x1xi32, #mma> loc(#loc50)
-    %91 = tt.addptr %arg2, %88 : !tt.ptr<f16>, i32 loc(#loc50)
-    %92 = tt.broadcast %90 : tensor<256x1xi32, #mma> -> tensor<256x256xi32, #mma> loc(#loc51)
-    %93 = tt.broadcast %65 : tensor<1x256xi32, #mma> -> tensor<256x256xi32, #mma> loc(#loc51)
-    %94 = tt.addptr %91, %42 : !tt.ptr<f16>, i32 loc(#loc51)
-    %95 = arith.addi %93, %92 : tensor<256x256xi32, #mma> loc(#loc51)
-    amdgpu.buffer_store %87, %94[%95] : tensor<256x256xf16, #mma> loc(#loc54)
-    tt.return loc(#loc55)
-  } loc(#loc)
-} loc(#loc)
+
+    // epilogue address; same for whole wave?
+    %e88 = arith.muli %arg9, %17 : i32 loc(#loc1)
+    %e91 = tt.addptr %arg2, %e88 : !tt.ptr<f16>, i32 loc(#loc1)
+    %ea = tt.addptr %e91, %42 : !tt.ptr<f16>, i32 loc(#loc1)
+
+    // epilogue index
+    //%89 = tt.splat %arg9 : i32 -> tensor<256x1xi32, #mma> loc(#loc1)
+    %e0_89 = tt.splat %arg9 : i32 -> tensor<64x1xi32, #mma> loc(#loc1)
+    %e1_89 = tt.splat %arg9 : i32 -> tensor<64x1xi32, #mma> loc(#loc1)
+    %e2_89 = tt.splat %arg9 : i32 -> tensor<64x1xi32, #mma> loc(#loc1)
+    %e3_89 = tt.splat %arg9 : i32 -> tensor<64x1xi32, #mma> loc(#loc1)
+
+    // extract slice of dims
+    %e0_64 = amdgpu.extract_slice %64 [  0,0] : tensor<256x1xi32, #mma> to tensor<64x1xi32, #mma>
+    %e1_64 = amdgpu.extract_slice %64 [ 64,0] : tensor<256x1xi32, #mma> to tensor<64x1xi32, #mma>
+    %e2_64 = amdgpu.extract_slice %64 [128,0] : tensor<256x1xi32, #mma> to tensor<64x1xi32, #mma>
+    %e3_64 = amdgpu.extract_slice %64 [192,0] : tensor<256x1xi32, #mma> to tensor<64x1xi32, #mma>
+
+    //%90 = arith.muli %89, %64 : tensor<256x1xi32, #mma> loc(#loc1)
+    %e0_90 = arith.muli %e0_89, %e0_64 : tensor<64x1xi32, #mma> loc(#loc1)
+    %e1_90 = arith.muli %e1_89, %e1_64 : tensor<64x1xi32, #mma> loc(#loc1)
+    %e2_90 = arith.muli %e2_89, %e2_64 : tensor<64x1xi32, #mma> loc(#loc1)
+    %e3_90 = arith.muli %e3_89, %e3_64 : tensor<64x1xi32, #mma> loc(#loc1)
+
+    //%92 = tt.broadcast %90 : tensor<256x1xi32, #mma> -> tensor<256x256xi32, #mma> loc(#loc1)
+    %e0_92 = tt.broadcast %e0_90 : tensor<64x1xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+    %e1_92 = tt.broadcast %e1_90 : tensor<64x1xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+    %e2_92 = tt.broadcast %e2_90 : tensor<64x1xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+    %e3_92 = tt.broadcast %e3_90 : tensor<64x1xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+
+    // extract slice of dims
+    %e0_65 = amdgpu.extract_slice %65 [0,  0] : tensor<1x256xi32, #mma> to tensor<1x64xi32, #mma>
+    %e1_65 = amdgpu.extract_slice %65 [0, 64] : tensor<1x256xi32, #mma> to tensor<1x64xi32, #mma>
+    %e2_65 = amdgpu.extract_slice %65 [0,128] : tensor<1x256xi32, #mma> to tensor<1x64xi32, #mma>
+    %e3_65 = amdgpu.extract_slice %65 [0,192] : tensor<1x256xi32, #mma> to tensor<1x64xi32, #mma>
+
+    //%93 = tt.broadcast %65 : tensor<1x256xi32, #mma> -> tensor<256x256xi32, #mma> loc(#loc1)
+    %e0_93 = tt.broadcast %e0_65 : tensor<1x64xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+    %e1_93 = tt.broadcast %e1_65 : tensor<1x64xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+    %e2_93 = tt.broadcast %e2_65 : tensor<1x64xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+    %e3_93 = tt.broadcast %e3_65 : tensor<1x64xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+
+    // index
+    %ei00 = arith.addi %e0_92, %e0_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei01 = arith.addi %e0_92, %e1_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei02 = arith.addi %e0_92, %e2_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei03 = arith.addi %e0_92, %e3_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei10 = arith.addi %e1_92, %e0_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei11 = arith.addi %e1_92, %e1_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei12 = arith.addi %e1_92, %e2_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei13 = arith.addi %e1_92, %e3_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei20 = arith.addi %e2_92, %e0_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei21 = arith.addi %e2_92, %e1_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei22 = arith.addi %e2_92, %e2_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei23 = arith.addi %e2_92, %e3_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei30 = arith.addi %e3_92, %e0_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei31 = arith.addi %e3_92, %e1_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei32 = arith.addi %e3_92, %e2_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ei33 = arith.addi %e3_92, %e3_93 : tensor<64x64xi32, #mma> loc(#loc1)
+
+    // store
+    amdgpu.buffer_store %ec00, %ea[%ei00] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec01, %ea[%ei01] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec02, %ea[%ei02] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec03, %ea[%ei03] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec10, %ea[%ei10] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec11, %ea[%ei11] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec12, %ea[%ei12] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec13, %ea[%ei13] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec20, %ea[%ei20] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec21, %ea[%ei21] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec22, %ea[%ei22] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec23, %ea[%ei23] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec30, %ea[%ei30] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec31, %ea[%ei31] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec32, %ea[%ei32] : tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec33, %ea[%ei33] : tensor<64x64xf16, #mma> loc(#loc1)
+
+
+
+    tt.return loc(#loc1)
+  } loc(#loc1)
+} loc(#loc1)
 #loc1 = loc(unknown)
-#loc2 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":106:24)
-#loc3 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":116:20)
-#loc4 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":119:20)
-#loc5 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":117:27)
-#loc6 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":119:35)
-#loc7 = loc("/home/dtanner/repos/triton/python/triton/language/standard.py":40:22)
-#loc8 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":109:27)
-#loc9 = loc("/home/dtanner/repos/triton/python/triton/language/standard.py":40:28)
-#loc10 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":125:42)
-#loc11 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":126:26)
-#loc12 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":127:33)
-#loc13 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":129:38)
-#loc14 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":108:27)
-#loc15 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":128:39)
-#loc16 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":128:52)
-#loc17 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":129:58)
-#loc18 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":129:31)
-#loc19 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":139:23)
-#loc20 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":139:51)
-#loc21 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":141:21)
-#loc22 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":141:52)
-#loc23 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":141:59)
-#loc24 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":157:18)
-#loc25 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":149:36)
-#loc26 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":149:25)
-#loc27 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":151:24)
-#loc28 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":142:28)
-#loc29 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":142:21)
-#loc30 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":142:51)
-#loc31 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":130:44)
-#loc32 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":140:23)
-#loc33 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":158:18)
-#loc34 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":152:24)
-#loc35 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":98:26)
-#loc36 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":98:14)
-#loc37 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":99:14)
-#loc38 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":100:14)
-#loc39 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":101:26)
-#loc40 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":101:14)
-#loc41 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":102:26)
-#loc42 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":102:14)
-#loc43 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":103:14)
-#loc44 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":104:28)
-#loc45 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":104:14)
-#loc46 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":132:22)
-#loc47 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":132:14)
-#loc48 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":133:22)
-#loc49 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":133:14)
-#loc50 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":164:21)
-#loc51 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":164:52)
-#loc52 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":156:33)
-#loc53 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":159:23)
-#loc54 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":167:25)
-#loc55 = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":166:4)
-#loc56 = loc(callsite(#loc7 at #loc8))
-#loc57 = loc(callsite(#loc9 at #loc8))
-#loc58 = loc(callsite(#loc7 at #loc14))
-#loc59 = loc(callsite(#loc9 at #loc14))
-#loc60 = loc(callsite(#loc7 at #loc25))
-#loc61 = loc(callsite(#loc9 at #loc25))
