@@ -229,20 +229,24 @@ def _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs,
         # update m_i and l_i
         m_i = m_ij
 
+        # leave wkv_b gemm outside
+
         kv = load_fn(kv_ptrs + kv_offs_c, None, k_offs_n, None, actual_seqlen_k)
         acc += tl.dot(p.to(kv.type.element_ty), kv.trans())
 
+        
+        # Or do wkv_b gemm inside
         # for k in range(0, tl.cdiv(K, BLOCK_K)):
         #     #if EVEN_K:
-        #     # wkv_b_k_2 = tl.load(wkv_b_ptrs2 + k * BLOCK_K * stride_wkv_b_k)
+        #     wkv_b_k_2 = tl.load(wkv_b_ptrs2 + k * BLOCK_K * stride_wkv_b_k)
         #     # kv_k = tl.load(kv_ptrs + k * BLOCK_K * stride_kv_k)
-        #     kv_k = load_fn(kv_ptrs + k * BLOCK_K * stride_kv_k, None, k_offs_n, None, actual_seqlen_k)
+        #     kv_k = load_fn(kv_ptrs + kv_offs_k + k * BLOCK_K * stride_kv_k, None, k_offs_n, None, actual_seqlen_k)
         #     # else:
         #     #     
         #     # 
-        #     # v_k = tl.dot(wkv_b_k_2, kv_k).trans() # values k subset
+        #     v_k = tl.dot(wkv_b_k_2, kv_k).trans() # values k subset
             
-        #     acc += tl.dot(p.to(kv_k.type.element_ty), kv_k.trans())
+        #     acc += tl.dot(p.to(v_k.type.element_ty), v_k)
 
         kv_ptrs += BLOCK_N * stride_kv_n
         k_pe_ptrs += BLOCK_N * stride_k_pe_n
@@ -253,6 +257,25 @@ def _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, bias_ptrs,
 
 
     return acc, l_i, m_i
+
+
+
+@triton.jit
+def splitKdot(a, b, acc, M: tl.constexpr, N: tl.constexpr, split_k: tl.constexpr):
+    a = a.reshape((M,-1,2))
+    b = b.reshape((N,-1,2))
+
+    a1, a2 = a.split()
+    b1, b2 = b.split()
+
+    if split_k==0:
+        acc += tl.dot(a1, b1) + tl.dot(a2, b2)
+        return 0
+    else:
+        splitKdot(a1,b1, acc, M, N, split_k-1)
+        splitKdot(a2,b2, acc, M, N, split_k-1)
+
+    return 0
 
 
 def get_cdna_autotune_configs():
@@ -439,7 +462,7 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, bias, SM_SCALE: tl.con
                 # weight matrix:                
                 wkv_b_offset = WKV_B + off_h_q * stride_wkv_b_h 
                 wkv_b_ptrs1 = wkv_b_offset + offs_wkv_b_qk[:, None] * stride_wkv_b_d + offs_k[None, :] * stride_wkv_b_c
-                wkv_b_ptrs2 = wkv_b_offset + offs_wkv_b_v[:, None] * stride_wkv_b_d + offs_c[None, :] * stride_wkv_b_c
+                wkv_b_ptrs2 = wkv_b_offset + offs_wkv_b_v[None, :] * stride_wkv_b_d + offs_k[:, None] * stride_wkv_b_c
 
                 # Compute pointers for all the scale tensors used in this kernel.
                 INT8_GEMM: tl.constexpr = INT8 & (not INT8_KV)
@@ -501,7 +524,7 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, bias, SM_SCALE: tl.con
                     # else:
                     #     
                     #     
-                    q_wkv_b_k = tl.dot(q_nope, wkv_b_k_1)
+                    q_wkv_b_k = tl.dot(q_nope, wkv_b_k_1).to(q_nope.type.element_ty)
                     # TODO: store back to some accumulator tensor in parts
                     tl.store(q_wkv_b_ptrs + k * BLOCK_K * stride_q_nope_wkv_b_c, q_wkv_b_k)
                 
@@ -601,52 +624,52 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, bias, SM_SCALE: tl.con
                         acc *= p_descale
                     acc *= v_descale
 
-                # computations that fill up the acc
 
                 # acc is BLOCK_M x c 
                 # we need to acc * wkv_b (: c x d)
                 # need to split in c dimension
-                # how to access acc[:,:K_BLOCK]?
+                # how to access acc[:,:BLOCK_K] and wkv_b[:BLOCK_K,:]?
 
-                wkv_b2 = tl.load(wkv_b_ptrs2)
-                acc = acc.to(wkv_b2.type.element_ty)
+                # wkv_b2 = tl.load(wkv_b_ptrs2)
+                acc = acc.to(q_nope.type.element_ty)
 
+                # we can reuse the q_nope_wkv_b tensor from before to store the acc
+                acc_ptrs = q_wkv_b_offset + offs_m[:, None] * stride_q_nope_wkv_b_s + offs_c[None, :] * stride_q_nope_wkv_b_c
+                tl.store(acc_ptrs, acc)
 
-                acc = acc.reshape((BLOCK_M, kv_lora_rank//2, 2), can_reorder=True)
-                acc_k1, acc_k2 = acc.split()
-                acc_k1 = acc_k1.reshape((BLOCK_M, kv_lora_rank//4, 2), can_reorder=True)
-                acc_k2 = acc_k2.reshape((BLOCK_M, kv_lora_rank//4, 2), can_reorder=True)
-                acc_k11, acc_k12 = acc_k1.split()
-                acc_k21, acc_k22 = acc_k2.split()
+                acc = tl.zeros([BLOCK_M, v_head_dim], dtype=tl.float32)
 
-                
-                wkv_b2 = wkv_b2.reshape((v_head_dim, kv_lora_rank//2, 2), can_reorder=True)
-                wkv_b2_k1, wkv_b2_k2 = wkv_b2.split()
-                wkv_b2_k1 = wkv_b2_k1.reshape((v_head_dim, kv_lora_rank//4, 2), can_reorder=True)
-                wkv_b2_k2 = wkv_b2_k2.reshape((v_head_dim, kv_lora_rank//4, 2), can_reorder=True)
-                wkv_b2_k11, wkv_b2_k12 = wkv_b2_k1.split()
-                wkv_b2_k21, wkv_b2_k22 = wkv_b2_k2.split()
-
-                acc = (
-                    tl.dot(acc_k11, wkv_b2_k11.trans()) +
-                    tl.dot(acc_k12, wkv_b2_k12.trans()) +
-                    tl.dot(acc_k21, wkv_b2_k21.trans()) +
-                    tl.dot(acc_k22, wkv_b2_k22.trans())
-                )
+                for k in range(0, tl.cdiv(kv_lora_rank, BLOCK_K)):
+                    #if EVEN_K:
+                    wkv_b_k_2 = tl.load(wkv_b_ptrs2 + k * BLOCK_K * stride_wkv_b_c)
+                    acc_k_ptrs = q_wkv_b_ptrs + k * BLOCK_K * stride_q_nope_wkv_b_c # we can even reuse this
+                    acc_k =  tl.load(acc_k_ptrs)
+                    # else:
+                    #     
+                    #     
+                    acc += tl.dot(acc_k, wkv_b_k_2)
 
 
-                # for k in range(0, tl.cdiv(kv_lora_rank, BLOCK_K)):
-                #     #if EVEN_K:
-                #     wkv_b_k_2 = tl.load(wkv_b_ptrs2 + k * BLOCK_K * stride_wkv_b_c)
-                #     # else:
-                #     #     
-                #     #
-                #     acc_k = tl.load()    
-                #     pv = tl.dot(acc, wkv_b_k_2)
-                #     # TODO: store back to some accumulator tensor in parts
-                #     tl.store(q_wkv_b_ptrs + k * BLOCK_K * stride_q_nope_wkv_b_c, q_wkv_b_k)
 
-                
+                # OR with the triton split functionality (This is slow currently)
+
+                # acc = acc.reshape((BLOCK_M, kv_lora_rank//4, 2, 2))
+                # acc_k1, acc_k2 = acc.split()
+                # acc_k11, acc_k12 = acc_k1.split()
+                # acc_k21, acc_k22 = acc_k2.split()
+
+
+                # wkv_b2 = wkv_b2.reshape((v_head_dim, kv_lora_rank//4, 2, 2))
+                # wkv_b2_k1, wkv_b2_k2 = wkv_b2.split()
+                # wkv_b2_k11, wkv_b2_k12 = wkv_b2_k1.split()
+                # wkv_b2_k21, wkv_b2_k22 = wkv_b2_k2.split()
+
+                # acc = (
+                #     tl.dot(acc_k11, wkv_b2_k11.trans()) +
+                #     tl.dot(acc_k12, wkv_b2_k12.trans()) +
+                #     tl.dot(acc_k21, wkv_b2_k21.trans()) +
+                #     tl.dot(acc_k22, wkv_b2_k22.trans())
+                # )
 
                 
                 # epilogue
@@ -853,7 +876,7 @@ def input_helper_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, 
 
     wkv_b = torch.randn(wkv_b_tensor_shape, dtype=dtype, device="cuda", requires_grad=requires_grad)
 
-    sm_scale = qk_nope_head_dim**-0.5
+    sm_scale = 1.0 #qk_nope_head_dim**-0.5
     input_metadata = MetaData(sm_scale=sm_scale)
     input_metadata.max_seqlens_q = S
     input_metadata.max_seqlens_k = S
@@ -938,7 +961,7 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
         scores = (torch.einsum("bhsc,btc->bhst", q_nope, kv) +
                     torch.einsum("bhsr,btr->bhst", q_pe, k_pe.squeeze(1))) * input_metadata.sm_scale
 
-    scores = scores.softmax(dim=-1, dtype=torch.float32).type_as(q_nope)
+    scores = scores.softmax(dim=-1).type_as(q_nope)
 
     if ref_impl=="naive":
         ref_out = torch.einsum("bhst,bhtd->bhsd", scores, v)
@@ -948,7 +971,8 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
 
     torch.cuda.synchronize()
     print(f"time for ref: {time.time()-start}")
-
+    print(f"ref out type {ref_out.dtype}")
+    print(f"tri out type {tri_out.dtype}")
 
     torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
@@ -1007,9 +1031,9 @@ def main():
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
 
-    # sanity_check(8, 16, 128, 512, 128, 64, 128, False, False, "bhsd")
+    # sanity_check(8, 16, 4096, 512, 128, 64, 128, False, False, "bhsd", torch.float32)
 
-    test_op_fwd(8, 16, 4096, 512, 128, 64, 128, False, False, "bhsd", ref_impl="naive")
+    test_op_fwd(8, 16, 128, 512, 128, 64, 128, False, False, "bhsd", dtype=torch.bfloat16, ref_impl="absorb")
 
 
 if __name__ == '__main__':
