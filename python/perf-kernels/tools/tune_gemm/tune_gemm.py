@@ -164,8 +164,8 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
             if num_warps < 4:
                 continue
             # check if tiling is integer multiple of GEMM size because we have no boundary check
-            if M % BLOCK_SIZE_M != 0 or N % BLOCK_SIZE_N != 0:
-                continue
+            # if M % BLOCK_SIZE_M != 0 or N % BLOCK_SIZE_N != 0:
+            #     continue
 
         pruned_configs.append(config)
 
@@ -255,7 +255,9 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     thread_pool.close()
     thread_pool.join()
 
-    for task in tasks:
+    print(f"tasks size = {len(tasks)}")
+    for idx, task in enumerate(tasks):
+        print(f"===========================================task id = {idx}")
         config, myTime = task.get()
         if myTime:
             min_us = myTime / 1000
