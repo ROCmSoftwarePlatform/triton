@@ -2,9 +2,9 @@
 
 rm -rf ~/.triton/cache/
 
-TRITON_ALWAYS_COMPILE=1 python gemm_sub.py \
+TRITON_ALWAYS_COMPILE=1 HIP_VISIBLE_DEVICES=3 python gemm_sub.py \
   --trans-b \
-  --sub irp/6.ttgir \
+  --sub irp/9.ttgir \
   --file config.yaml \
   --verbose
 
