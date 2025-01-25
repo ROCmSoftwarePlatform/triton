@@ -543,6 +543,9 @@ def run_benchmark(args):
         x = torch.randn(M, N, device='cuda', dtype=dtype)
         y = torch.zeros_like(x, device='cuda')
         rsigma = torch.empty((M, ), device='cuda', dtype=torch.float32)
+        dx = torch.empty(M, N, device='cuda', dtype=dtype, requires_grad=False)
+        dg = torch.empty((1, N), device='cuda', dtype=dtype, requires_grad=False)
+        dg_tmp = torch.zeros(M, N, device='cuda', dtype=torch.float32, requires_grad=False)
         n_rows, n_cols = x.shape
         MAX_FUSED_SIZE = 65536 // x.element_size()
         blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
@@ -555,8 +558,8 @@ def run_benchmark(args):
         if provider == 'torch':
             ms = triton.testing.do_bench(lambda: torch_rmsnorm_fwd(x, g, ZERO_CENTERED_GAMMA))
         if provider == 'triton':
-            ms = triton.testing.do_bench(
-                lambda: rmsnorm(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS))
+            ms = triton.testing.do_bench(lambda: rmsnorm(x, y, g, rsigma, dx, dg, dg_tmp, n_rows, n_cols,
+                                                         ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS))
             global verbose
             if verbose:
                 print(f'SIZE: {N} Best tuning config: ({rms_kernel.best_config})')
@@ -605,17 +608,20 @@ def main():
     args = parse_args()
     global verbose
     if args.no_benchmark:
-        x = torch.randn(args.M_start, args.N_start, device='cuda')
+        x = torch.randn(args.M_start, args.N_start, device='cuda', dtype=args.dtype)
         y = torch.zeros_like(x, device='cuda')
         rsigma = torch.empty((args.M_start, ), device='cuda', dtype=torch.float32)
+        dx = torch.empty(args.M_start, args.N_start, device='cuda', dtype=args.dtype, requires_grad=False)
+        dg = torch.empty((1, args.N_start), device='cuda', dtype=args.dtype, requires_grad=False)
+        dg_tmp = torch.zeros(args.M_start, args.N_start, device='cuda', dtype=torch.float32, requires_grad=False)
         n_rows, n_cols = x.shape
         MAX_FUSED_SIZE = 65536 // x.element_size()
         blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
         USE_BLOCKED = n_cols > blk_size
         NUM_PRGMS = min(n_rows, get_num_sms())
-        g = torch.ones((1, args.N_start), device='cuda')
+        g = torch.ones((1, args.N_start), device='cuda', dtype=args.dtype)
         ZERO_CENTERED_GAMMA = True
-        rmsnorm(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS)
+        rmsnorm(x, y, g, rsigma, dx, dg, dg_tmp, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS)
     else:
         verbose = args.v
         run_benchmark(args)
