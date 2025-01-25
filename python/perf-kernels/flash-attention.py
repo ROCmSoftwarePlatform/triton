@@ -380,14 +380,14 @@ def is_rdna():
 
 def get_cdna_autotune_configs():
     return [
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-                      num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-                      num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-                      num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-                      num_stages=1, num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+        #               num_stages=1, num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+        #               num_stages=1, num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+        #               num_stages=1, num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+        #               num_stages=1, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
                       num_stages=1, num_warps=4),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
@@ -1921,8 +1921,8 @@ def run_benchmark(custom, args):
     line_vals = ['triton', 'torch']  # 'Time (ms)' if print_time else 'TFLOPS'
     configs.append(
         triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
-                                 line_names=line_vals, styles=[('green', '-'), ('red', '-')], ylabel='ms',
-                                 plot_name=plot_name, args=extra_args))
+                                 line_names=line_vals, styles=[('green', '-'), ('red', '-')],
+                                 ylabel='Time (ms)' if print_time else 'TFLOPS', plot_name=plot_name, args=extra_args))
 
     @triton.testing.perf_report(configs)
     def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda",
@@ -1969,15 +1969,21 @@ def run_benchmark(custom, args):
                 do = torch.randn_like(o)
                 fn = lambda: o.backward(do, retain_graph=True)
 
-        elif "torch" in provider:
-            if HQ != HK:
-                k = k.view(k.shape[0], k.shape[1], -1, k.shape[2],
-                           k.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
-                v = v.view(v.shape[0], v.shape[1], -1, v.shape[2],
-                           v.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
-            fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
-                                                                          is_causal=causal, scale=None)
+        elif "torch" in provider and args.layout in ["thd", "bhsd", "bshd"]:
+            # torch requires the layout to be (b (optional),...,h,s,d)
+            if args.layout in ["thd", "bshd"]:
+                q = q.transpose(-3, -2)
+                k = k.transpose(-3, -2)
+                v = v.transpose(-3, -2)
+            # check if GQA
+            HQ = q.shape[-3]
+            HK = k.shape[-3]
+            if HQ != HK:  # TODO: sdpa(..., enable_gqa=True work) should work
+                k = k.repeat_interleave(q.size(-3) // k.size(-3), -3)
+                v = v.repeat_interleave(q.size(-3) // v.size(-3), -3)
 
+            fn = lambda: torch.nn.functional.scaled_dot_product_attention(
+                q, k, v, attn_mask=None, dropout_p=0.0, is_causal=causal, scale=input_metadata.sm_scale)
         else:
             assert False, f"Unknown provider {provider} in flash-attention."
 
@@ -1988,9 +1994,9 @@ def run_benchmark(custom, args):
             seqlen_q = N_CTX_Q
             seqlen_k = N_CTX_K
             if seqlen_q > seqlen_k:
-                total_flops *= seqlen_k / (2 * seqlen_q)
+                total_flops *= (seqlen_k / (2 * seqlen_q))
             else:
-                total_flops *= 1 - seqlen_q / (2 * seqlen_k)
+                total_flops *= (1 - seqlen_q / (2 * seqlen_k))
         if mode == "bwd":
             total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
         if print_time:
