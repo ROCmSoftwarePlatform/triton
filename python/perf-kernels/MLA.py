@@ -226,7 +226,7 @@ def attn_fwd(X, Q_NOPE, Q_PE, KV, K_PE,
              stride_k_pe_b, stride_k_pe_t, stride_k_pe_r,  # strides for K_PE: btr
              stride_o_b, stride_o_s, stride_o_dim,  # strides for O: bhsd
              stride_wkv_a_dim, stride_wkv_a_d,
-             stride_wkv_b_h, stride_wkv_b_d, stride_wkv_b_c,  # strides for WKV_B: h(d+d)c
+             stride_wkv_b_h, stride_wkv_b_c, stride_wkv_b_d,  # strides for WKV_B: h(d+d)c
              stride_wq_h, stride_wq_dim, stride_wq_d,
              stride_wo_h, stride_wo_d, stride_wo_dim,
              stride_gemm_acc_b, stride_gemm_acc_h, stride_gemm_acc_s, stride_gemm_acc_c, 
@@ -267,7 +267,7 @@ def attn_fwd(X, Q_NOPE, Q_PE, KV, K_PE,
         offs_n = tl.arange(0, BLOCK_N)
         offs_q_d = tl.arange(0, qk_nope_head_dim)
         offs_v_d = tl.arange(0, v_head_dim)
-        offs_wkv_b_qk = tl.arange(0, qk_nope_head_dim)
+        offs_wkv_b_k = tl.arange(0, qk_nope_head_dim)
         offs_wkv_b_v = tl.arange(qk_nope_head_dim, qk_nope_head_dim + v_head_dim)
         offs_c = tl.arange(0, kv_lora_rank)
         offs_r = tl.arange(0, qk_rope_head_dim)
@@ -419,7 +419,7 @@ def attn_fwd(X, Q_NOPE, Q_PE, KV, K_PE,
 
                 # weight matrix:
                 wkv_b_offset = WKV_B + off_h_q * stride_wkv_b_h
-                wkv_b_ptrs1 = wkv_b_offset + offs_wkv_b_qk[:, None] * stride_wkv_b_d + offs_k[None, :] * stride_wkv_b_c
+                wkv_b_ptrs1 = wkv_b_offset + offs_wkv_b_k[:, None] * stride_wkv_b_d + offs_k[None, :] * stride_wkv_b_c
                 wkv_b_ptrs2 = wkv_b_offset + offs_wkv_b_v[None, :] * stride_wkv_b_d + offs_k[:, None] * stride_wkv_b_c
 
                 # initialize pointer to m and l
@@ -524,11 +524,12 @@ def attn_fwd(X, Q_NOPE, Q_PE, KV, K_PE,
 
                 acc = tl.zeros([BLOCK_M, v_head_dim], dtype=tl.float32)
 
+                acc_k_ptrs = q_wkv_b_offset + offs_m[:, None] * stride_gemm_acc_s + offs_k[None, :] * stride_gemm_acc_c
+
                 for k in range(0, tl.cdiv(kv_lora_rank, BLOCK_K)):
                     #if EVEN_K:
                     wkv_b_k_2 = tl.load(wkv_b_ptrs2 + k * BLOCK_K * stride_wkv_b_c)
-                    acc_k_ptrs = q_wkv_b_ptrs + k * BLOCK_K * stride_gemm_acc_c  # we can even reuse this
-                    acc_k = tl.load(acc_k_ptrs)
+                    acc_k = tl.load(acc_k_ptrs + k * BLOCK_K * stride_gemm_acc_c)
                     # else:
                     #
                     #
@@ -542,9 +543,9 @@ def attn_fwd(X, Q_NOPE, Q_PE, KV, K_PE,
                 wo_ptrs = wo_offset + offs_v_d[:, None] * stride_wo_d + offs_k[None, :] * stride_wo_dim
                 
                 # so basically o has shape bxsx(dim)
-                # it would be a result of attn_output.flatten(1,2) (bxhxsxd->bxsx(hd))  * wo ((hd)x(dim))
+                # it would be a result of attn_output.flatten(hd) (bxhxsxd->bxsx(hd))  * wo ((hd)x(dim))
                 # Naively this would be unfusable to this kernel as we dont have values from other heads here
-                # But my idea is that we can calculate this heads contribution and add it as a atomic add
+                # But my idea is that we can calculate this head's contribution and add it as a atomic add
                 # This can however be a bottleneck as we cant continue calculating the other attention_outputs
                 # if it ends up hanging on the atomic add
                                 
@@ -635,12 +636,12 @@ def get_strides_from_layout(x, q, q_pe, kv, k_pe, o, wkv_a, wkv_b, wq, wo, layou
 class _attention(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, x, wkv_a, wkv_b, wq, wo, qk_nope_head_dim, v_head_dim, kv_lora_rank, qk_rope_head_dim, causal=False, sm_scale=1.0, layout="bhsd"):
+    def forward(ctx, x, wkv_a, wkv_b, wq, wo, qk_nope_head_dim, v_head_dim, kv_lora_rank, qk_rope_head_dim, nheads, causal=False, sm_scale=1.0, layout="bhsd"):
 
         
         batch, seqlen_q, dim = x.shape
-        nheads_q = wkv_b.shape[0]
-        nheads_k = nheads_q
+        nheads_q = nheads
+        nheads_k = nheads
         seqlen_k = seqlen_q
         
         # q = torch.einsum("hzd,bsz->bhsd", wq, x)
@@ -694,7 +695,6 @@ class _attention(torch.autograd.Function):
         # k_pe = torch.empty((batch, seqlen_k, qk_rope_head_dim), dtype=x.dtype, device=x.device)
 
         o = torch.empty_like(x)
-
         x_strides, q_nope_strides, q_pe_strides, kv_strides, k_pe_strides, o_strides, wkv_a_strides, wkv_b_strides, wq_strides, wo_strides = get_strides_from_layout(x,
             q_nope, q_pe, kv, k_pe, o, wkv_a, wkv_b, wq, wo, layout)
 
@@ -717,7 +717,7 @@ def input_helper_MLA(dim, H, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v
     torch.manual_seed(20)
 
     wkv_a_tensor_shape = (dim, kv_lora_rank + qk_rope_head_dim)
-    wkv_b_tensor_shape = (H, qk_nope_head_dim + v_head_dim, kv_lora_rank)
+    wkv_b_tensor_shape = (H, kv_lora_rank, qk_nope_head_dim + v_head_dim)
 
     wq_tensor_shape = (H, dim, qk_nope_head_dim + qk_rope_head_dim)
     wo_tensor_shape = (H, v_head_dim, dim)
@@ -751,15 +751,14 @@ def test_op_fwd(B, H, S, dim, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, 
 
     # warmup (let autotuning happen)
     
-    attention(x, wkv_a, wkv_b, wq, wo, qk_nope_head_dim, v_head_dim, kv_lora_rank, qk_rope_head_dim, causal, sm_scale)
+    attention(x, wkv_a, wkv_b, wq, wo, qk_nope_head_dim, v_head_dim, kv_lora_rank, qk_rope_head_dim, H, causal, sm_scale)
 
     # triton implementation
     torch.cuda.synchronize()
     start = time.time()
-    tri_out, _, _ = attention(x, wkv_a, wkv_b, wq, wo, qk_nope_head_dim, v_head_dim, kv_lora_rank, qk_rope_head_dim, causal, sm_scale)
+    tri_out, _, _ = attention(x, wkv_a, wkv_b, wq, wo, qk_nope_head_dim, v_head_dim, kv_lora_rank, qk_rope_head_dim, H, causal, sm_scale)
     torch.cuda.synchronize()
     print(f"time for triton: {time.time()-start}")
-
 
 
     torch.cuda.synchronize()
@@ -773,14 +772,15 @@ def test_op_fwd(B, H, S, dim, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, 
     if ref_impl == "naive":
         q = torch.cat([q_nope, q_pe], dim=-1)
         # kv = self.wkv_b(self.kv_norm(kv))
-        kv = torch.einsum("hdc,btc->bhtd", wkv_b, kv)
+        # wkv_b = wkv_b.view(H, -1, kv_lora_rank)
+        kv = torch.einsum("hcd,btc->bhtd", wkv_b, kv)
         kv = kv.view(B, H, S, qk_nope_head_dim + v_head_dim)
         k_nope, v = torch.split(kv, [qk_nope_head_dim, v_head_dim], dim=-1)
-        k = torch.cat([k_nope, k_pe.expand(-1, H, -1, -1)], dim=-1)
+        k = torch.cat([k_nope, k_pe.unsqueeze(1).expand(-1, H, -1, -1)], dim=-1)
         scores = torch.einsum("bhsd,bhtd->bhst", q, k) * sm_scale
     else:
-        wkv_b = wkv_b.view(H, -1, kv_lora_rank)
-        q_nope = torch.einsum("bhsd,hdc->bhsc", q_nope, wkv_b[:, :qk_nope_head_dim])
+        # wkv_b = wkv_b.view(H, -1, kv_lora_rank)
+        q_nope = torch.einsum("bhsd,hcd->bhsc", q_nope, wkv_b[:, :,:qk_nope_head_dim])
         scores = (torch.einsum("bhsc,btc->bhst", q_nope, kv) +
                   torch.einsum("bhsr,btr->bhst", q_pe, k_pe.squeeze(1))) * sm_scale
 
@@ -794,10 +794,12 @@ def test_op_fwd(B, H, S, dim, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, 
         x = torch.einsum("bhst,bhtd->bhsd", scores, v)
     else:
         x = torch.einsum("bhst,btc->bhsc", scores, kv)
-        x = torch.einsum("bhsc,hdc->bhsd", x, wkv_b[:, -v_head_dim:])
+        x = torch.einsum("bhsc,hcd->bhsd", x, wkv_b[:, :, -v_head_dim:])
 
 
     ref_out = torch.einsum("hdz,bhsd->bsz", wo, x)
+
+    tri_out *= 0.5
 
     torch.cuda.synchronize()
     print(f"time for ref: {time.time()-start}")
