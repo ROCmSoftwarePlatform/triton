@@ -540,6 +540,8 @@ def run_benchmark(args):
 
     @triton.testing.perf_report(config)
     def benchmark(M, N, provider, model=None):
+        mode = args.mode
+
         x = torch.randn(M, N, device='cuda', dtype=dtype)
         y = torch.zeros_like(x, device='cuda')
         rsigma = torch.empty((M, ), device='cuda', dtype=torch.float32)
@@ -555,16 +557,40 @@ def run_benchmark(args):
         torch.cuda.set_stream(stream)
         g = torch.ones((1, N), device='cuda')
         ZERO_CENTERED_GAMMA = False
-        if provider == 'torch':
-            ms = triton.testing.do_bench(lambda: torch_rmsnorm_fwd(x, g, ZERO_CENTERED_GAMMA))
-        if provider == 'triton':
-            ms = triton.testing.do_bench(lambda: rmsnorm(x, y, g, rsigma, dx, dg, dg_tmp, n_rows, n_cols,
-                                                         ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS))
-            global verbose
-            if verbose:
-                print(f'SIZE: {N} Best tuning config: ({rms_kernel.best_config})')
-                print(f'time: {ms}')
-        gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
+
+        def rms_fwd():
+            if provider == 'triton':
+                return rmsnorm(x, g, y, rsigma, dx, dg, dg_tmp, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size,
+                               USE_BLOCKED, NUM_PRGMS)
+            if provider == 'torch':
+                return torch_rmsnorm_fwd(x, g, ZERO_CENTERED_GAMMA)
+
+        if mode == 'fwd':
+            ms = triton.testing.do_bench(rms_fwd)
+
+        elif mode == 'bwd':
+            x_ = x.clone().detach().requires_grad_()
+            g_ = g.clone().detach().requires_grad_()
+            # Preallocate
+            y_ = torch.zeros_like(x_, dtype=dtype)
+            rsigma_ = torch.empty((M, ), device='cuda', dtype=torch.float32)
+            dx_ = torch.empty_like(x_, dtype=dtype)
+            dg_tmp_ = torch.empty_like(x_, dtype=torch.float32)
+            dg_ = torch.empty_like(g_, dtype=dtype)
+            grad_out = torch.randn_like(y_)
+
+            y_out = rmsnorm(x_, g_, y_, rsigma_, dx_, dg_, dg_tmp_, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size,
+                            USE_BLOCKED, NUM_PRGMS)
+
+            ms = triton.testing.do_bench(lambda: y_out.backward(grad_out, retain_graph=True), grad_to_none=[x_, g_])
+        else:
+            raise ValueError(f"mode {mode} is not supported!")
+
+        global verbose
+        if verbose:
+            print(f'SIZE: {N} Best tuning config: ({rms_kernel.best_config})')
+            print(f'time: {ms}')
+        gbps = lambda ms_val: 2 * x.nelement() * x.element_size() * 1e-9 / (ms_val * 1e-3)
         return gbps(ms)
 
     benchmark.run(save_path=".", show_plots=True, print_data=True)
@@ -598,7 +624,7 @@ def parse_args():
     parser.add_argument('-d', "--dtype", default="fp16")
     parser.add_argument('-nb', "--no_benchmark", default=False, type=bool)
     parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
-    parser.add_argument("--mode", type=str, choices=["fwd", "bwd"], default="fwd+bwd",
+    parser.add_argument("--mode", type=str, choices=["fwd", "bwd"], default="fwd",
                         help="Benchmark mode: forward only, backward only, or both.")
 
     return parser.parse_args()
