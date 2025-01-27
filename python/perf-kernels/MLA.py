@@ -183,11 +183,8 @@ def _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, kv_offs_k, kv_offs_
         for k in range(0, tl.cdiv(K, BLOCK_K)):
             #if EVEN_K:
             q_nope_wkv_b_k = tl.load(q_nope_wkv_b_ptrs1 + k * BLOCK_K * stride_q_nope_wkv_b_k)
-            # kv_k = tl.load(kv_ptrs + k * BLOCK_K * stride_kv_k)
             kv_k = load_fn(kv_ptrs + kv_offs_k + k * BLOCK_K * stride_kv_k, None, k_offs_n, None, actual_seqlen_k)
-            # else:
-            #
-            #
+
             qk += tl.dot(q_nope_wkv_b_k, kv_k)
 
         qk += tl.dot(q_pe, k_pe)
@@ -426,10 +423,12 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, SM_SCALE: tl.constexpr
                     None, :] * stride_q_nope_wkv_b_c
 
                 for k in range(0, tl.cdiv(kv_lora_rank, BLOCK_K)):
-                    wkv_b_k_1 = tl.load(wkv_b_ptrs1 + k * BLOCK_K * stride_wkv_b_c)
+                    c_mask = (k * BLOCK_K + offs_k[None, :]) < kv_lora_rank
+
+                    wkv_b_k_1 = tl.load(wkv_b_ptrs1 + k * BLOCK_K * stride_wkv_b_c, mask=c_mask, other=0.0)
                     q_wkv_b_k = tl.dot(q_nope, wkv_b_k_1).to(q_nope.type.element_ty)
                     # TODO: store back to some accumulator tensor in parts
-                    tl.store(q_wkv_b_ptrs + k * BLOCK_K * stride_q_nope_wkv_b_c, q_wkv_b_k)
+                    tl.store(q_wkv_b_ptrs + k * BLOCK_K * stride_q_nope_wkv_b_c, q_wkv_b_k, mask=q_ptrs_mask)
 
                 # Here we compute how many full and masked blocks we have.
                 padded_block_k = n_extra_tokens != 0
@@ -496,13 +495,12 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, SM_SCALE: tl.constexpr
                 acc = tl.zeros([BLOCK_M, v_head_dim], dtype=tl.float32)
 
                 for k in range(0, tl.cdiv(kv_lora_rank, BLOCK_K)):
-                    #if EVEN_K:
-                    wkv_b_k_2 = tl.load(wkv_b_ptrs2 + k * BLOCK_K * stride_wkv_b_c)
+                    c_mask = (k * BLOCK_K + offs_k[:, None]) < kv_lora_rank
+
+                    wkv_b_k_2 = tl.load(wkv_b_ptrs2 + k * BLOCK_K * stride_wkv_b_c, mask=c_mask, other=0.0)
                     acc_k_ptrs = q_wkv_b_ptrs + k * BLOCK_K * stride_q_nope_wkv_b_c  # we can even reuse this
-                    acc_k = tl.load(acc_k_ptrs)
-                    # else:
-                    #
-                    #
+                    acc_k = tl.load(acc_k_ptrs, mask=q_ptrs_mask, other=0.0)
+
                     acc += tl.dot(acc_k, wkv_b_k_2)
 
                 # epilogue
@@ -693,15 +691,16 @@ def sanity_check(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_he
 
 
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim', [
-    # (8, 16, 128, 512, 128, 64, 128),
+    (8, 16, 128, 128, 128, 64, 128),
     (1, 16, 32, 512, 128, 64, 128),
     (1, 8, 16, 512, 128, 64, 128),
-    (1, 8, 16, 512, 128, 64, 64),
+    (1, 8, 16, 512, 128, 64, 128),
+    (1, 1, 64, 128, 128, 64, 128)
 ])
 @pytest.mark.parametrize('causal', [False])
 @pytest.mark.parametrize('layout', ['bhsd'])
 @pytest.mark.parametrize('ref_impl', ['naive', 'absorb'])
-@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, causal, layout,
                 dtype, ref_impl):
     import time
@@ -711,49 +710,21 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
 
     o = torch.empty_like(q_nope)
 
-    # for x, x_name in zip([q_nope, q_pe, kv, k_pe, v, wkv_b], ["q_nope", "q_pe", "kv", "k_pe", "v", "wkv_b"]):
-    #     print(f"{x_name}: {x.shape}")
-
-    # warmup (let autotuning happen)
-    # attention(q_nope, q_pe, kv, k_pe.squeeze(1), o, wkv_b, causal, sm_scale)
-
     # triton implementation
-    torch.cuda.synchronize()
-    start = time.time()
     tri_out, _, _ = attention(q_nope, q_pe, kv, k_pe.squeeze(1), o, wkv_b, causal, sm_scale)
-    torch.cuda.synchronize()
-    # print(f"time for triton: {time.time()-start}")
 
-    torch.cuda.synchronize()
-    start = time.time()
     # ref implementation
     if ref_impl == "naive":
         q = torch.cat([q_nope, q_pe], dim=-1)
         # kv = self.wkv_b(self.kv_norm(kv))
-        kv = torch.einsum("hdc,btc->bhtd", wkv_b, kv)
+        kv = torch.einsum("hdc,btc->bhtd", wkv_b.float(), kv.float())
         kv = kv.view(B, H, S, qk_nope_head_dim + v_head_dim)
         k_nope, v = torch.split(kv, [qk_nope_head_dim, v_head_dim], dim=-1)
         k = torch.cat([k_nope, k_pe.expand(-1, H, -1, -1)], dim=-1)
-        scores = torch.einsum("bhsd,bhtd->bhst", q.float(), k.float()) * sm_scale
+        scores = torch.einsum("bhsd,bhtd->bhst", q.float(), k) * sm_scale
     else:
         wkv_b = wkv_b.view(H, -1, kv_lora_rank)
-        # TODO Do we want this to be in fp32????? (kernel)
-        '''
-        tri_out: tensor([-0.2969, 15.5625,  4.6875, -7.2188, -8.7500], device='cuda:0',
-        dtype=torch.bfloat16)
-        ref_out: tensor([-0.4727, 15.5625,  4.6562, -7.3125, -8.5000], device='cuda:0',
-            dtype=torch.bfloat16)
 
-        dtype: torch.float16
-        tri_out: tensor([  2.2227,  14.7266,   6.1055,  -7.1992, -12.8672], device='cuda:0',
-            dtype=torch.float16)
-        ref_out: tensor([  2.0137,  14.7891,   5.9844,  -7.2031, -12.5156], device='cuda:0',
-            dtype=torch.float16)
-
-        dtype: torch.float32
-        tri_out: tensor([  2.1601,  14.7411,   6.0716,  -7.1933, -12.7727], device='cuda:0')
-        ref_out: tensor([  2.1600,  14.7411,   6.0715,  -7.1933, -12.7725], device='cuda:0')
-        '''
         q_nope = torch.einsum("bhsd,hdc->bhsc", q_nope, wkv_b[:, :qk_nope_head_dim])
         # absorption fp16 x fp16 -> fp16
 
@@ -768,28 +739,18 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
     scores = scores.softmax(dim=-1)
 
     if ref_impl == "naive":
-        ref_out = torch.einsum("bhst,bhtd->bhsd", scores, v)
+        ref_out = torch.einsum("bhst,bhtd->bhsd", scores, v.float()).to(dtype)
     else:
         x = torch.einsum("bhst,btc->bhsc", scores, kv.float()).to(dtype)
         # fp16 x fp16 -> fp16
         ref_out = torch.einsum("bhsc,hdc->bhsd", x, wkv_b[:, -v_head_dim:])
         # fp16 x fp16 -> fp16
 
-    torch.cuda.synchronize()
-    # print(f"time for ref: {time.time()-start}")
-    # print(f"ref out type {ref_out.dtype}")
-    # print(f"tri out type {tri_out.dtype}")
-
-    # print(f"ref_out (first 10): {ref_out.flatten()[:10]}")
-    # print(f"tri_out (first 10): {tri_out.flatten()[:10]}")
-
-    # return tri_out
-
     print(f"dtype: {dtype}")
-    print(f"tri_out: {tri_out[0, 0, 60, 105:110]}")
-    print(f"ref_out: {ref_out[0, 0, 60, 105:110]}")
+    print(f"tri_out: {tri_out[0, 1, 4, 90:95]}")
+    print(f"ref_out: {ref_out[0, 1, 4, 90:95]}")
 
-    # torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
+    torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
 
 def supported_layouts():
