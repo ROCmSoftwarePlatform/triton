@@ -136,18 +136,49 @@ LogicalResult ExtractSliceOp::verify() {
 
 LogicalResult ConcatOp::verify() {
   auto sources = getSources();
-  auto dims = getDims();
+  auto coords = getCoords();
 
-  auto expectedNumSources = product(dims);
+  auto expectedNumSources = product(coords);
   if (sources.size() != expectedNumSources) {
-    return emitError() << "dims spec [" << dims
+    return emitError() << "dims spec [" << coords
                        << "] does not match the number of provided sources ["
                        << sources.size() << "]";
   }
 
-  // TODO: check whether all sources and the result have the same encoding
+  auto srcType = dyn_cast<RankedTensorType>(sources.front().getType());
+  if (!srcType)
+    return emitError() << "expected source type is `RankedTensorType`";
 
-  // TODO: check whether assembled sources match the result dimensions
+  for (auto source : sources) {
+    auto currType = dyn_cast<RankedTensorType>(source.getType());
+    if (srcType != currType)
+      return emitError() << "sources are expected to have the same type";
+  }
+
+  auto result = getResult();
+  auto dstType = dyn_cast<RankedTensorType>(result.getType());
+  if (dstType.getElementType() != srcType.getElementType())
+    return emitError() << "sources and the destination are expected to have "
+                          "the same element type";
+
+  auto dstShape = dstType.getShape();
+  auto srcShape = srcType.getShape();
+  if (dstShape.size() != srcShape.size())
+    return emitError()
+           << "sources and the destination must have the same shape size";
+
+  if (dstShape.size() != coords.size())
+    return emitError() << "shape size of the destination and concat. coords "
+                          "must be the same";
+
+  for (auto [idx, coordValue] : llvm::enumerate(coords)) {
+    auto scaledSrcDim = srcShape[idx] * coordValue;
+    if (dstShape[idx] != scaledSrcDim) {
+      return emitError() << "mismatch along dim [" << idx
+                         << "]. Expected size `" << dstShape[idx] << "`; give `"
+                         << scaledSrcDim << "` after concatenation";
+    }
+  }
 
   return success();
 }
