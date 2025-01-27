@@ -143,22 +143,8 @@ def _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, kv_offs_k, kv_offs_
         m_i = m_ij
 
         # leave wkv_b gemm outside
-
         kv = load_fn(kv_ptrs + kv_offs_c, None, k_offs_n, None, actual_seqlen_k)
         acc += tl.dot(p.to(kv.type.element_ty), kv.trans())
-
-        # Or do wkv_b gemm inside
-        # for k in range(0, tl.cdiv(K, BLOCK_K)):
-        #     #if EVEN_K:
-        #     wkv_b_k_2 = tl.load(wkv_b_ptrs2 + k * BLOCK_K * stride_wkv_b_k)
-        #     # kv_k = tl.load(kv_ptrs + k * BLOCK_K * stride_kv_k)
-        #     kv_k = load_fn(kv_ptrs + kv_offs_k + k * BLOCK_K * stride_kv_k, None, k_offs_n, None, actual_seqlen_k)
-        #     # else:
-        #     #
-        #     #
-        #     v_k = tl.dot(wkv_b_k_2, kv_k).trans() # values k subset
-
-        #     acc += tl.dot(p.to(v_k.type.element_ty), v_k)
 
         kv_ptrs += BLOCK_N * stride_kv_n
         k_pe_ptrs += BLOCK_N * stride_k_pe_n
@@ -192,12 +178,12 @@ def get_cdna_autotune_configs():
         # triton.Config(
         #     {'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'waves_per_eu': 2, 'GRID_CU_MULTIP': 2},
         #     num_stages=1, num_warps=4),
-        # triton.Config(
-        #     {'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'waves_per_eu': 1, 'GRID_CU_MULTIP': 2},
-        #     num_stages=1, num_warps=4),
         triton.Config(
-            {'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 32, 'waves_per_eu': 2, 'GRID_CU_MULTIP': 2},
+            {'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32, 'waves_per_eu': 2, 'GRID_CU_MULTIP': 2},
             num_stages=1, num_warps=4),
+        # triton.Config(
+        #     {'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 32, 'waves_per_eu': 2, 'GRID_CU_MULTIP': 2},
+        #     num_stages=1, num_warps=4),
     ], [
         'IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'kv_lora_rank', "qk_nope_head_dim",
         "qk_rope_head_dim", "v_head_dim", 'VARLEN', 'HQ', 'HK'
@@ -216,25 +202,32 @@ autotune_configs, autotune_keys = get_cdna_autotune_configs()
     'EVEN_K': lambda args: args['kv_lora_rank'] % args['BLOCK_K'] == 0,
 })
 @triton.jit
-def attn_fwd(X, Q_NOPE, Q_PE, KV, K_PE, 
-             WKV_A, WKV_B, WQ, WO,
-             GEMM_ACC, SM_SCALE: tl.constexpr, L, Out,
-             stride_x_b, stride_x_s, stride_x_dim, # strides for X: bs(dim)
-             stride_q_nope_b, stride_q_nope_h, stride_q_nope_s, stride_q_nope_d,  # strides for Q_NOPE: bhsd
-             stride_q_pe_b, stride_q_pe_h, stride_q_pe_s, stride_q_pe_r,  # strides for Q_PE: bhsr
-             stride_kv_b, stride_kv_t, stride_kv_c,  # strides for KV: btc
-             stride_k_pe_b, stride_k_pe_t, stride_k_pe_r,  # strides for K_PE: btr
-             stride_o_b, stride_o_s, stride_o_dim,  # strides for O: bhsd
-             stride_wkv_a_dim, stride_wkv_a_d,
-             stride_wkv_b_h, stride_wkv_b_c, stride_wkv_b_d,  # strides for WKV_B: h(d+d)c
-             stride_wq_h, stride_wq_dim, stride_wq_d,
-             stride_wo_h, stride_wo_d, stride_wo_dim,
-             stride_gemm_acc_b, stride_gemm_acc_h, stride_gemm_acc_s, stride_gemm_acc_c, 
-             kv_lora_rank: tl.constexpr, qk_nope_head_dim: tl.constexpr, qk_rope_head_dim: tl.constexpr, v_head_dim: tl.constexpr, dim: tl.constexpr,
-             PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: tl.constexpr,
-             GRID_CU_MULTIP: tl.constexpr, B: tl.constexpr, HQ: tl.constexpr, HK: tl.constexpr,
-             MAX_SEQLENS_Q: tl.constexpr, MAX_SEQLENS_K: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
-             BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, EVEN_K: tl.constexpr):
+def attn_fwd(X, # hidden input: bsz
+            Q_NOPE, # (empty) query tokens wo pos.embedding: bhsd
+            Q_PE, # (empty) query tokens with pos.embedding: bhsr
+            KV, # (empty) latent tokens for keys and values: btc
+            K_PE, # (empty) key tokens with pos.embedding: b1tr
+            WKV_B, # projection matrix kv * wkv_b = k,v
+            WQ, # projection matrix x * WQ = q
+            WO, # projection matrix attn_output.flatten(bhsd->bs(hd)) * WO = out
+            GEMM_ACC, # used to store intermediate results, shape: bhsc 
+            SM_SCALE: tl.constexpr, L,
+            Out, # hidden output: bsz
+            stride_x_b, stride_x_s, stride_x_dim, # strides for X: bs(dim)
+            stride_q_nope_b, stride_q_nope_h, stride_q_nope_s, stride_q_nope_d,  # strides for Q_NOPE: bhsd
+            stride_q_pe_b, stride_q_pe_h, stride_q_pe_s, stride_q_pe_r,  # strides for Q_PE: bhsr
+            stride_kv_b, stride_kv_t, stride_kv_c,  # strides for KV: btc
+            stride_k_pe_b, stride_k_pe_t, stride_k_pe_r,  # strides for K_PE: btr
+            stride_o_b, stride_o_s, stride_o_dim,  # strides for O: bhsd
+            stride_wkv_b_h, stride_wkv_b_c, stride_wkv_b_d,  # strides for WKV_B: h(d+d)c
+            stride_wq_h, stride_wq_dim, stride_wq_d, # strides for WQ: h(dim)d
+            stride_wo_h, stride_wo_d, stride_wo_dim, # strides for WO: hd(dim)
+            stride_gemm_acc_b, stride_gemm_acc_h, stride_gemm_acc_s, stride_gemm_acc_c, # strides for GEMM_ACC: bhsc 
+            kv_lora_rank: tl.constexpr, qk_nope_head_dim: tl.constexpr, qk_rope_head_dim: tl.constexpr, v_head_dim: tl.constexpr, dim: tl.constexpr,
+            PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: tl.constexpr,
+            GRID_CU_MULTIP: tl.constexpr, B: tl.constexpr, HQ: tl.constexpr, HK: tl.constexpr,
+            MAX_SEQLENS_Q: tl.constexpr, MAX_SEQLENS_K: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
+            BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, EVEN_K: tl.constexpr):
 
     assert EVEN_K, "Assumes EVEN_K"
 
@@ -302,10 +295,10 @@ def attn_fwd(X, Q_NOPE, Q_PE, KV, K_PE,
                 # If we have no blocks after adjusting for seqlen deltas, this WG is part of
                 # the blocks that are all 0. We exit early.
                 if n_blocks <= 0:
-                    o_offset = Out + off_z * stride_ob + off_h_q * stride_oh + cu_seqlens_q_start * stride_os
-                    o_ptrs = o_offset + offs_m[:, None] * stride_os + offs_v_d[None, :] * stride_od
-                    acc = tl.zeros([BLOCK_M, v_head_dim], dtype=Out.type.element_ty)
-                    o_ptrs_mask = (offs_m[:, None] < seqlen_q).broadcast_to([BLOCK_M, v_head_dim])
+                    o_offset = Out + off_z * stride_o_b + cu_seqlens_q_start * stride_o_s
+                    o_ptrs = o_offset + offs_m[:, None] * stride_o_s + offs_v_d[None, :] * stride_o_dim
+                    acc = tl.zeros([BLOCK_M, dim], dtype=Out.type.element_ty)
+                    o_ptrs_mask = (offs_m[:, None] < seqlen_q).broadcast_to([BLOCK_M, dim])
                     # We still need to write 0s to the result
                     tl.store(o_ptrs, acc, mask=o_ptrs_mask)
                     # The tensor allocated for L is based on MAX_SEQLENS_Q as that is
@@ -369,7 +362,7 @@ def attn_fwd(X, Q_NOPE, Q_PE, KV, K_PE,
                     #
                     q_nope += tl.dot(x_k, wq_k)
 
-                tl.store(q_ptrs, q_nope.to(tl.float32))
+                tl.store(q_ptrs, q_nope)
                 
                 # Q_PE
                 q_pe = tl.zeros((BLOCK_M, qk_rope_head_dim), dtype=tl.float32)
@@ -385,37 +378,7 @@ def attn_fwd(X, Q_NOPE, Q_PE, KV, K_PE,
                     #
                     q_pe += tl.dot(x_k, wq_k)
  
-                tl.store(q_pe_ptrs, q_pe.to(tl.float32))
-
-
-                # project kv, k_pe These really shouldnt be here since we are not parallelizing among keys, but queries
-                # but if seqlen k == seqlen q and causal, we might do something interesting
-                # if causal, we only need kv[:wg] (kv[wg:] can be still not computed). wg here is basically the m_i so at which token we are going
-                # But I dunno if this projection of x --> kv is that heavy we should start going too complex over
-
-                # wkv_a_offset = WKV_A + off_h_q * stride_wkv_b_h
-                # wkv_a_ptrs = wkv_a_offset + offs_k[:, None] * stride_wkv_a_dim + offs_k[None, :] * stride_wkv_a_d                
-                
-
-                # k_blocks = tl.cdiv(kv_lora_rank + qk_rope_head_dim, BLOCK_K)
-                # for k in range(0, k_blocks):
-                #     kv_k = tl.zeros((BLOCK_N, BLOCK_K), dtype=tl.float32)
-                #     for k2 in range(0, tl.cdiv(dim, BLOCK_K)):
-                #         #if EVEN_K:
-                #         wkv_a_k = tl.load(wkv_a_ptrs + k2 * BLOCK_K * stride_wkv_a_dim)
-                #         x_k = tl.load(x_ptrs + k2 * BLOCK_K * stride_x_dim)
-                #         # else:
-                #         #
-                #         #
-                #         kv_k += tl.dot(x_k, wkv_a_k)
-                #         # TODO: store back to some accumulator tensor in parts
-                    
-                #     if k_blocks - k > (qk_rope_head_dim // BLOCK_K): # KV
-                #         tl.store(kv_ptrs + kv_offs_k + k * BLOCK_K * stride_kv_c, kv_k.trans())
-                #     else: # K_PE
-                #         tl.store(k_pe_ptrs + (k_blocks - k) * BLOCK_K * stride_k_pe_r, kv_k.trans())
-
-                
+                tl.store(q_pe_ptrs, q_pe)
 
                 # weight matrix:
                 wkv_b_offset = WKV_B + off_h_q * stride_wkv_b_h
@@ -438,14 +401,6 @@ def attn_fwd(X, Q_NOPE, Q_PE, KV, K_PE,
 
                 q_wkv_b_offset = GEMM_ACC + off_z * stride_gemm_acc_b + off_h_q * stride_gemm_acc_h + cu_seqlens_q_start * stride_gemm_acc_s
                 q_wkv_b_ptrs = q_wkv_b_offset + offs_m[:,None] * stride_gemm_acc_s + offs_k[None, :] * stride_gemm_acc_c
-                
-                # wish we could do this... But out of LDS
-                # q_wkv_b_ptrs_whole = q_wkv_b_offset + offs_m[:,
-                #                                        None] * stride_gemm_acc_s + offs_c[None, :] * stride_gemm_acc_c
-
-                # wkv_b_ptrs1_whole = wkv_b_offset + offs_wkv_b_qk[:, None] * stride_wkv_b_d + offs_k[None, :] * stride_wkv_b_c
-                # wkv_b_1 = tl.load(wkv_b_ptrs1_whole)
-                # q_nope = tl.dot(q_nope, wkv_b_1)
                 
                 for k in range(0, tl.cdiv(kv_lora_rank, BLOCK_K)):
                     #if EVEN_K:
@@ -534,6 +489,8 @@ def attn_fwd(X, Q_NOPE, Q_PE, KV, K_PE,
                     #
                     #
                     acc += tl.dot(acc_k, wkv_b_k_2)
+
+                acc = acc.to(q_nope.type.element_ty)
                 
                 # write back O
                 o_offset = Out + off_z * stride_o_b 
@@ -552,7 +509,7 @@ def attn_fwd(X, Q_NOPE, Q_PE, KV, K_PE,
                 for k in range(0, tl.cdiv(dim, BLOCK_K)):
                     wo_k = tl.load(wo_ptrs + k * BLOCK_K * stride_wo_dim)
                     # o = tl.load(o_ptrs + k * BLOCK_K * stride_o_dim)
-                    o = tl.dot(acc, wo_k).to(q_nope.type.element_ty)
+                    o = tl.dot(acc, wo_k)
                     # tl.store(o_ptrs + k * BLOCK_K * stride_o_dim, o) 
                     tl.atomic_add(o_ptrs + k * BLOCK_K * stride_o_dim, o)
 
@@ -585,10 +542,6 @@ def attn_fwd(X, Q_NOPE, Q_PE, KV, K_PE,
                     tl.store(l_ptrs, m_i + tl.math.log2(l_i), mask=l_ptrs_mask)
                 else:
                     tl.store(l_ptrs, m_i + tl.math.log2(l_i))
-
-                
-
-                # tl.store(o_ptrs, acc.to(Out.dtype.element_ty), mask=o_ptrs_mask)
 
 
         if PERSISTENT:
@@ -661,8 +614,6 @@ class _attention(torch.autograd.Function):
         # q_nope_strides, q_pe_strides, kv_strides, k_pe_strides, o_strides, wkv_b_strides = get_strides_from_layout(
         #     q_nope, q_pe, kv, k_pe, o, wkv_b, layout)
 
-    
-
         # seqlen_q = q_nope.shape[-2]
         # seqlen_k = kv.shape[1]
 
@@ -697,9 +648,11 @@ class _attention(torch.autograd.Function):
         o = torch.empty_like(x)
         x_strides, q_nope_strides, q_pe_strides, kv_strides, k_pe_strides, o_strides, wkv_a_strides, wkv_b_strides, wq_strides, wo_strides = get_strides_from_layout(x,
             q_nope, q_pe, kv, k_pe, o, wkv_a, wkv_b, wq, wo, layout)
+        
+        # TODO: allow q = wkv_b * wkv_a * x
 
-        attn_fwd[grid](x, q_nope, q_pe, kv, k_pe, wkv_a, wkv_b, wq, wo, gemm_acc, sm_scale, M, o, *x_strides, *q_nope_strides, *q_pe_strides,
-                       *kv_strides, *k_pe_strides, *o_strides, *wkv_a_strides, *wkv_b_strides, *wq_strides, *wo_strides, *gemm_acc_strides, kv_lora_rank,
+        attn_fwd[grid](x, q_nope, q_pe, kv, k_pe, wkv_b, wq, wo, gemm_acc, sm_scale, M, o, *x_strides, *q_nope_strides, *q_pe_strides,
+                       *kv_strides, *k_pe_strides, *o_strides, *wkv_b_strides, *wq_strides, *wo_strides, *gemm_acc_strides, kv_lora_rank,
                        qk_nope_head_dim, qk_rope_head_dim, v_head_dim, dim, HQ=nheads_q, HK=nheads_k, MAX_SEQLENS_Q=seqlen_q,
                        MAX_SEQLENS_K=seqlen_k, IS_CAUSAL=causal, PERSISTENT=causal, PERSISTENT_DYNAMIC=causal,
                        NUM_CU=NUM_CU, atomic_counter=atomic_counter, B=batch)
@@ -799,7 +752,7 @@ def test_op_fwd(B, H, S, dim, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, 
 
     ref_out = torch.einsum("hdz,bhsd->bsz", wo, x)
 
-    tri_out *= 0.5
+    # tri_out *= 0.5
 
     torch.cuda.synchronize()
     print(f"time for ref: {time.time()-start}")
@@ -853,7 +806,7 @@ arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': tor
 
 def main():
     # args = parse_args()
-    test_op_fwd(8, 16, 128, 2048, 512, 128, 64, 128, causal=False, layout="bhsd", dtype=torch.float32, ref_impl="absorb")
+    test_op_fwd(8, 16, 128, 2048, 512, 128, 64, 128, causal=False, layout="bhsd", dtype=torch.float16, ref_impl="naive")
 
 
 if __name__ == '__main__':
