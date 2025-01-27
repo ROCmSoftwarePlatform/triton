@@ -314,18 +314,27 @@ a, b, c, bias = generate_tensor(M, N, K, tested_dtype)
 use_bias = False
 matmul(a, b, c, bias, use_bias)
 
-start_event = torch.cuda.Event(enable_timing=True)
-end_event = torch.cuda.Event(enable_timing=True)
-start_event.record()
+num_warmups = 20
+for _ in range(num_warmups):
+    runner(*kernel_args, **kernel_kwargs)
+
+# benchmark
+num_timings = 10
 num_repeats = 300
 #num_repeats = 1
-for _ in range(num_repeats):
-  runner(*kernel_args, **kernel_kwargs)
-end_event.record()
-torch.cuda.synchronize()
-estimate_ms = start_event.elapsed_time(end_event) / num_repeats
-tflops = perf(estimate_ms, M, N, K)
-print(f'perf: {tflops} TFLOP/s')
+
+print('iter, TFlop/s, invocations')
+for i in range(num_timings):
+  start_event = torch.cuda.Event(enable_timing=True)
+  end_event = torch.cuda.Event(enable_timing=True)
+  start_event.record()
+  for _ in range(num_repeats):
+    runner(*kernel_args, **kernel_kwargs)
+  end_event.record()
+  torch.cuda.synchronize()
+  estimate_ms = start_event.elapsed_time(end_event) / num_repeats
+  tflops = perf(estimate_ms, M, N, K)
+  print(f'{i}, {tflops}, {num_repeats}')
 
 
 a, b, c, bias = generate_tensor(M, N, K, tested_dtype)
