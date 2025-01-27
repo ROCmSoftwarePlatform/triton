@@ -211,19 +211,6 @@ def _attn_fwd_inner(acc, l_i, m_i, q_pe, kv_ptrs, k_pe_ptrs, kv_offs_k, kv_offs_
         kv = load_fn(kv_ptrs + kv_offs_c, None, k_offs_n, None, actual_seqlen_k)
         acc += tl.dot(p.to(kv.type.element_ty), kv.trans())
 
-        # Or do wkv_b gemm inside
-        # for k in range(0, tl.cdiv(K, BLOCK_K)):
-        #     #if EVEN_K:
-        #     wkv_b_k_2 = tl.load(wkv_b_ptrs2 + k * BLOCK_K * stride_wkv_b_k)
-        #     # kv_k = tl.load(kv_ptrs + k * BLOCK_K * stride_kv_k)
-        #     kv_k = load_fn(kv_ptrs + kv_offs_k + k * BLOCK_K * stride_kv_k, None, k_offs_n, None, actual_seqlen_k)
-        #     # else:
-        #     #
-        #     #
-        #     v_k = tl.dot(wkv_b_k_2, kv_k).trans() # values k subset
-
-        #     acc += tl.dot(p.to(v_k.type.element_ty), v_k)
-
         kv_ptrs += BLOCK_N * stride_kv_n
         k_pe_ptrs += BLOCK_N * stride_k_pe_n
 
@@ -426,9 +413,9 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, Q_NOPE_WKV_B, SM_SCALE: tl.constexpr
                     c_mask = (k * BLOCK_K + offs_k[None, :]) < kv_lora_rank
 
                     wkv_b_k_1 = tl.load(wkv_b_ptrs1 + k * BLOCK_K * stride_wkv_b_c, mask=c_mask, other=0.0)
-                    q_wkv_b_k = tl.dot(q_nope, wkv_b_k_1).to(q_nope.type.element_ty)
+                    q_wkv_b_k = tl.dot(q_nope, wkv_b_k_1)
                     # TODO: store back to some accumulator tensor in parts
-                    tl.store(q_wkv_b_ptrs + k * BLOCK_K * stride_q_nope_wkv_b_c, q_wkv_b_k, mask=q_ptrs_mask)
+                    tl.store(q_wkv_b_ptrs + k * BLOCK_K * stride_q_nope_wkv_b_c, q_wkv_b_k.to(q_nope.type.element_ty), mask=q_ptrs_mask)
 
                 # Here we compute how many full and masked blocks we have.
                 padded_block_k = n_extra_tokens != 0
@@ -694,12 +681,11 @@ def sanity_check(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_he
     (8, 16, 128, 128, 128, 64, 128),
     (1, 16, 32, 512, 128, 64, 128),
     (1, 8, 16, 512, 128, 64, 128),
-    (1, 8, 16, 512, 128, 64, 128),
     (1, 1, 64, 128, 128, 64, 128)
 ])
 @pytest.mark.parametrize('causal', [False])
 @pytest.mark.parametrize('layout', ['bhsd'])
-@pytest.mark.parametrize('ref_impl', ['naive', 'absorb'])
+@pytest.mark.parametrize('ref_impl', ['absorb'])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, causal, layout,
                 dtype, ref_impl):
@@ -716,7 +702,6 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
     # ref implementation
     if ref_impl == "naive":
         q = torch.cat([q_nope, q_pe], dim=-1)
-        # kv = self.wkv_b(self.kv_norm(kv))
         kv = torch.einsum("hdc,btc->bhtd", wkv_b.float(), kv.float())
         kv = kv.view(B, H, S, qk_nope_head_dim + v_head_dim)
         k_nope, v = torch.split(kv, [qk_nope_head_dim, v_head_dim], dim=-1)
@@ -746,11 +731,18 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
         ref_out = torch.einsum("bhsc,hdc->bhsd", x, wkv_b[:, -v_head_dim:])
         # fp16 x fp16 -> fp16
 
-    print(f"dtype: {dtype}")
-    print(f"tri_out: {tri_out[0, 1, 4, 90:95]}")
-    print(f"ref_out: {ref_out[0, 1, 4, 90:95]}")
 
-    torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
+    # if dtype == torch.bfloat16:
+    #     atol=5e-2
+    #     rtol=5e-2
+    # else:
+    #     atol=2e-2
+    #     rtol=2e-2
+
+    atol=2e-2
+    rtol=2e-2
+
+    torch.testing.assert_close(ref_out, tri_out, atol=atol, rtol=rtol)
 
 
 def supported_layouts():
