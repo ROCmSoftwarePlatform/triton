@@ -1,9 +1,9 @@
 // try prefetching only half of ds_reads to save half registers
 
-//#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-//#blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
-#blocked = #ttg.blocked<{sizePerThread = [2, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [4, 2], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+//#blocked = #ttg.blocked<{sizePerThread = [2, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+//#blocked1 = #ttg.blocked<{sizePerThread = [4, 2], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
 
 //                   hex  dec
 //  NONE =        0x0000,   0

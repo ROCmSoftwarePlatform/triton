@@ -250,27 +250,33 @@ def matmul(a, b, c, bias, use_bias=False):
       context = ir.context()
       ir.load_dialects(context)
       backend.load_dialects(context)
+      print("Parsing MLIR..." )
       mod = ir.parse_mlir_module(args.sub, context)
       mod.context = context
+      print("MLIR -> LLIR..." )
       llir_src = backend.make_llir(mod, metadata, options)
       handle.asm['llir'] = llir_src
       enabled_next_stage = True
 
     amdgcn_src = None
     if path.suffix == ".llir" or enabled_next_stage:
-      print("Found LLIR: ", path)
+      if path.suffix == ".llir":
+        print("Found LLIR: ", path)
       llir_src = llir_src if llir_src else sub_file
+      print("LLIR -> amdgcn..." )
       amdgcn_src = backend.make_amdgcn(llir_src, metadata, options)
       enabled_next_stage = True
 
     amdgcn_src = amdgcn_src if amdgcn_src else sub_file
     handle.asm['amdgcn'] = amdgcn_src
+    print("amdgcn -> hsaco..." )
     hasco_src = backend.make_hsaco(amdgcn_src, metadata, options)
     handle.kernel = hasco_src
     handle.module = None
     def substituted_kernel(*args, **kwargs):
       handle[grid](*args)
     runner = substituted_kernel
+    print("DONE.")
 
   if args.verbose:
     print(handle.asm.keys())

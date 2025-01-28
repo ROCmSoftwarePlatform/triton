@@ -5,12 +5,14 @@ rm -rf ~/.triton/cache/
 GPU=3
 #sudo rocm-smi --setperfdeterminism 1400 -d ${GPU}
 
+#TRITON_MFMA_TILE_ENABLE_SCHED_BARRIERS=1 TRITON_ALWAYS_COMPILE=1 HIP_VISIBLE_DEVICES=${GPU} gdb -ex r --args python gemm_sub.py \
 TRITON_MFMA_TILE_ENABLE_SCHED_BARRIERS=1 TRITON_ALWAYS_COMPILE=1 HIP_VISIBLE_DEVICES=${GPU} python gemm_sub.py \
   --trans-b \
   --file config.yaml \
-  --sub irp/14b.ttgir \
+  --sub irp/16.ttgir \
   --verbose
 
+#  --sub irp/14.ttgir \
 #  --sub irp/10.ttgir \
 #sudo rocm-smi --resetperfdeterminism -d ${GPU}
 
