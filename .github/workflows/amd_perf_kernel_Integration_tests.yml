@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [main_perf]
-  merge_group:
-    branches: [main_perf]
-    types: [checks_requested]
+    merge_group:
+      branches: [main_perf]
+      types: [checks_requested]
 
 concurrency:
   group: ${{ github.ref }}
@@ -39,8 +39,24 @@ jobs:
             exit 1
           fi
 
+  Runner-Preparation-AMD:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      matrix-HIP: ${{ steps.set-matrix.outputs.matrix-HIP }}
+    steps:
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          if [ x"${{ github.repository }}" == x"ROCm/triton" ]; then
+            echo '::set-output name=matrix-HIP::[["self-hosted", "gfx942"]]'
+          else
+            echo '::set-output name=matrix-HIP::[["ubuntu-latest"]]'
+          fi
+
   pre-commit:
     name: pre-commit (code formatting)
+    needs: Runner-Preparation-AMD
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -76,21 +92,19 @@ jobs:
           git diff
 
   Integration-Tests-AMD:
+    needs: Runner-Preparation-AMD
+    if: needs.Runner-Preparation-AMD.outputs.matrix-HIP != ''
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     strategy:
       matrix:
-        runner: [gfx942]
-        triton_version: [local, upstream]
-      fail-fast: false # disables failing the entire job when one matrix entry fails
+        runner: ${{fromJson(needs.Runner-Preparation-AMD.outputs.matrix-HIP)}}
     container:
-      image: rocm/pytorch:rocm6.2.3_ubuntu22.04_py3.10_pytorch_release_2.3.0
+      image: rocm/pytorch:latest
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Show Device Info
-        run: |
-          rocminfo | grep gfx
       - name: Clear cache
         run: |
           rm -rf ~/.triton
@@ -103,30 +117,13 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install lit matplotlib pandas
-      - name: Uninstall Triton
-        run : |
-          pip uninstall -y triton
-          rm -rf ~/.triton
-          rm -rf ./triton/python/build
       - name: Install Triton
         run: |
-          if [ "${{ matrix.triton_version }}" = "local" ]; then
-            echo "Installing Local Triton..."
-            pip uninstall -y triton
-            cd python
-            pip install -v -e .
-            pip install numpy==1.26.4
-          else
-            echo "Installing Upstream Triton..."
-            git clone https://github.com/triton-lang/triton
-            cd triton
-            pip install ninja cmake wheel pybind11 # build-time dependencies
-            pip install --verbose --no-build-isolation ./python
-            cd ..
-          fi
-      - name: Show Triton version
-        run: |
-          pip show triton
+          echo "PATH is '$PATH'"
+          pip uninstall -y triton
+          cd python
+          pip install -v -e .
+          pip install numpy==1.26.4
       - name: Run Perf Kernels Unit Tests
         run: |
           pytest -vvv ./python/perf-kernels/flash-attention.py
