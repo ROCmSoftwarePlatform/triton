@@ -2,6 +2,7 @@
 M: 4864
 N: 8192
 K: 4160
+#K: 41600
 tuning:
   BLOCK_SIZE_M: 256
   BLOCK_SIZE_N: 256

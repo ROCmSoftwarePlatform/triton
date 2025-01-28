@@ -319,8 +319,10 @@ for _ in range(num_warmups):
     runner(*kernel_args, **kernel_kwargs)
 
 # benchmark
-num_timings = 10
+num_timings = 3
 num_repeats = 300
+#att
+#num_timings = 1
 #num_repeats = 1
 
 print('iter, TFlop/s, invocations')

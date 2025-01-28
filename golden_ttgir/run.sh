@@ -7,10 +7,11 @@ GPU=3
 
 TRITON_MFMA_TILE_ENABLE_SCHED_BARRIERS=1 TRITON_ALWAYS_COMPILE=1 HIP_VISIBLE_DEVICES=${GPU} python gemm_sub.py \
   --trans-b \
-  --sub irp/11.ttgir \
   --file config.yaml \
+  --sub irp/14b.ttgir \
   --verbose
 
+#  --sub irp/10.ttgir \
 #sudo rocm-smi --resetperfdeterminism -d ${GPU}
 
 #  --sub ir/7.ttgir \
