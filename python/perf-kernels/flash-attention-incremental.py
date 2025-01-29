@@ -1188,8 +1188,12 @@ class _attention(torch.autograd.Function):
 
         atomic_counter = torch.zeros([1], device=q.device, dtype=torch.int32)
 
-        attn_fwd[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
-                       *bias_strides, *alibi_strides, q_descale, k_descale, p_scale, p_descale, v_descale,
+        attn_fwd[grid](
+                # Basic SDPA and Tensors
+                q, k, v, metadata.bias, metadata.sm_scale, M, o,
+                *q_strides, *k_strides, *v_strides, *o_strides,
+                *bias_strides, *alibi_strides,
+                q_descale, k_descale, p_scale, p_descale, v_descale,
                        metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p,
                        philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
                        alibi_slopes=metadata.alibi_slopes, Num_head_q=nheads_q, Num_head_k=nheads_k, Head_dim=head_size,
