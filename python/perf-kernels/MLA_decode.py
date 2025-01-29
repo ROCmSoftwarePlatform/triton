@@ -202,6 +202,167 @@ def _decode_att_m_fwd(
                              BLOCK_D=BLOCK_D, BLOCK_C=BLOCK_C, BLOCK_R=BLOCK_R, BLOCK_N=BLOCK,
                              NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, num_warps=num_warps, num_stages=2)
 
+@triton.jit
+def _fwd_kernel_stage2(
+    Mid_O,
+    W_VC, # hdc
+    O,
+    B_Seqlen,
+    stride_mid_ob,
+    stride_mid_oh,
+    stride_mid_os,
+    stride_obs,
+    stride_oh,
+    stride_w_vcc,
+    stride_w_vch,
+    stride_w_vcd,
+    NUM_KV_SPLITS: tl.constexpr,
+    BLOCK_LORA: tl.constexpr, # we assume lora is pow of 2 and its the actual c
+    BLOCK_SIZE_K: tl.constexpr, # we split lora dim for inner loop ??
+    BLOCK_DV: tl.constexpr, # head_dim of v rounded to the nearest power of 2
+    Lv: tl.constexpr, # The actual head_dim of v
+):
+    cur_batch = tl.program_id(0)
+    cur_head = tl.program_id(1)
+
+    cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
+
+    offs_d = tl.arange(0, BLOCK_DV)
+    offs_c = tl.arange(0, BLOCK_LORA)
+    # TODO check this
+    mask_d = offs_d < Lv
+
+    e_sum = 0.0
+    e_max = -float("inf")
+    acc = tl.zeros([BLOCK_LORA], dtype=tl.float32)
+
+    offs_v = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + offs_c
+    offs_logic = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + BLOCK_LORA
+    offs_w_kv = cur_head * stride_w_vch + offs_d[:, None] * stride_w_vcd + offs_c[None, :] * stride_w_vcc
+
+    for split_kv_id in range(0, NUM_KV_SPLITS):
+        kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
+        split_kv_start = kv_len_per_split * split_kv_id
+        split_kv_end = tl.minimum(split_kv_start + kv_len_per_split, cur_batch_seq_len)
+
+        if split_kv_end > split_kv_start:
+            # No more mask for this one as lora is pow of 2
+            tv = tl.load(
+                Mid_O + offs_v + split_kv_id * stride_mid_os
+            )
+            tlogic = tl.load(Mid_O + offs_logic + split_kv_id * stride_mid_os)
+            n_e_max = tl.maximum(tlogic, e_max)
+
+            old_scale = tl.exp(e_max - n_e_max)
+            acc *= old_scale
+            exp_logic = tl.exp(tlogic - n_e_max)
+            acc += exp_logic * tv
+
+            e_sum = e_sum * old_scale + exp_logic
+            e_max = n_e_max
+
+    acc = acc / e_sum # c = 512
+
+    # for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+    w_vc = tl.load(W_VC + offs_w_kv) # dc, head is parallelized (128, 512)
+
+    # TODO if we can't load it we do blocked sum (c, ) * (c, d)  => (d,)
+    # tl.static_print("", w_vc)
+    # tl.static_print("", acc)
+    result = tl.sum(w_vc * acc[None, :], 1)
+
+    tl.store(
+        O + cur_batch * stride_obs + cur_head * stride_oh + offs_d,
+        result,
+        mask=mask_d,
+    )
+
+# qk_nope_head_dim=v_head_dim=d
+# w_kv has shape (c , ((d * 2) * num_heads)) its unpacked to w_kc and w_vc, along the d * 2 dim
+# the output has shape
+def _decode_softmax_reducev_fwd(
+    logits, # bhsc, c is the lora dim there's logit at the end of c dim
+    w_vc, # hdc each work group loads 512(c) * 128(d)
+    q,
+    o,
+    Lv, # head dim of v
+    b_seq_len,
+    num_kv_splits,
+):
+    batch, head_num = q.shape[0], q.shape[1]
+    # Lv = v_buffer.shape[-1],should be compressed c dim
+    # TODO check the BLOCK_DV here
+    BLOCK_DV = triton.next_power_of_2(Lv)
+    # accumulate over the c dim
+    BLOCK_K = 64
+
+    kv_lora_rank = w_vc.shape[0]
+
+    NUM_KV_SPLITS = num_kv_splits
+
+    extra_kargs = {}
+    if is_hip_:
+        # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
+        # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
+        extra_kargs = {"waves_per_eu": 4, "matrix_instr_nonkdim": 16, "kpack": 2}
+
+    grid = (batch, head_num)
+    # grid = lambda META: (batch, head_num, triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']))
+    w_vc = w_vc.view(kv_lora_rank, head_num, Lv)
+
+    _fwd_kernel_stage2[grid](
+        logits,
+        w_vc,
+        o,
+        b_seq_len,
+        logits.stride(0),
+        logits.stride(1),
+        logits.stride(2),
+        o.stride(0),
+        o.stride(1),
+        w_vc.stride(0),
+        w_vc.stride(1),
+        w_vc.stride(2),
+        NUM_KV_SPLITS=NUM_KV_SPLITS,
+        BLOCK_LORA=kv_lora_rank,
+        BLOCK_SIZE_K=BLOCK_K, # TODO check do we need this
+        BLOCK_DV=BLOCK_DV,
+        Lv=Lv,
+        num_warps=4,
+        num_stages=2,
+        **extra_kargs,
+    )
+
+
+def decode_attention_fwd_normal(
+    q,
+    kv_cache,
+    w_kc,
+    w_vc,
+    v_head_dim,
+    o,
+    req_to_token,
+    b_req_idx,
+    b_seq_len,
+    attn_logits,
+    num_kv_splits,
+    sm_scale,
+    logit_cap=0.0,
+):
+    _decode_att_m_fwd(
+        q,
+        kv_cache,
+        attn_logits,
+        w_kc,
+        req_to_token,
+        b_req_idx,
+        b_seq_len,
+        num_kv_splits,
+        sm_scale,
+        logit_cap
+    )
+
+    _decode_softmax_reducev_fwd(attn_logits, w_vc, q, o, v_head_dim, b_seq_len, num_kv_splits)
 
 def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap):
     from utils.sglang_ref import decode_attention_fwd_normal
@@ -277,6 +438,8 @@ def main():
     device = "cuda"
     # args = parse_args()
     B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim = 8, 16, 1024, 512, 128, 64
+    D = qk_nope_head_dim
+
     Req_to_tokens = torch.arange(B * S).reshape(B, S).to(device)
     B_req_idx = torch.arange(B).to(device)
     B_Seqlen = torch.full((B, ), S).to(device)
@@ -285,17 +448,32 @@ def main():
     logit_cap = 0.0
 
     q = torch.randn(B, H, qk_nope_head_dim + qk_rope_head_dim, device=device)
-    k = torch.randn(B * S, kv_lora_rank + qk_rope_head_dim, device=device)
+    kv_cache = torch.randn(B * S, kv_lora_rank + qk_rope_head_dim, device=device)
     # v = k[:,:kv_lora_rank]
 
-    att_out = torch.randn(B, H, num_kv_splits, kv_lora_rank + 1, device=device)
+    att_out = torch.empty(B, H, S, D, device=device)
+    attn_logits = torch.randn(B, H, num_kv_splits, kv_lora_rank + 1, device=device)
 
     w_kc = torch.randn(kv_lora_rank, H * qk_nope_head_dim, device=device)
-    # w_vc = torch.randn(kv_lora_rank, H * qk_nope_head_dim, device=device)
+    w_vc = torch.randn(kv_lora_rank, H * qk_nope_head_dim, device=device)
 
     # Initialize additional parameters
 
-    _decode_att_m_fwd(q, k, att_out, w_kc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap)
+    decode_attention_fwd_normal(
+        q,
+        kv_cache,
+        w_kc,
+        w_vc,
+        D,
+        att_out,
+        Req_to_tokens,
+        B_req_idx,
+        B_Seqlen,
+        attn_logits,
+        num_kv_splits,
+        sm_scale,
+        logit_cap=0.0,
+    )
 
     print(att_out)
 
