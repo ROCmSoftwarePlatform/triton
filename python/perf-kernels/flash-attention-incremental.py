@@ -495,13 +495,13 @@ autotune_configs, autotune_keys = get_autotune_configs()
 @triton.jit
 def attn_fwd(
         Q, K, V, bias, Sm_scale: constexpr_or_f32, L, Out,
+        Q_descale, K_descale, P_scale, P_descale, V_descale,
         stride_qz, stride_qh, stride_qm, stride_qk,
         stride_kz, stride_kh, stride_kn, stride_kk,
         stride_vz, stride_vh, stride_vk, stride_vn,
         stride_oz, stride_oh, stride_om, stride_on,
         stride_bz, stride_bh, stride_bm, stride_bn,
         stride_az, stride_ah,
-        Q_descale, K_descale, P_scale, P_descale, V_descale,
         cu_seqlens_q, cu_seqlens_k, dropout_p, philox_seed,
              PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: constexpr_or_i32,
              GRID_CU_MULTIP: tl.constexpr, B: constexpr_or_i32, philox_offset_base, encoded_softmax, alibi_slopes,
@@ -1191,9 +1191,9 @@ class _attention(torch.autograd.Function):
         attn_fwd[grid](
                 # Basic SDPA and Tensors
                 q, k, v, metadata.bias, metadata.sm_scale, M, o,
+                q_descale, k_descale, p_scale, p_descale, v_descale,
                 *q_strides, *k_strides, *v_strides, *o_strides,
                 *bias_strides, *alibi_strides,
-                q_descale, k_descale, p_scale, p_descale, v_descale,
                        metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p,
                        philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
                        alibi_slopes=metadata.alibi_slopes, Num_head_q=nheads_q, Num_head_k=nheads_k, Head_dim=head_size,
