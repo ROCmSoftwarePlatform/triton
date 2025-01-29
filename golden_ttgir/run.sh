@@ -9,7 +9,8 @@ GPU=3
 TRITON_MFMA_TILE_ENABLE_SCHED_BARRIERS=1 TRITON_ALWAYS_COMPILE=1 HIP_VISIBLE_DEVICES=${GPU} python gemm_sub.py \
   --trans-b \
   --file config.yaml \
-  --sub irp/16.ttgir \
+  --sub irp/17.ttgir \
+  --dump-ir amdgcn \
   --verbose
 
 #  --sub irp/14.ttgir \
