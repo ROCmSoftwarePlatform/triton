@@ -380,8 +380,8 @@ def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_
 
 
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits', [
-    (8, 16, 128, 512, 128, 64, 2),
-    (8, 16, 1024, 512, 128, 64, 2),
+    (8, 16, 128, 512, 128, 64),
+    (8, 16, 1024, 512, 128, 64),
 ])
 def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0, device="cuda"):
     torch.manual_seed(0)
