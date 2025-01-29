@@ -579,11 +579,11 @@ def attn_fwd(
         # dropout and PRNG
         ENABLE_DROPOUT: tl.constexpr,
         dropout_p,
-        philox_seed_ptr : '*u64',
-        philox_offset1 : '*u64',
+        philox_seed_ptr,
+        philox_offset1,
         philox_offset2 : tl.int32,  # TODO: move to tl.int64
-        philox_seed_output : '*u64', # Should be '*u64', but code-formatter complains
-        philox_offset_output : '*u64', # Should be '*u64', but code-formatter complains
+        philox_seed_output, # Should be '*u64', but code-formatter complains
+        philox_offset_output, # Should be '*u64', but code-formatter complains
         RETURN_ENCODED_SOFTMAX: tl.constexpr,
         encoded_softmax,
         # causal, (Planned Feature) windowed attention
