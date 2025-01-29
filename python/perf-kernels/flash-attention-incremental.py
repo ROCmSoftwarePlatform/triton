@@ -653,7 +653,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
                 else:
                     encoded_sm_ptrs = None
                 # initialize pointer to m and l
-                m_i = tl.full([BLOCK_M], float("-inf"), dtype=tl.float32)
+                m_i = tl.full([BLOCK_M], -3.40282e+38, dtype=tl.float32)
                 l_i = tl.full([BLOCK_M], 1.0, dtype=tl.float32)
                 acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
                 # scale sm_scale by log_2(e) and use 2^x in the loop as we do not
