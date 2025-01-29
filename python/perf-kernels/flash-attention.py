@@ -505,7 +505,7 @@ def get_cdna_autotune_configs():
                       num_stages=1, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
                       num_stages=1, num_warps=4),
-    ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
+    ], ['CAUSAL_TYPE', 'dropout_p', 'Max_seqlen_q', 'Max_seqlen_k', 'Head_dim', 'Num_seqlens', 'Num_head_q', 'Num_head_k']
 
 
 def get_rdna_autotune_configs():
@@ -550,6 +550,7 @@ autotune_configs, autotune_keys = get_autotune_configs()
 def attn_fwd(
         # Basic SDPA
         Q, K, V, B, A, Sm_scale : constexpr_or_f32, L, Out,
+        Q_descale, K_descale, P_scale, P_descale, V_descale,
         stride_qz, stride_qh, stride_qm, stride_qk,
         stride_kz, stride_kh, stride_kn, stride_kk,
         stride_vz, stride_vh, stride_vk, stride_vn,
@@ -572,11 +573,11 @@ def attn_fwd(
         # dropout and PRNG
         ENABLE_DROPOUT: tl.constexpr,
         dropout_p,
-        philox_seed_ptr,
-        philox_offset1,
+        philox_seed_ptr : '*u64',
+        philox_offset1 : '*u64',
         philox_offset2 : tl.int32,  # TODO: move to tl.int64
-        philox_seed_output, # Should be '*u64', but code-formatter complains
-        philox_offset_output, # Should be '*u64', but code-formatter complains
+        philox_seed_output : '*u64', # Should be '*u64', but code-formatter complains
+        philox_offset_output : '*u64', # Should be '*u64', but code-formatter complains
         RETURN_ENCODED_SOFTMAX: tl.constexpr,
         encoded_softmax,
         # causal, (Planned Feature) windowed attention
@@ -588,9 +589,7 @@ def attn_fwd(
         # INT8
         INT8: tl.constexpr,
         INT8_KV: tl.constexpr,
-        Q_descale, K_descale,
         USE_P_SCALE: tl.constexpr,
-        P_scale, P_descale, V_descale,
         # Persistent related arguments
         PERSISTENT_TYPE: tl.constexpr,  # 0: disable, 1: fixed, 2: dynamic
         persistent_atomic_counter,
@@ -607,13 +606,13 @@ def attn_fwd(
     ## tl.constexpr to variable
     IS_CAUSAL: tl.constexpr = CAUSAL_TYPE != 0
     IS_CAUSAL_BOTTOM_RIGHT: tl.constexpr = CAUSAL_TYPE == 2
-    USE_BIAS: tl.constexpr = BIAS_TYPE == 1
+    USE_BIAS: tl.constexpr = (BIAS_TYPE == 1)
     tl.static_assert(BIAS_TYPE == 0 or BIAS_TYPE == 1, f'Unsupported BIAS_TYPE {BIAS_TYPE}')
     L_not_null = L.cast(dtype=tl.uint64, bitcast=True) != 0  # Allows null L for training=False
 
     ## philox
     philox_seed = 0
-    philox_offset_base = philox_offset2
+    philox_offset_base = philox_offset2 if ENABLE_DROPOUT else 0
     if ENABLE_DROPOUT:
         philox_seed = tl.load(philox_seed_ptr)
         philox_offset_base += tl.load(philox_offset1)
@@ -1345,11 +1344,19 @@ class _attention(torch.autograd.Function):
 
         # Seed the RNG so we get reproducible results for testing.
         # Note: these arguments are to meet the hipGraph support requirement in PyTorch
-        philox_seed = torch.tensor([0x1BF52], device=q.device, dtype=torch.uint64)
-        philox_offset1 = torch.tensor([0x1D4000], device=q.device, dtype=torch.uint64)
-        philox_offset2 = 0x000B42
-        philox_seed_output = torch.tensor([0], device=q.device, dtype=torch.uint64)
-        philox_offset_output = torch.tensor([0], device=q.device, dtype=torch.uint64)
+        if metadata.dropout_p > 0.0:
+            philox_seed = torch.tensor([0x1BF52], device=q.device, dtype=torch.uint64)
+            philox_offset1 = torch.tensor([0x1D4000], device=q.device, dtype=torch.uint64)
+            philox_offset2 = 0x000B42
+            philox_seed_output = torch.tensor([0], device=q.device, dtype=torch.uint64)
+            philox_offset_output = torch.tensor([0], device=q.device, dtype=torch.uint64)
+        else:
+            nulltensor = torch.empty([0], device=q.device, dtype=torch.uint64)
+            philox_seed = nulltensor
+            philox_offset1 = nulltensor
+            philox_offset2 = 0
+            philox_seed_output = nulltensor
+            philox_offset_output = nulltensor
 
         if metadata.bias is not None:
             bias_strides = (metadata.bias.stride(0), metadata.bias.stride(1), metadata.bias.stride(2),
@@ -1411,7 +1418,7 @@ class _attention(torch.autograd.Function):
                 # causal, (Planned Feature) windowed attention
                 CAUSAL_TYPE=CausalType.BOTTOM_RIGHT if metadata.causal else CausalType.NONE,
                 # bias
-                BIAS_TYPE=BiasType.MATRIX if metadata.bias is None else BiasType.NONE,
+                BIAS_TYPE=BiasType.NONE if metadata.bias is None else BiasType.MATRIX,
                 # alibi
                 USE_ALIBI=False if metadata.alibi_slopes is None else True,
                 # INT8
