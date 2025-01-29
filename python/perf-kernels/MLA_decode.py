@@ -273,7 +273,7 @@ def _fwd_kernel_stage2(
         mask_out = offs_n + n * BLOCK_SIZE_N < Lv
         w_vc = tl.load(w_kv_prts, mask=mask_v, other=0.0) # dc, head is parallelized (128, 512)
 
-        result += tl.sum(w_vc * acc[None, :], 1)
+        result = tl.sum(w_vc * acc[None, :], 1)
 
         w_kv_prts += BLOCK_SIZE_N * stride_w_vcd
 
