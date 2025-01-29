@@ -511,11 +511,15 @@ def attn_fwd(
         cu_seqlens_k,
         Max_seqlen_q: constexpr_or_i32,
         Max_seqlen_k: constexpr_or_i32,
+        # Head Dimensions
+        BLOCK_DMODEL: tl.constexpr,
+        Head_dim : constexpr_or_i32,
+        PADDED_HEAD: tl.constexpr,
         dropout_p, philox_seed,
         PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: constexpr_or_i32,
              GRID_CU_MULTIP: tl.constexpr, B: constexpr_or_i32, philox_offset_base, encoded_softmax, alibi_slopes,
-             Head_dim: constexpr_or_i32, VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
-             BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
+              VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
+              BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
              ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr,
              INT8: tl.constexpr, USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr):
 
@@ -619,7 +623,6 @@ def attn_fwd(
                     n_extra_tokens = BLOCK_N - seqlen_k
                 elif seqlen_k % BLOCK_N:
                     n_extra_tokens = seqlen_k % BLOCK_N
-                PADDED_HEAD: tl.constexpr = (Head_dim != BLOCK_DMODEL)
 
                 # Compute pointers for all the tensors used in this kernel.
                 q_offset = Q + off_z * stride_qz + off_h_q * stride_qh + cu_seqlens_q_start * stride_qm
@@ -1211,10 +1214,13 @@ class _attention(torch.autograd.Function):
                 Max_seqlen_k=metadata.max_seqlens_k,
                 cu_seqlens_q=metadata.cu_seqlens_q,
                 cu_seqlens_k=metadata.cu_seqlens_k,
+                BLOCK_DMODEL=padded_d_model,
+                Head_dim=head_size,
+                PADDED_HEAD=True if head_size != padded_d_model else False,
                 dropout_p=metadata.dropout_p,
                        philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
-                       alibi_slopes=metadata.alibi_slopes, Head_dim=head_size,
-                       IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen, BLOCK_DMODEL=padded_d_model,
+                       alibi_slopes=metadata.alibi_slopes,
+                       IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen, 
                        USE_BIAS=False if metadata.bias is None else True,
                        USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
                        > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8,
