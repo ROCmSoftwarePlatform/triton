@@ -201,26 +201,16 @@ def _decode_att_m_fwd(
                              BLOCK_D=BLOCK_D, BLOCK_C=BLOCK_C, BLOCK_R=BLOCK_R, BLOCK_N=BLOCK,
                              NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, num_warps=num_warps, num_stages=2)
 
+
 @triton.jit
-def _fwd_kernel_stage2(
-    Mid_O,
-    W_VC, # hdc
-    O,
-    B_Seqlen,
-    stride_mid_ob,
-    stride_mid_oh,
-    stride_mid_os,
-    stride_obs,
-    stride_oh,
-    stride_w_vch,
-    stride_w_vcc,
-    stride_w_vcd,
-    NUM_KV_SPLITS: tl.constexpr,
-    LORA: tl.constexpr, # we assume lora (low rank dim c) is pow of 2 and its the actual c
-    BLOCK_SIZE_N: tl.constexpr, # we split lora dim for inner loop ??
-    BLOCK_DV: tl.constexpr, # head_dim of v rounded to the nearest power of 2
-    Lv: tl.constexpr, # The actual head_dim of v
-):
+def _fwd_kernel_stage2(Mid_O, W_VC,  # hdc
+                       O, B_Seqlen, stride_mid_ob, stride_mid_oh, stride_mid_os, stride_obs, stride_oh, stride_w_vch,
+                       stride_w_vcc, stride_w_vcd, NUM_KV_SPLITS: tl.constexpr,
+                       LORA: tl.constexpr,  # we assume lora (low rank dim c) is pow of 2 and its the actual c
+                       BLOCK_SIZE_N: tl.constexpr,  # we split lora dim for inner loop ??
+                       BLOCK_DV: tl.constexpr,  # head_dim of v rounded to the nearest power of 2
+                       Lv: tl.constexpr,  # The actual head_dim of v
+                       ):
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
 
@@ -248,9 +238,7 @@ def _fwd_kernel_stage2(
 
         if split_kv_end > split_kv_start:
             # No more mask for this one as lora is pow of 2
-            tv = tl.load(
-                Mid_O + offs_v + split_kv_id * stride_mid_os
-            )
+            tv = tl.load(Mid_O + offs_v + split_kv_id * stride_mid_os)
             tlogic = tl.load(Mid_O + offs_logic + split_kv_id * stride_mid_os)
             n_e_max = tl.maximum(tlogic, e_max)
 
@@ -262,14 +250,14 @@ def _fwd_kernel_stage2(
             e_sum = e_sum * old_scale + exp_logic
             e_max = n_e_max
 
-    acc = acc / e_sum # c = 512
+    acc = acc / e_sum  # c = 512
 
     result = tl.zeros([BLOCK_SIZE_N], dtype=tl.float32)
 
     for n in range(0, tl.cdiv(BLOCK_DV, BLOCK_SIZE_N)):
         mask_v = offs_n[:, None] + n * BLOCK_SIZE_N < Lv
         mask_out = offs_n + n * BLOCK_SIZE_N < Lv
-        w_vc = tl.load(w_kv_prts, mask=mask_v, other=0.0) # dc, head is parallelized (128, 512)
+        w_vc = tl.load(w_kv_prts, mask=mask_v, other=0.0)  # dc, head is parallelized (128, 512)
 
         result = tl.sum(w_vc * acc[None, :], 1)
 
@@ -282,15 +270,16 @@ def _fwd_kernel_stage2(
             mask=mask_out,
         )
 
+
 # qk_nope_head_dim=v_head_dim=d
 # w_kv has shape (c , ((d * 2) * num_heads)) its unpacked to w_kc and w_vc, along the d * 2 dim
 # the output has shape
 def _decode_softmax_reducev_fwd(
-    logits, # bhsc, c is the lora dim there's logit at the end of c dim
-    w_vc, # hdc each work group loads 512(c) * 128(d)
+    logits,  # bhsc, c is the lora dim there's logit at the end of c dim
+    w_vc,  # hdc each work group loads 512(c) * 128(d)
     q,
     o,
-    Lv, # head dim of v
+    Lv,  # head dim of v
     b_seq_len,
     num_kv_splits,
 ):
@@ -353,20 +342,11 @@ def decode_attention_fwd_normal(
     sm_scale,
     logit_cap=0.0,
 ):
-    _decode_att_m_fwd(
-        q,
-        kv_cache,
-        attn_logits,
-        w_kc,
-        req_to_token,
-        b_req_idx,
-        b_seq_len,
-        num_kv_splits,
-        sm_scale,
-        logit_cap
-    )
+    _decode_att_m_fwd(q, kv_cache, attn_logits, w_kc, req_to_token, b_req_idx, b_seq_len, num_kv_splits, sm_scale,
+                      logit_cap)
 
     _decode_softmax_reducev_fwd(attn_logits, w_vc, q, o, v_head_dim, b_seq_len, num_kv_splits)
+
 
 def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap):
     from utils.sglang_ref import decode_attention_fwd_normal as decode_attention_fwd_normal_ref
@@ -376,7 +356,8 @@ def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_
 
     o = torch.empty((*q_input.shape[:-1], v_input.shape[-1]), dtype=q_input.dtype, device=q_input.device)
     attn_logits = torch.empty(B, H, num_kv_splits, kv_lora_rank + 1, device=device)
-    decode_attention_fwd_normal_ref(q_input, k_input, v_input, o, Req_to_tokens, B_req_idx, B_Seqlen, attn_logits, num_kv_splits, sm_scale, logit_cap)
+    decode_attention_fwd_normal_ref(q_input, k_input, v_input, o, Req_to_tokens, B_req_idx, B_Seqlen, attn_logits,
+                                    num_kv_splits, sm_scale, logit_cap)
     return o, attn_logits
 
 
@@ -402,10 +383,12 @@ def input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, devi
     (8, 16, 128, 512, 128, 64),
     (8, 16, 1024, 512, 128, 64),
 ])
-def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0, device="cuda"):
+def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0,
+                device="cuda"):
     torch.manual_seed(0)
     D = qk_nope_head_dim
-    Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc = input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, device)
+    Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc = input_helper(
+        B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, device)
 
     # Initialize additional parameters
 
@@ -425,63 +408,64 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_k
         logit_cap=0.0,
     )
 
-    tri_output = att_out # .flatten(1,2)
+    tri_output = att_out  # .flatten(1,2)
 
     # reference
-    
-    ref_output, ref_logits = ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, device="cuda")
+    ref_output, ref_logits = ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits,
+                                      sm_scale, logit_cap, device="cuda")
 
-    print("first 10 logits:")
-    print(f"ref: {ref_logits.flatten()[:10]}")
-    print(f"tri: {attn_logits.flatten()[:10]}")
+    # print("first 10 logits:")
+    # print(f"ref: {ref_logits.flatten()[:10]}")
+    # print(f"tri: {attn_logits.flatten()[:10]}")
     torch.testing.assert_close(ref_logits, attn_logits, atol=1e-2, rtol=1e-2)
-    print("attn_logits from stage 1 matches with ref")
+    # print("attn_logits from stage 1 matches with ref")
 
-    print("first 10 outputs:")
-    print(f"ref: {ref_output.flatten()[:10]}")
-    print(f"tri: {tri_output.flatten()[:10]}")
+    # print("first 10 outputs:")
+    # print(f"ref: {ref_output.flatten()[:10]}")
+    # print(f"tri: {tri_output.flatten()[:10]}")
     torch.testing.assert_close(ref_output, tri_output, atol=1e-2, rtol=1e-2)
-    print("attn_output from stage 2 matches with ref")
+    # print("attn_output from stage 2 matches with ref")
 
 
-def ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, device="cuda"):
+def ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap,
+             device="cuda"):
     B, H = q.shape[0], q.shape[1]
-    
+
     kv_lora_rank = w_kc.shape[-1]
     qk_nope_head_dim = w_kc.shape[1]
     qk_rope_head_dim = kv_cache.shape[-1] - kv_lora_rank
-    
-    q_input = torch.empty(
-            B, H, kv_lora_rank + qk_rope_head_dim
-        ).to(device)
+
+    q_input = torch.empty(B, H, kv_lora_rank + qk_rope_head_dim).to(device)
 
     q_nope, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
 
     q_nope_out = torch.bmm(q_nope.transpose(0, 1), w_kc)
 
-    q_input[..., : kv_lora_rank] = q_nope_out.transpose(0, 1)
+    q_input[..., :kv_lora_rank] = q_nope_out.transpose(0, 1)
 
     latent_cache = kv_cache
-    v_input = latent_cache[..., : kv_lora_rank]
+    v_input = latent_cache[..., :kv_lora_rank]
     v_input = v_input.contiguous().unsqueeze(1)
     k_input = latent_cache.unsqueeze(1)
-    k_input[..., : kv_lora_rank] = v_input
-    k_pe = k_input[..., kv_lora_rank :]
+    k_input[..., :kv_lora_rank] = v_input
+    k_pe = k_input[..., kv_lora_rank:]
 
     # q_pe, k_pe = self.rotary_emb(positions, q_pe, k_pe)
-    q_input[..., kv_lora_rank :] = q_pe
-    k_input[..., kv_lora_rank :] = k_pe
+    q_input[..., kv_lora_rank:] = q_pe
+    k_input[..., kv_lora_rank:] = k_pe
 
-    attn_output, attn_logits_ref = attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap)
+    attn_output, attn_logits_ref = attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen,
+                                            num_kv_splits, sm_scale, logit_cap)
 
     attn_output = attn_output.view(-1, H, kv_lora_rank)
 
     attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
 
-    ref_output = attn_bmm_output.transpose(0, 1) #  # .flatten(1, 2)
-    
+    ref_output = attn_bmm_output.transpose(0, 1)  #  # .flatten(1, 2)
+
     return ref_output, attn_logits_ref
     # ref_output, _ = self.o_proj(attn_output)
+
 
 def benchmark():
 
@@ -490,21 +474,22 @@ def benchmark():
     x_vals_list = [(8, 16, 1024, 512, 128, 64, 2), (8, 16, 4096, 512, 128, 64, 2), (8, 16, 8192, 512, 128, 64, 2)]
     x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
     line_vals = ["naive", "fused"]
-    plot_name = f"MLA-decode"
+    plot_name = "MLA-decode"
 
     configs.append(
         triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
-                                 line_names=line_vals, styles=[('red', '-'),
-                                                               ('green', '-')], ylabel='ms', plot_name=plot_name,
-                                 args={'sm_scale': 1.0, 'logit_cap': 0.0, 'device': "cuda"}))
+                                 line_names=line_vals, styles=[('red', '-'), ('green', '-')], ylabel='ms',
+                                 plot_name=plot_name, args={'sm_scale': 1.0, 'logit_cap': 0.0, 'device': "cuda"}))
 
     @triton.testing.perf_report(configs)
-    def bench_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits, sm_scale, logit_cap, device, provider):
+    def bench_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits, sm_scale, logit_cap, device,
+                  provider):
         warmup = 25
         rep = 100
 
         D = qk_nope_head_dim
-        Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc = input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, device)
+        Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc = input_helper(
+            B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, device)
 
         if "fused" in provider:
             fn = lambda: {
@@ -526,7 +511,8 @@ def benchmark():
             }
 
         if "naive" in provider:
-            fn = lambda: ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, device="cuda")
+            fn = lambda: ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+                                  logit_cap, device="cuda")
 
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
