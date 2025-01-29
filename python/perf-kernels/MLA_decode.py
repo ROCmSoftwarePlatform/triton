@@ -218,7 +218,7 @@ def _fwd_kernel_stage2(
     stride_w_vcd,
     NUM_KV_SPLITS: tl.constexpr,
     LORA: tl.constexpr, # we assume lora (low rank dim c) is pow of 2 and its the actual c
-    BLOCK_SIZE_K: tl.constexpr, # we split lora dim for inner loop ??
+    BLOCK_SIZE_N: tl.constexpr, # we split lora dim for inner loop ??
     BLOCK_DV: tl.constexpr, # head_dim of v rounded to the nearest power of 2
     Lv: tl.constexpr, # The actual head_dim of v
 ):
@@ -229,6 +229,7 @@ def _fwd_kernel_stage2(
 
     offs_d = tl.arange(0, BLOCK_DV)
     offs_c = tl.arange(0, LORA)
+    offs_n = tl.arange(0, BLOCK_SIZE_N)
     # TODO check this
     mask_d = offs_d < Lv
 
@@ -238,7 +239,7 @@ def _fwd_kernel_stage2(
 
     offs_v = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + offs_c
     offs_logic = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + LORA
-    offs_w_kv = cur_head * stride_w_vch + offs_d[:, None] * stride_w_vcd + offs_c[None, :] * stride_w_vcc
+    offs_w_kv = cur_head * stride_w_vch + offs_n[:, None] * stride_w_vcd + offs_c[None, :] * stride_w_vcc
     w_kv_prts = W_VC + offs_w_kv
 
     for split_kv_id in range(0, NUM_KV_SPLITS):
@@ -264,20 +265,23 @@ def _fwd_kernel_stage2(
 
     acc = acc / e_sum # c = 512
 
-    result = tl.zeros([BLOCK_DV], dtype=tl.float32)
+    result = tl.zeros([BLOCK_SIZE_N], dtype=tl.float32)
 
-    for k in range(0, tl.cdiv(LORA, BLOCK_SIZE_K)):
-        w_vc = tl.load(w_kv_prts, mask=offs_c[None, :] < LORA - k * BLOCK_SIZE_K, other=0.0) # dc, head is parallelized (128, 512)
+    for n in range(0, tl.cdiv(BLOCK_DV, BLOCK_SIZE_N)):
+        mask_v = offs_n[:, None] + n * BLOCK_SIZE_N < Lv
+        mask_out = offs_n + n * BLOCK_SIZE_N < Lv
+        w_vc = tl.load(w_kv_prts, mask=mask_v, other=0.0) # dc, head is parallelized (128, 512)
 
         result += tl.sum(w_vc * acc[None, :], 1)
 
-        w_kv_prts += BLOCK_SIZE_K * stride_w_vcc
+        w_kv_prts += BLOCK_SIZE_N * stride_w_vcd
 
-    tl.store(
-        O + cur_batch * stride_obs + cur_head * stride_oh + offs_d,
-        result,
-        mask=mask_d,
-    )
+        offs_out = cur_batch * stride_obs + cur_head * stride_oh + offs_n + n * BLOCK_SIZE_N
+        tl.store(
+            O + offs_out,
+            result,
+            mask=mask_out,
+        )
 
 # qk_nope_head_dim=v_head_dim=d
 # w_kv has shape (c , ((d * 2) * num_heads)) its unpacked to w_kc and w_vc, along the d * 2 dim
@@ -295,8 +299,8 @@ def _decode_softmax_reducev_fwd(
     # Lv = v_buffer.shape[-1],should be compressed c dim
     # TODO check the BLOCK_DV here
     BLOCK_DV = triton.next_power_of_2(Lv)
-    # accumulate over the c dim
-    BLOCK_K = 64
+    # tiling on the head_dim_v
+    BLOCK_K = 8
 
     kv_lora_rank = w_vc.shape[0]
 
@@ -327,7 +331,7 @@ def _decode_softmax_reducev_fwd(
         w_vc.stride(2),
         NUM_KV_SPLITS=NUM_KV_SPLITS,
         LORA=kv_lora_rank,
-        BLOCK_SIZE_K=BLOCK_K, # TODO check do we need this
+        BLOCK_SIZE_N=BLOCK_K,
         BLOCK_DV=BLOCK_DV,
         Lv=Lv,
         num_warps=4,
@@ -420,7 +424,7 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_k
     q_input = torch.empty(
             B, H, kv_lora_rank + qk_rope_head_dim
         ).to(device)
-    
+
     q_nope, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
 
     w_kc = w_kc.view(kv_lora_rank, H, qk_nope_head_dim).permute((1,2,0))
@@ -441,19 +445,19 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_k
     k_input[..., kv_lora_rank :] = k_pe
 
     attn_output, attn_logits_ref = attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap)
-    
+
     print("first 10 logits:")
     print(f"ref: {attn_logits_ref.flatten()[:10]}")
-    print(f"tri: {attn_logits.flatten()[:10]}")      
+    print(f"tri: {attn_logits.flatten()[:10]}")
     torch.testing.assert_close(attn_logits_ref, attn_logits, atol=1e-2, rtol=1e-2)
     print("attn_logits are correct")
-    
+
     attn_output = attn_output.view(-1, H, kv_lora_rank)
 
     w_vc = w_vc.view(kv_lora_rank, H, qk_nope_head_dim).permute((1,0,2))
 
     attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
-    
+
     ref_output = attn_bmm_output.transpose(0, 1) # .flatten(1, 2)
     # ref_output, _ = self.o_proj(attn_output)
     # print(ref_output.shape)
@@ -461,7 +465,7 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_k
 
     print("first 10 outputs:")
     print(f"ref: {ref_output.flatten()[:10]}")
-    print(f"tri: {tri_output.flatten()[:10]}")   
+    print(f"tri: {tri_output.flatten()[:10]}")
     torch.testing.assert_close(ref_output, tri_output, atol=1e-2, rtol=1e-2)
     print("attn_output are correct")
 
