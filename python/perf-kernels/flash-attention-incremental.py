@@ -640,14 +640,15 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
                     alibi_slope = None
 
                 if ENABLE_DROPOUT:
-                    off_hz = off_z * Num_head_q + off_h_q
-                    batch_philox_offset = philox_offset_base + off_hz * seqlen_q * seqlen_k
+                    off_zh = off_z * Num_head_q + off_h_q
+                    batch_philox_offset = philox_offset_base + off_zh * Max_seqlen_q * Max_seqlen_k
                 else:
                     batch_philox_offset = 0
                 # We can ask to return the dropout mask without actually doing any dropout. In
                 # this case, we return an invalid pointer so indicate the mask is not valid.
                 if RETURN_ENCODED_SOFTMAX:
-                    encoded_sm_base = encoded_softmax + off_h_q * seqlen_q * seqlen_k
+                    off_zh = off_z * Num_head_q + off_h_q
+                    encoded_sm_base = encoded_softmax + off_zh * Max_seqlen_q * Max_seqlen_k
                     encoded_sm_ptrs = encoded_sm_base + offs_m[:, None] * seqlen_k + offs_n[None, :]
                 else:
                     encoded_sm_ptrs = None
