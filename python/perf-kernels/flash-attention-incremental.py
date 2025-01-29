@@ -452,7 +452,7 @@ def get_cdna_autotune_configs():
                       num_stages=1, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
                       num_stages=1, num_warps=4),
-    ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
+    ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'Max_seqlen_k', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
 def get_rdna_autotune_configs():
@@ -472,7 +472,7 @@ def get_rdna_autotune_configs():
         # Fall-back config.
         triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
                       num_stages=1, num_warps=2),
-    ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
+    ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'Max_seqlen_k', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
 def get_autotune_configs():
@@ -500,7 +500,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
              PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: constexpr_or_i32,
              GRID_CU_MULTIP: tl.constexpr, B: constexpr_or_i32, philox_offset_base, encoded_softmax, alibi_slopes,
              HQ: constexpr_or_i32, HK: constexpr_or_i32, ACTUAL_BLOCK_DMODEL: constexpr_or_i32, MAX_SEQLENS_Q: constexpr_or_i32,
-             MAX_SEQLENS_K: constexpr_or_i32, VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
+             Max_seqlen_k: constexpr_or_i32, VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
              BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
              ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr,
              INT8: tl.constexpr, USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr):
@@ -551,7 +551,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
             cu_seqlens_q_start = 0
             cu_seqlens_k_start = 0
             seqlen_q = MAX_SEQLENS_Q
-            seqlen_k = MAX_SEQLENS_K
+            seqlen_k = Max_seqlen_k
 
         if continue_condition:
             # Now we compute whether we need to exit early due to causal masking.
@@ -704,7 +704,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
                 if n_full_blocks > 0:
                     block_max = (n_blocks - masked_blocks) * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk,
-                                                    stride_bn, start_m, seqlen_k, seqlen_q, MAX_SEQLENS_K, dropout_p, philox_seed,
+                                                    stride_bn, start_m, seqlen_k, seqlen_q, Max_seqlen_k, dropout_p, philox_seed,
                                                     batch_philox_offset, encoded_sm_ptrs,
                                                     # _, _, offs_n_causal, masked_blocks, n_extra_tokens, _
                                                     block_min, block_max, 0, 0, 0, alibi_slope, q_descale, k_descale,
@@ -733,7 +733,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
                         encoded_sm_ptrs += n_full_blocks * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(
                         acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk, stride_bn, start_m, seqlen_k,
-                        seqlen_q, MAX_SEQLENS_K, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs, block_min, block_max,
+                        seqlen_q, Max_seqlen_k, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs, block_min, block_max,
                         offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope, q_descale, k_descale, v_descale,
                         p_scale, IS_CAUSAL, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
                         # _, MASK_STEPS, ...
@@ -1186,7 +1186,7 @@ class _attention(torch.autograd.Function):
                        metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p,
                        philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
                        alibi_slopes=metadata.alibi_slopes, HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size,
-                       MAX_SEQLENS_Q=metadata.max_seqlens_q, MAX_SEQLENS_K=metadata.max_seqlens_k,
+                       MAX_SEQLENS_Q=metadata.max_seqlens_q, Max_seqlen_k=metadata.max_seqlens_k,
                        IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen, BLOCK_DMODEL=padded_d_model,
                        USE_BIAS=False if metadata.bias is None else True,
                        USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
