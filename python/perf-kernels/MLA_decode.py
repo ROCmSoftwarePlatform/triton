@@ -473,7 +473,7 @@ def benchmark():
 
     x_vals_list = [(8, 16, 1024, 512, 128, 64, 2), (8, 16, 4096, 512, 128, 64, 2), (8, 16, 8192, 512, 128, 64, 2)]
     x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
-    line_vals = ["naive", "fused"]
+    line_vals = ["ref", "fused"]
     plot_name = "MLA-decode"
 
     configs.append(
@@ -510,7 +510,7 @@ def benchmark():
                 )
             }
 
-        if "naive" in provider:
+        if "ref" in provider:
             fn = lambda: ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
                                   logit_cap, device="cuda")
 
