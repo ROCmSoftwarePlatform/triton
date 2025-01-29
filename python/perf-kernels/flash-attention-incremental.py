@@ -493,10 +493,16 @@ autotune_configs, autotune_keys = get_autotune_configs()
     use_cuda_graph=True,
 )
 @triton.jit
-def attn_fwd(Q, K, V, bias, Sm_scale: constexpr_or_f32, L, Out, stride_qz, stride_qh, stride_qm, stride_qk, stride_kz,
-             stride_kh, stride_kn, stride_kk, stride_vz, stride_vh, stride_vk, stride_vn, stride_oz, stride_oh,
-             stride_om, stride_on, stride_bz, stride_bh, stride_bm, stride_bn, stride_az, stride_ah, Q_descale,
-             K_descale, P_scale, P_descale, V_descale, cu_seqlens_q, cu_seqlens_k, dropout_p, philox_seed,
+def attn_fwd(
+        Q, K, V, bias, Sm_scale: constexpr_or_f32, L, Out,
+        stride_qz, stride_qh, stride_qm, stride_qk,
+        stride_kz, stride_kh, stride_kn, stride_kk,
+        stride_vz, stride_vh, stride_vk, stride_vn,
+        stride_oz, stride_oh, stride_om, stride_on,
+        stride_bz, stride_bh, stride_bm, stride_bn,
+        stride_az, stride_ah,
+        Q_descale, K_descale, P_scale, P_descale, V_descale,
+        cu_seqlens_q, cu_seqlens_k, dropout_p, philox_seed,
              PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: constexpr_or_i32,
              GRID_CU_MULTIP: tl.constexpr, B: constexpr_or_i32, philox_offset_base, encoded_softmax, alibi_slopes,
              Num_head_q: constexpr_or_i32, Num_head_k: constexpr_or_i32, Head_dim: constexpr_or_i32, Max_seqlen_q: constexpr_or_i32,
