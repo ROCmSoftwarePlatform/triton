@@ -28,7 +28,8 @@ import triton.language as tl
 import sys
 import torch
 
-from sglang.srt.utils import is_hip
+def is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 is_hip_ = is_hip()
 
