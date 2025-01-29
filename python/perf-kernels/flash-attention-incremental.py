@@ -277,7 +277,7 @@ def compute_alibi_tensor(alibi_slopes, seqlen_q, seqlen_k):
 
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk, stride_bn, start_m,
-                    actual_seqlen_k, actual_seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
+                    actual_seqlen_k, actual_seqlen_q, Max_seqlen_k : constexpr_or_i32, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
                     block_min, block_max, offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope, q_descale,
                     k_descale, v_descale, p_scale, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
                     BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, OFFS_M: tl.constexpr, OFFS_N: tl.constexpr,
@@ -348,8 +348,8 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
         # CAVEAT: Must update l_ij before applying dropout
         l_ij = tl.sum(p, 1)
         if ENABLE_DROPOUT:
-            philox_offset = batch_philox_offset + start_m * BLOCK_M * actual_seqlen_k + start_n - BLOCK_N
-            keep = dropout_mask(philox_seed, philox_offset, dropout_p, BLOCK_M, BLOCK_N, actual_seqlen_k)
+            philox_offset = batch_philox_offset + start_m * BLOCK_M * Max_seqlen_k + start_n
+            keep = dropout_mask(philox_seed, philox_offset, dropout_p, BLOCK_M, BLOCK_N, Max_seqlen_k)
             if RETURN_ENCODED_SOFTMAX:
                 # yapf: disable
                 mstore2d(tl.where(keep, p, -p).to(encoded_sm_base.type.element_ty),
@@ -704,7 +704,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
                 if n_full_blocks > 0:
                     block_max = (n_blocks - masked_blocks) * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk,
-                                                    stride_bn, start_m, seqlen_k, seqlen_q, dropout_p, philox_seed,
+                                                    stride_bn, start_m, seqlen_k, seqlen_q, MAX_SEQLENS_K, dropout_p, philox_seed,
                                                     batch_philox_offset, encoded_sm_ptrs,
                                                     # _, _, offs_n_causal, masked_blocks, n_extra_tokens, _
                                                     block_min, block_max, 0, 0, 0, alibi_slope, q_descale, k_descale,
@@ -733,7 +733,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
                         encoded_sm_ptrs += n_full_blocks * BLOCK_N
                     acc, l_i, m_i = _attn_fwd_inner(
                         acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk, stride_bn, start_m, seqlen_k,
-                        seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs, block_min, block_max,
+                        seqlen_q, MAX_SEQLENS_K, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs, block_min, block_max,
                         offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope, q_descale, k_descale, v_descale,
                         p_scale, IS_CAUSAL, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
                         # _, MASK_STEPS, ...
