@@ -197,6 +197,35 @@ def load_fn(ptrs, offset_first, offset_second, boundary_first, boundary_second):
     return tensor
 
 
+# Convenience function to store with boundary checks.
+# Used for encoded_softmax so the performance is not a concern
+@triton.jit
+def mstore2d(
+    registers,
+    REG_ROWS: tl.constexpr,
+    REG_COLS: tl.constexpr,
+    o_base,
+    o_start_row,
+    o_start_col,
+    o_rows,
+    o_cols,
+    stride_row,
+    stride_col,
+):
+    off_rows = tl.arange(0, REG_ROWS) + o_start_row
+    off_cols = tl.arange(0, REG_COLS) + o_start_col
+    o_ptrs = o_base + off_rows[:, None] * stride_row + off_cols[None, :] * stride_col
+    o_ptrs_mask = tl.full([REG_ROWS, REG_COLS], 1, dtype=tl.int1)
+    row_overflow = o_start_row + REG_ROWS - o_rows
+    if row_overflow > 0:
+        o_ptrs_mask = o_ptrs_mask & (off_rows[:, None] < o_rows)
+    col_overflow = o_start_col + REG_COLS - o_cols
+    if col_overflow > 0:
+        o_ptrs_mask = o_ptrs_mask & (off_cols[None, :] < o_cols)
+    tl.store(o_ptrs, registers, mask=o_ptrs_mask)
+    return o_ptrs, o_ptrs_mask
+
+
 @triton.jit
 def print_gpu(prefix, val=None):
     if (tl.program_id(0) == 0) and ((tl.program_id(1) == 0) and (tl.program_id(2) == 0)):
@@ -322,10 +351,32 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
             philox_offset = batch_philox_offset + start_m * BLOCK_M * actual_seqlen_k + start_n - BLOCK_N
             keep = dropout_mask(philox_seed, philox_offset, dropout_p, BLOCK_M, BLOCK_N, actual_seqlen_k)
             if RETURN_ENCODED_SOFTMAX:
-                tl.store(encoded_sm_ptrs, tl.where(keep, p, -p).to(encoded_sm_ptrs.type.element_ty))
+                # yapf: disable
+                mstore2d(tl.where(keep, p, -p).to(encoded_sm_base.type.element_ty),
+                         BLOCK_M,
+                         BLOCK_N,
+                         o_base=encoded_sm_base,
+                         o_start_row=start_m * BLOCK_M,
+                         o_start_col=start_n,
+                         o_rows=actual_seqlen_q,
+                         o_cols=actual_seqlen_k,
+                         stride_row=Max_seqlen_k,
+                         stride_col=1)
+                # yapf: enable
             p = tl.where(keep, p, 0.0)
         elif RETURN_ENCODED_SOFTMAX:
-            tl.store(encoded_sm_ptrs, p.to(encoded_sm_ptrs.type.element_ty))
+            # yapf: disable
+            mstore2d(p.to(encoded_sm_base.type.element_ty),
+                     BLOCK_M,
+                     BLOCK_N,
+                     o_base=encoded_sm_base,
+                     o_start_row=start_m * BLOCK_M,
+                     o_start_col=start_n,
+                     o_rows=actual_seqlen_q,
+                     o_cols=actual_seqlen_k,
+                     stride_row=Max_seqlen_k,
+                     stride_col=1)
+            # yapf: enable
         # -- update output accumulator --
         alpha = tl.math.exp2(m_i - m_ij)
         acc = acc * alpha[:, None]
