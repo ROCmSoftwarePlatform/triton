@@ -452,7 +452,7 @@ def get_cdna_autotune_configs():
                       num_stages=1, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
                       num_stages=1, num_warps=4),
-    ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'Max_seqlen_k', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
+    ], ['IS_CAUSAL', 'dropout_p', 'Max_seqlen_q', 'Max_seqlen_k', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
 def get_rdna_autotune_configs():
@@ -472,7 +472,7 @@ def get_rdna_autotune_configs():
         # Fall-back config.
         triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
                       num_stages=1, num_warps=2),
-    ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'Max_seqlen_k', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
+    ], ['IS_CAUSAL', 'dropout_p', 'Max_seqlen_q', 'Max_seqlen_k', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
 def get_autotune_configs():
@@ -499,7 +499,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
              K_descale, P_scale, P_descale, V_descale, cu_seqlens_q, cu_seqlens_k, dropout_p, philox_seed,
              PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: constexpr_or_i32,
              GRID_CU_MULTIP: tl.constexpr, B: constexpr_or_i32, philox_offset_base, encoded_softmax, alibi_slopes,
-             HQ: constexpr_or_i32, HK: constexpr_or_i32, ACTUAL_BLOCK_DMODEL: constexpr_or_i32, MAX_SEQLENS_Q: constexpr_or_i32,
+             HQ: constexpr_or_i32, HK: constexpr_or_i32, ACTUAL_BLOCK_DMODEL: constexpr_or_i32, Max_seqlen_q: constexpr_or_i32,
              Max_seqlen_k: constexpr_or_i32, VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
              BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
              ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr,
@@ -507,7 +507,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
 
     if PERSISTENT:  # if persistent, kernel loops over multiple tiles
         NUM_WG = NUM_CU * GRID_CU_MULTIP  # number of workgroups launched
-        num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M)  # the number of work units (tiles) of a single head
+        num_tiles_per_head = tl.cdiv(Max_seqlen_q, BLOCK_M)  # the number of work units (tiles) of a single head
         num_tiles_per_sample = num_tiles_per_head * HQ  # times the number of heads
         num_tiles_total = num_tiles_per_sample * B  # times the number of samples
         if PERSISTENT_DYNAMIC:
@@ -550,7 +550,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
         else:
             cu_seqlens_q_start = 0
             cu_seqlens_k_start = 0
-            seqlen_q = MAX_SEQLENS_Q
+            seqlen_q = Max_seqlen_q
             seqlen_k = Max_seqlen_k
 
         if continue_condition:
@@ -580,13 +580,13 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
                     o_ptrs_mask = (offs_m[:, None] < seqlen_q).broadcast_to([BLOCK_M, BLOCK_DMODEL])
                     # We still need to write 0s to the result
                     tl.store(o_ptrs, acc, mask=o_ptrs_mask)
-                    # The tensor allocated for L is based on MAX_SEQLENS_Q as that is
+                    # The tensor allocated for L is based on Max_seqlen_q as that is
                     # statically known.
-                    l_ptrs = L + off_z * HQ * MAX_SEQLENS_Q + off_h_q * MAX_SEQLENS_Q + offs_m
+                    l_ptrs = L + off_z * HQ * Max_seqlen_q + off_h_q * Max_seqlen_q + offs_m
                     # We store inf to LSE, not -inf because in the bwd pass, we subtract this
                     # from qk which makes it -inf, such that exp(qk - inf) = 0 for these masked blocks.
                     l = tl.full([BLOCK_M], value=float("inf"), dtype=tl.float32)
-                    l_ptrs_mask = offs_m < MAX_SEQLENS_Q
+                    l_ptrs_mask = offs_m < Max_seqlen_q
                     tl.store(l_ptrs, l, mask=l_ptrs_mask)
                     # TODO: Should dropout and return encoded softmax be handled here too?
                     continue_condition = False
@@ -768,7 +768,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
                         z = 0.0
                         acc = tl.where(out_ptrs_mask, acc, z.to(acc.type.element_ty))
                 # write back LSE
-                l_ptrs = L + off_z * HQ * MAX_SEQLENS_Q + off_h_q * MAX_SEQLENS_Q + offs_m
+                l_ptrs = L + off_z * HQ * Max_seqlen_q + off_h_q * Max_seqlen_q + offs_m
                 # If seqlen_q not multiple of BLOCK_M, we need to mask out the last few rows.
                 # This is only true for the last M block. For others, overflow_size will be -ve
                 overflow_size = end_m_idx - seqlen_q
@@ -1186,7 +1186,7 @@ class _attention(torch.autograd.Function):
                        metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p,
                        philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
                        alibi_slopes=metadata.alibi_slopes, HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size,
-                       MAX_SEQLENS_Q=metadata.max_seqlens_q, Max_seqlen_k=metadata.max_seqlens_k,
+                       Max_seqlen_q=metadata.max_seqlens_q, Max_seqlen_k=metadata.max_seqlens_k,
                        IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen, BLOCK_DMODEL=padded_d_model,
                        USE_BIAS=False if metadata.bias is None else True,
                        USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
