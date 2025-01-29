@@ -525,7 +525,7 @@ def get_rdna_autotune_configs():
         # Fall-back config.
         triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
                       num_stages=1, num_warps=2),
-    ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
+    ], ['CAUSAL_TYPE', 'dropout_p', 'Max_seqlen_q', 'Max_seqlen_k', 'Head_dim', 'VARLEN', 'Num_head_q', 'Num_head_k']
 
 
 def get_autotune_configs():
