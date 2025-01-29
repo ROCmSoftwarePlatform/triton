@@ -203,6 +203,75 @@ def _decode_att_m_fwd(
                              NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, num_warps=num_warps, num_stages=2)
 
 
+def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap):
+    from utils.sglang_ref import decode_attention_fwd_normal
+
+
+
+
+def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim):
+    torch.manual_seed(0)
+    device = "cuda"
+    # args = parse_args()
+    B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim = 8, 16, 1024, 512, 128, 64
+    Req_to_tokens = torch.arange(B * S).reshape(B, S).to(device)
+    B_req_idx = torch.arange(B).to(device)
+    B_Seqlen = torch.full((B, ), S).to(device)
+    num_kv_splits = 2
+    sm_scale = 1.0
+    logit_cap = 0.0
+
+    q = torch.randn(B, H, qk_nope_head_dim + qk_rope_head_dim, device=device)
+    k = torch.randn(B * S, kv_lora_rank + qk_rope_head_dim, device=device)
+    v_buffer = k[:,:kv_lora_rank]
+
+    o = torch.randn(B, H, kv_lora_rank, device=device)
+    attn_logits = torch.randn(B, H, num_kv_splits, kv_lora_rank + 1, device=device)
+
+    w_kc = torch.randn(kv_lora_rank, H * qk_nope_head_dim, device=device)
+    w_vc = torch.randn(kv_lora_rank, H * qk_nope_head_dim, device=device)
+
+    # Initialize additional parameters
+
+    _decode_att_m_fwd(q, k, attn_logits, w_kc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap)
+    _decode_softmax_reducev_fwd(attn_logits, q, o, v_buffer, B_Seqlen, num_kv_splits)
+
+    tri_output = o
+
+    # reference
+
+    q_input = torch.empty(
+            1, H, kv_lora_rank + qk_rope_head_dim
+        )
+    
+    q_nope, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
+
+    q_nope_out = torch.bmm(q_nope.transpose(0, 1), w_kc)
+    q_input[..., : kv_lora_rank] = q_nope_out.transpose(0, 1)
+
+    latent_cache = k
+    v_input = latent_cache[..., : kv_lora_rank]
+    v_input = v_input.contiguous().unsqueeze(1)
+    k_input = latent_cache.unsqueeze(1)
+    k_input[..., : kv_lora_rank] = v_input
+    k_pe = k_input[..., kv_lora_rank :]
+
+    # q_pe, k_pe = self.rotary_emb(positions, q_pe, k_pe)
+    q_input[..., kv_lora_rank :] = q_pe
+    k_input[..., kv_lora_rank :] = k_pe
+
+    attn_output = attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap)
+    attn_output = attn_output.view(-1, H, kv_lora_rank)
+
+    attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
+    
+    ref_output = attn_bmm_output.transpose(0, 1).flatten(1, 2)
+    # ref_output, _ = self.o_proj(attn_output)
+
+    torch.testing.assert_close(ref_output, tri_output, atol=1e-2, rtol=1e-2)
+
+
+
 def main():
     torch.manual_seed(0)
     device = "cuda"
