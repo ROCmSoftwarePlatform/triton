@@ -493,7 +493,7 @@ autotune_configs, autotune_keys = get_autotune_configs()
     use_cuda_graph=True,
 )
 @triton.jit
-def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, stride_qh, stride_qm, stride_qk, stride_kz,
+def attn_fwd(Q, K, V, bias, Sm_scale: constexpr_or_f32, L, Out, stride_qz, stride_qh, stride_qm, stride_qk, stride_kz,
              stride_kh, stride_kn, stride_kk, stride_vz, stride_vh, stride_vk, stride_vn, stride_oz, stride_oh,
              stride_om, stride_on, stride_bz, stride_bh, stride_bm, stride_bn, stride_az, stride_ah, Q_descale,
              K_descale, P_scale, P_descale, V_descale, cu_seqlens_q, cu_seqlens_k, dropout_p, philox_seed,
@@ -658,7 +658,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
                 acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
                 # scale sm_scale by log_2(e) and use 2^x in the loop as we do not
                 # have native e^x support in HW.
-                QK_SCALE: tl.constexpr = SM_SCALE * 1.44269504089
+                QK_SCALE: tl.constexpr = Sm_scale * 1.44269504089
                 # Q is loaded once at the beginning and shared by all N blocks.
                 q_ptrs_mask = offs_m[:, None] < seqlen_q
                 if PADDED_HEAD:
