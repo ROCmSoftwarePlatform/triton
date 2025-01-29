@@ -515,13 +515,35 @@ def attn_fwd(
         BLOCK_DMODEL: tl.constexpr,
         Head_dim : constexpr_or_i32,
         PADDED_HEAD: tl.constexpr,
-        dropout_p, philox_seed,
+        # dropout and PRNG
+        ENABLE_DROPOUT: tl.constexpr,
+        dropout_p,
+        philox_seed_ptr,
+        philox_offset1,
+        philox_offset2 : tl.int32,  # TODO: move to tl.int64
+        philox_seed_output, # Should be '*u64', but code-formatter complains
+        philox_offset_output, # Should be '*u64', but code-formatter complains
+        RETURN_ENCODED_SOFTMAX: tl.constexpr,
+        encoded_softmax,
+        alibi_slopes,
         PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: constexpr_or_i32,
-             GRID_CU_MULTIP: tl.constexpr, B: constexpr_or_i32, philox_offset_base, encoded_softmax, alibi_slopes,
+             GRID_CU_MULTIP: tl.constexpr, B: constexpr_or_i32,
               VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
               BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
-             ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr,
+             USE_ALIBI: tl.constexpr,
              INT8: tl.constexpr, USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr):
+
+    ## philox
+    philox_seed = 0
+    philox_offset_base = philox_offset2 if ENABLE_DROPOUT else 0
+    # if ENABLE_DROPOUT:
+    #     philox_seed = tl.load(philox_seed_ptr)
+    #     philox_offset_base += tl.load(philox_offset1)
+    #     if (tl.program_id(0) == 0 and tl.program_id(1) == 0) and tl.program_id(2) == 0:
+    #         if philox_seed_output.cast(dtype=tl.uint64, bitcast=True) != 0:
+    #             tl.store(philox_seed_output, philox_seed)
+    #         if philox_offset_output.cast(dtype=tl.uint64, bitcast=True) != 0:
+    #             tl.store(philox_offset_output, philox_offset_base.to(dtype=philox_seed_output.type.element_ty))
 
     if PERSISTENT:  # if persistent, kernel loops over multiple tiles
         NUM_WG = NUM_CU * GRID_CU_MULTIP  # number of workgroups launched
@@ -1169,8 +1191,21 @@ class _attention(torch.autograd.Function):
         M = torch.empty((batch, nheads_q, metadata.max_seqlens_q), device=q.device, dtype=torch.float32)
 
         # Seed the RNG so we get reproducible results for testing.
-        philox_seed = 0x1BF52
-        philox_offset = 0x1D4B42
+        # Note: these arguments are to meet the hipGraph support requirement in PyTorch
+        if metadata.dropout_p > 0.0:
+            philox_seed = torch.tensor([0x1BF52], device=q.device, dtype=torch.uint64)
+            philox_offset1 = torch.tensor([0x1D4000], device=q.device, dtype=torch.uint64)
+            philox_offset2 = 0x000B42
+            philox_seed_output = torch.tensor([0], device=q.device, dtype=torch.uint64)
+            philox_offset_output = torch.tensor([0], device=q.device, dtype=torch.uint64)
+        else:
+            nulltensor = torch.empty([0], device=q.device, dtype=torch.uint64)
+            philox_seed = nulltensor
+            philox_offset1 = nulltensor
+            philox_offset2 = 0
+            philox_seed_output = nulltensor
+            philox_offset_output = nulltensor
+
 
         if metadata.bias is not None:
             bias_strides = (metadata.bias.stride(0), metadata.bias.stride(1), metadata.bias.stride(2),
@@ -1217,13 +1252,21 @@ class _attention(torch.autograd.Function):
                 BLOCK_DMODEL=padded_d_model,
                 Head_dim=head_size,
                 PADDED_HEAD=True if head_size != padded_d_model else False,
+                # dropout and PRNG
+                ENABLE_DROPOUT=metadata.dropout_p > 0.0,
                 dropout_p=metadata.dropout_p,
-                       philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
+                philox_seed_ptr=philox_seed,
+                philox_offset1=philox_offset1,
+                philox_offset2=philox_offset2,
+                philox_seed_output=philox_seed_output,
+                philox_offset_output=philox_offset_output,
+                RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax,
+                encoded_softmax=encoded_softmax,
                        alibi_slopes=metadata.alibi_slopes,
-                       IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen, 
+                       IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
                        USE_BIAS=False if metadata.bias is None else True,
-                       USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
-                       > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8,
+                       USE_ALIBI=False if metadata.alibi_slopes is None else True,
+                       INT8=metadata.int8,
                        USE_P_SCALE=metadata.int8 and metadata.use_p_scale, INT8_KV=metadata.int8 and metadata.int8_kv,
                        PERSISTENT=metadata.persistent is not None, PERSISTENT_DYNAMIC=metadata.persistent == "dynamic",
                        NUM_CU=NUM_CU, atomic_counter=atomic_counter, B=batch)
@@ -1235,8 +1278,8 @@ class _attention(torch.autograd.Function):
         ctx.causal = metadata.causal
         ctx.alibi_slopes = metadata.alibi_slopes
         ctx.dropout_p = metadata.dropout_p
-        ctx.philox_seed = philox_seed
-        ctx.philox_offset = philox_offset
+        ctx.philox_seed = philox_seed_output
+        ctx.philox_offset = philox_offset_output
         ctx.encoded_softmax = encoded_softmax
         ctx.return_encoded_softmax = metadata.return_encoded_softmax
         return o, encoded_softmax, attn_fwd.best_config
