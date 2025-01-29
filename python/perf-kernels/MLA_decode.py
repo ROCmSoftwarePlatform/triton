@@ -1,0 +1,301 @@
+# Copyright 2023-2024 SGLang Team
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+"""
+Memory-efficient attention for decoding.
+It supports page size = 1.
+"""
+
+# Adapted from
+# https://github.com/ModelTC/lightllm/blob/96353e868a840db4d103138caf15ed9dbea8c186/lightllm/models/deepseek2/triton_kernel/gqa_flash_decoding_stage1.py
+# https://github.com/ModelTC/lightllm/blob/96353e868a840db4d103138caf15ed9dbea8c186/lightllm/models/deepseek2/triton_kernel/gqa_flash_decoding_stage2.py
+
+import logging
+
+import triton
+import triton.language as tl
+
+import sys
+import torch
+
+from sglang.srt.utils import is_hip
+
+is_hip_ = is_hip()
+
+logger = logging.getLogger(__name__)
+
+# TODO: Remove this when triton>=3.2.0. This issue will not affect performance and accuracy.
+logger.warning(
+    "The following error message 'operation scheduled before its operands' can be ignored."
+)
+
+
+@triton.jit
+def tanh(x):
+    # Tanh is just a scaled sigmoid
+    return 2 * tl.sigmoid(2 * x) - 1
+
+
+@triton.jit
+def _fwd_kernel_stage1(
+    Q, # Holds [Q_NOPE; Q_PE], b x h x (d+r)
+    K_Buffer, # Holds [KV; K_PE], b*s x (c+r)
+    W_KC, # c x h x d
+    sm_scale,
+    Req_to_tokens,
+    B_req_idx,
+    B_Seqlen,
+    Att_Out, # b x h x NUM_KV_SPLITS x (kv_lora_rank + 1)
+    stride_req_to_tokens_b,
+    stride_qbs,
+    stride_qh,
+    stride_buf_kbs,
+    stride_mid_ob,
+    stride_mid_oh,
+    stride_mid_os,
+    stride_w_kc_c,
+    stride_w_kc_h,
+    stride_w_kc_d,
+    kv_lora_rank: tl.constexpr,
+    qk_nope_head_dim: tl.constexpr,
+    qk_rope_head_dim: tl.constexpr,
+    kv_group_num: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+    BLOCK_C: tl.constexpr,
+    BLOCK_R: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    NUM_KV_SPLITS: tl.constexpr,
+    logit_cap: tl.constexpr
+):
+    cur_batch = tl.program_id(0)
+    cur_head = tl.program_id(1)
+    split_kv_id = tl.program_id(2)
+
+    cur_kv_head = cur_head // kv_group_num
+
+    offs_d = tl.arange(0, BLOCK_D)
+    offs_c = tl.arange(0, BLOCK_C)
+    offs_q_r = tl.arange(qk_nope_head_dim, qk_nope_head_dim + BLOCK_R) # to get the q_pe
+    offs_k_r = tl.arange(kv_lora_rank, kv_lora_rank + BLOCK_R) # to get the k_pe
+
+    offs_dv = tl.arange(0, BLOCK_C)
+    mask_d = offs_d < qk_nope_head_dim
+    mask_dv = offs_dv < kv_lora_rank
+    cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
+    cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
+
+    off_q = cur_batch * stride_qbs + cur_head * stride_qh + offs_d
+    q = tl.load(Q + off_q, mask=mask_d, other=0.0)
+
+    off_q_pe = cur_batch * stride_qbs + cur_head * stride_qh + offs_q_r
+    mask_q_r = offs_q_r < qk_nope_head_dim + qk_rope_head_dim
+    mask_c = offs_c < kv_lora_rank
+    mask_k_r = offs_k_r < kv_lora_rank + qk_rope_head_dim
+    
+    q_pe = tl.load(Q + off_q_pe, mask=mask_q_r, other=0.0)
+
+    w_kc_offset = W_KC + cur_kv_head * stride_w_kc_h
+    w_kc_ptrs = w_kc_offset + offs_d[:, None] * stride_w_kc_d + offs_c[None, :] * stride_w_kc_c
+    mask_w_kc = (offs_d[:,None] < qk_nope_head_dim) & (mask_c[None,:])
+    
+    w_kc = tl.load(w_kc_ptrs, mask=mask_w_kc, other=0.0)
+
+    q = tl.sum(q[:, None] *  w_kc, 0) # 1 x c
+
+    kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
+    split_kv_start = kv_len_per_split * split_kv_id
+    split_kv_end = tl.minimum(split_kv_start + kv_len_per_split, cur_batch_seq_len)
+
+    e_max = -float("inf")
+    e_sum = 0.0
+    acc = tl.zeros([kv_lora_rank], dtype=tl.float32)
+
+    if split_kv_end > split_kv_start:
+        for start_n in range(split_kv_start, split_kv_end, BLOCK_N):
+            offs_n = start_n + tl.arange(0, BLOCK_N)
+            kv_loc = tl.load(
+                Req_to_tokens + stride_req_to_tokens_b * cur_batch_req_idx + offs_n,
+                mask=offs_n < split_kv_end,
+                other=0,
+            )
+            offs_buf_kv = (
+                kv_loc[:, None] * stride_buf_kbs
+                + offs_c[None, :]
+            )
+            offs_buf_k_pe = (
+                kv_loc[:, None] * stride_buf_kbs
+                + offs_k_r[None, :]
+            )
+
+            kv = tl.load(
+                K_Buffer + offs_buf_kv,
+                mask=(offs_n[:, None] < split_kv_end) & (mask_c[None, :]),
+                other=0.0,
+            ) # the shared latent tensor for keys and values
+
+            k_pe = tl.load(
+                K_Buffer + offs_buf_k_pe,
+                mask=(offs_n[:, None] < split_kv_end) & (mask_k_r[None, :]),
+                other=0.0,
+            ) # positional embedding part of keys
+
+            qk = tl.sum(q[None, :] * kv, 1) # ((1 x c) * (BLOCK_N x c)).sum(1) = (BLOCK_N) 
+            qk += tl.sum(q_pe[None, :] * k_pe, 1) # ((1 x r) * (BLOCK_N x r)).sum(1) = (BLOCK_N) 
+
+            qk *= sm_scale
+
+            if logit_cap > 0:
+                qk = logit_cap * tanh(qk / logit_cap)
+
+            qk = tl.where(offs_n < split_kv_end, qk, float("-inf"))
+
+            n_e_max = tl.maximum(tl.max(qk, 0), e_max)
+            re_scale = tl.exp(e_max - n_e_max)
+            p = tl.exp(qk - n_e_max)
+            acc *= re_scale
+            acc += tl.sum(p[:, None] * kv, 0) # ((BLOCK_N x 1) * (BLOCK_N x c)).sum(0) = 1 x c
+
+            e_sum = e_sum * re_scale + tl.sum(p, 0)
+            e_max = n_e_max
+
+        # acc: 1 x c
+        
+        offs_mid_o = (
+            cur_batch * stride_mid_ob
+            + cur_head * stride_mid_oh
+            + split_kv_id * stride_mid_os
+            + offs_dv
+        )
+
+        tl.store(
+            Att_Out + offs_mid_o,
+            acc / e_sum,
+            mask=(mask_dv),
+        )
+
+        offs_mid_o_1 = (
+            cur_batch * stride_mid_ob
+            + cur_head * stride_mid_oh
+            + split_kv_id * stride_mid_os
+            + kv_lora_rank
+        )
+
+        tl.store(
+            Att_Out + offs_mid_o_1,
+            e_max + tl.log(e_sum),
+        )
+
+
+def _decode_att_m_fwd(
+    q,
+    k_buffer,
+    att_out,
+    w_kc,
+    Req_to_tokens,
+    B_req_idx,
+    B_Seqlen,
+    num_kv_splits,
+    sm_scale,
+    logit_cap,
+):
+    BLOCK = 64
+    NUM_KV_SPLITS = num_kv_splits
+
+    batch, head_num = B_req_idx.shape[0], q.shape[1]
+
+    grid = (batch, head_num, NUM_KV_SPLITS)
+    kv_group_num = 1 # q.shape[1] // k_buffer.shape[1]
+
+    if kv_group_num == 1:
+        num_warps = 4
+    else:
+        num_warps = 2
+
+    kv_lora_rank = w_kc.shape[0]
+    qk_nope_head_dim = w_kc.shape[1] // head_num
+    qk_rope_head_dim = k_buffer.shape[-1] - kv_lora_rank
+
+    BLOCK_D = triton.next_power_of_2(qk_nope_head_dim)
+    BLOCK_C = triton.next_power_of_2(kv_lora_rank)
+    BLOCK_R = triton.next_power_of_2(qk_rope_head_dim)
+    
+    w_kc = w_kc.view(kv_lora_rank, head_num, qk_nope_head_dim)
+
+    _fwd_kernel_stage1[grid](
+        q,
+        k_buffer,
+        w_kc,
+        sm_scale,
+        Req_to_tokens,
+        B_req_idx,
+        B_Seqlen,
+        att_out,
+        Req_to_tokens.stride(0),
+        q.stride(0),
+        q.stride(1),
+        k_buffer.stride(0),
+        att_out.stride(0),
+        att_out.stride(1),
+        att_out.stride(2),
+        w_kc.stride(0),
+        w_kc.stride(1),
+        w_kc.stride(2),
+        kv_lora_rank,
+        qk_nope_head_dim,
+        qk_rope_head_dim,
+        kv_group_num=kv_group_num,
+        BLOCK_D=BLOCK_D,
+        BLOCK_C=BLOCK_C,
+        BLOCK_R=BLOCK_R,
+        BLOCK_N=BLOCK,
+        NUM_KV_SPLITS=NUM_KV_SPLITS,
+        logit_cap=logit_cap,
+        num_warps=num_warps,
+        num_stages=2
+    )
+
+
+
+def main():
+    device = "cuda"
+    # args = parse_args()
+    B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, causal = 8, 16, 1024, 512, 128, 64, 128, False
+    Req_to_tokens = torch.arange(B * S).reshape(B, S).to(device)
+    B_req_idx = torch.arange(B).to(device)
+    B_Seqlen = torch.full((B,), S).to(device)
+    num_kv_splits = 2
+    sm_scale = 1.0
+    logit_cap = 0.0
+    
+
+    q = torch.randn(B, H, qk_nope_head_dim + qk_rope_head_dim, device=device)
+    k = torch.randn(B*S, kv_lora_rank + qk_rope_head_dim, device=device)
+    # v = k[:,:kv_lora_rank]
+
+    att_out = torch.randn(B, H, num_kv_splits, kv_lora_rank + 1, device=device)
+
+    w_kc = torch.randn(kv_lora_rank, H * qk_nope_head_dim, device=device)
+    # w_vc = torch.randn(kv_lora_rank, H * qk_nope_head_dim, device=device)
+
+    # Initialize additional parameters
+    
+    _decode_att_m_fwd(q, k, att_out, w_kc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap)
+
+    print(att_out)
+
+if __name__ == '__main__':
+    sys.exit(main())
+
+
+
+
