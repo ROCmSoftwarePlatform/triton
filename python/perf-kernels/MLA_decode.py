@@ -382,7 +382,7 @@ def main():
     kv_cache = torch.randn(B * S, kv_lora_rank + qk_rope_head_dim, device=device)
     # v = k[:,:kv_lora_rank]
 
-    att_out = torch.empty(B, H, S, D, device=device)
+    att_out = torch.empty(B, H, D, device=device)
     attn_logits = torch.randn(B, H, num_kv_splits, kv_lora_rank + 1, device=device)
 
     w_kc = torch.randn(kv_lora_rank, H * qk_nope_head_dim, device=device)
@@ -405,8 +405,6 @@ def main():
         sm_scale,
         logit_cap=0.0,
     )
-
-    print(att_out)
 
 
 if __name__ == '__main__':
