@@ -419,7 +419,8 @@ def attn_fwd(Q_NOPE, Q_PE, KV, K_PE, WKV_B, GEMM_ACC, SM_SCALE: tl.constexpr, L,
                     wkv_b_k_1 = tl.load(wkv_b_ptrs1 + k * BLOCK_K * stride_wkv_b_c, mask=c_mask, other=0.0)
                     q_wkv_b_k = tl.dot(q_nope, wkv_b_k_1)
                     # TODO: store back to some accumulator tensor in parts
-                    tl.store(q_wkv_b_ptrs + k * BLOCK_K * stride_gemm_acc_c, q_wkv_b_k.to(q_nope.type.element_ty), mask=q_ptrs_mask)
+                    tl.store(q_wkv_b_ptrs + k * BLOCK_K * stride_gemm_acc_c, q_wkv_b_k.to(q_nope.type.element_ty),
+                             mask=q_ptrs_mask)
 
                 # Here we compute how many full and masked blocks we have.
                 padded_block_k = n_extra_tokens != 0
@@ -680,19 +681,14 @@ def sanity_check(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_he
     torch.testing.assert_close(naive_out, absorb_out, atol=2e-2, rtol=2e-2)
 
 
-@pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim', [
-    (8, 16, 128, 128, 128, 64, 128),
-    (1, 16, 32, 512, 128, 64, 128),
-    (1, 8, 16, 512, 128, 64, 128),
-    (1, 1, 64, 128, 128, 64, 128)
-])
+@pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim',
+                         [(8, 16, 128, 128, 128, 64, 128), (1, 16, 32, 512, 128, 64, 128),
+                          (1, 8, 16, 512, 128, 64, 128), (1, 1, 64, 128, 128, 64, 128)])
 @pytest.mark.parametrize('causal', [False])
 @pytest.mark.parametrize('layout', ['bhsd'])
 @pytest.mark.parametrize('ref_impl', ['absorb'])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
-def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, causal, layout,
-                dtype, ref_impl):
-    import time
+def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, causal, layout, dtype, ref_impl):
     torch.manual_seed(20)
     q_nope, q_pe, kv, k_pe, v, wkv_b, sm_scale = input_helper_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim,
                                                                   qk_rope_head_dim, v_head_dim, dtype, layout)
@@ -717,7 +713,8 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
         # absorption fp16 x fp16 -> fp16
 
         scores = (torch.einsum("bhsc,btc->bhst", q_nope.float(), kv.float()) +
-                  torch.einsum("bhsr,btr->bhst", q_pe.float(), k_pe.squeeze(1).float())) * sm_scale
+                  torch.einsum("bhsr,btr->bhst", q_pe.float(),
+                               k_pe.squeeze(1).float())) * sm_scale
         # fp16 x fp16 -> fp32
 
     if causal:
@@ -734,7 +731,6 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
         ref_out = torch.einsum("bhsc,hdc->bhsd", x, wkv_b[:, -v_head_dim:])
         # fp16 x fp16 -> fp16
 
-
     # if dtype == torch.bfloat16:
     #     atol=5e-2
     #     rtol=5e-2
@@ -742,8 +738,8 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_hea
     #     atol=2e-2
     #     rtol=2e-2
 
-    atol=2e-2
-    rtol=2e-2
+    atol = 2e-2
+    rtol = 2e-2
 
     torch.testing.assert_close(ref_out, tri_out, atol=atol, rtol=rtol)
 
@@ -793,7 +789,7 @@ def main():
     # bf8test = test_op_fwd(1, 1, 64, 512, 128, 64, 128, causal=True, layout="bhsd", dtype=torch.float8_e4m3fn, ref_impl="absorb")
     # bf16test = test_op_fwd(1, 1, 64, 512, 128, 64, 128, causal=True, layout="bhsd", dtype=torch.bfloat16, ref_impl="absorb")
     # fp16test = test_op_fwd(1, 1, 64, 512, 128, 64, 128, causal=True, layout="bhsd", dtype=torch.float16, ref_impl="absorb")
-    fp32test = test_op_fwd(1, 1, 64, 512, 128, 64, 128, causal=True, layout="bhsd", dtype=torch.float32, ref_impl="absorb")
+    test_op_fwd(1, 1, 64, 512, 128, 64, 128, causal=True, layout="bhsd", dtype=torch.float32, ref_impl="absorb")
 
     # torch.testing.assert_close(fp32test, fp16test.to(fp32test.dtype), atol=2e-2, rtol=2e-2)
 
