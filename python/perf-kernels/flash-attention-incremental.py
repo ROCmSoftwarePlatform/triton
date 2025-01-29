@@ -452,7 +452,7 @@ def get_cdna_autotune_configs():
                       num_stages=1, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
                       num_stages=1, num_warps=4),
-    ], ['IS_CAUSAL', 'dropout_p', 'Max_seqlen_q', 'Max_seqlen_k', 'Head_dim', 'VARLEN', 'Num_head_q', 'HK']
+    ], ['IS_CAUSAL', 'dropout_p', 'Max_seqlen_q', 'Max_seqlen_k', 'Head_dim', 'VARLEN', 'Num_head_q', 'Num_head_k']
 
 
 def get_rdna_autotune_configs():
@@ -472,7 +472,7 @@ def get_rdna_autotune_configs():
         # Fall-back config.
         triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
                       num_stages=1, num_warps=2),
-    ], ['IS_CAUSAL', 'dropout_p', 'Max_seqlen_q', 'Max_seqlen_k', 'Head_dim', 'VARLEN', 'Num_head_q', 'HK']
+    ], ['IS_CAUSAL', 'dropout_p', 'Max_seqlen_q', 'Max_seqlen_k', 'Head_dim', 'VARLEN', 'Num_head_q', 'Num_head_k']
 
 
 def get_autotune_configs():
@@ -499,7 +499,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
              K_descale, P_scale, P_descale, V_descale, cu_seqlens_q, cu_seqlens_k, dropout_p, philox_seed,
              PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: constexpr_or_i32,
              GRID_CU_MULTIP: tl.constexpr, B: constexpr_or_i32, philox_offset_base, encoded_softmax, alibi_slopes,
-             Num_head_q: constexpr_or_i32, HK: constexpr_or_i32, Head_dim: constexpr_or_i32, Max_seqlen_q: constexpr_or_i32,
+             Num_head_q: constexpr_or_i32, Num_head_k: constexpr_or_i32, Head_dim: constexpr_or_i32, Max_seqlen_q: constexpr_or_i32,
              Max_seqlen_k: constexpr_or_i32, VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
              BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
              ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr,
@@ -594,7 +594,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: constexpr_or_f32, L, Out, stride_qz, strid
 
             if continue_condition:
                 # If MQA / GQA, set the K and V head offsets appropriately.
-                GROUP_SIZE: tl.constexpr = Num_head_q // HK
+                GROUP_SIZE: tl.constexpr = Num_head_q // Num_head_k
                 if GROUP_SIZE != 1:
                     off_h_k = off_h_q // GROUP_SIZE
                 else:
@@ -1185,7 +1185,7 @@ class _attention(torch.autograd.Function):
                        *bias_strides, *alibi_strides, q_descale, k_descale, p_scale, p_descale, v_descale,
                        metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p,
                        philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
-                       alibi_slopes=metadata.alibi_slopes, Num_head_q=nheads_q, HK=nheads_k, Head_dim=head_size,
+                       alibi_slopes=metadata.alibi_slopes, Num_head_q=nheads_q, Num_head_k=nheads_k, Head_dim=head_size,
                        Max_seqlen_q=metadata.max_seqlens_q, Max_seqlen_k=metadata.max_seqlens_k,
                        IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen, BLOCK_DMODEL=padded_d_model,
                        USE_BIAS=False if metadata.bias is None else True,
@@ -1340,16 +1340,16 @@ def quantize_input(q, k, v, input_metadata: MetaData, quantize_p=False, int8_kv=
     return q, k, v
 
 
-def input_helper(Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout, requires_grad=True):
+def input_helper(Z, Num_head_q, Num_head_k, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout, requires_grad=True):
     torch.manual_seed(20)
 
     # Initialize q, k, v
     if layout == 'bhsd':
         q_tensor_shape = (Z, Num_head_q, N_CTX_Q, D_HEAD)
-        k_tensor_shape = (Z, HK, N_CTX_K, D_HEAD)
+        k_tensor_shape = (Z, Num_head_k, N_CTX_K, D_HEAD)
     elif layout == 'bshd':
         q_tensor_shape = (Z, N_CTX_Q, Num_head_q, D_HEAD)
-        k_tensor_shape = (Z, N_CTX_K, HK, D_HEAD)
+        k_tensor_shape = (Z, N_CTX_K, Num_head_k, D_HEAD)
     else:
         assert False, 'Got unsupported tensor layout'
     q = torch.randn(q_tensor_shape, dtype=dtype, device="cuda", requires_grad=requires_grad)
@@ -1364,7 +1364,7 @@ def input_helper(Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout, req
     return q, k, v, input_metadata
 
 
-def varlen_input_helper(Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, equal_seqlens=False):
+def varlen_input_helper(Z, Num_head_q, Num_head_k, N_CTX_Q, N_CTX_K, D_HEAD, dtype, equal_seqlens=False):
     torch.manual_seed(20)
 
     # Random sequence lengths. Using N_CTX as kind of max of sum of individual seqs
@@ -1387,15 +1387,15 @@ def varlen_input_helper(Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, equa
     total_q = cu_seqlens_q[-1].item()
     total_k = cu_seqlens_k[-1].item()
     q = torch.randn((total_q, Num_head_q, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
-    k = torch.randn((total_k, HK, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
-    v = torch.randn((total_k, HK, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
+    k = torch.randn((total_k, Num_head_k, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
+    v = torch.randn((total_k, Num_head_k, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
     sm_scale = D_HEAD**-0.5
     input_metadata = MetaData(sm_scale=sm_scale)
     input_metadata.set_varlen_params(cu_seqlens_q, cu_seqlens_k)
     return q, k, v, input_metadata
 
 
-@pytest.mark.parametrize('Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD', [
+@pytest.mark.parametrize('Z, Num_head_q, Num_head_k, N_CTX_Q, N_CTX_K, D_HEAD', [
     (4, 48, 24, 1024, 1024, 64),
     (1, 24, 6, 8192, 8192, 64),
     (1, 4, 2, 16384, 16384, 128),
@@ -1416,9 +1416,9 @@ def varlen_input_helper(Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, equa
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('use_alibi', [True, False])
 @pytest.mark.parametrize('layout', ['bshd', 'bhsd'])
-def test_op_fwd(Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, dtype=torch.float16):
+def test_op_fwd(Z, Num_head_q, Num_head_k, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, dtype=torch.float16):
     torch.manual_seed(20)
-    q, k, v, input_metadata = input_helper(Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout)
+    q, k, v, input_metadata = input_helper(Z, Num_head_q, Num_head_k, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout)
     if causal:
         input_metadata.need_causal()
 
@@ -1441,11 +1441,11 @@ def test_op_fwd(Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, 
         k = k.transpose(1, 2).clone()
         v = v.transpose(1, 2).clone()
     # Replicate K and V if using MQA/GQA
-    if Num_head_q != HK:
+    if Num_head_q != Num_head_k:
         k = k.view(k.shape[0], k.shape[1], -1, k.shape[2],
-                   k.shape[3]).expand(-1, -1, Num_head_q // HK, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
+                   k.shape[3]).expand(-1, -1, Num_head_q // Num_head_k, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
         v = v.view(v.shape[0], v.shape[1], -1, v.shape[2],
-                   v.shape[3]).expand(-1, -1, Num_head_q // HK, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
+                   v.shape[3]).expand(-1, -1, Num_head_q // Num_head_k, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
 
     scores = torch.einsum('bhqd,bhkd->bhqk', q, k).float() * input_metadata.sm_scale
     if causal:
@@ -1468,7 +1468,7 @@ def test_op_fwd(Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, 
     torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
 
-@pytest.mark.parametrize('Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD', [
+@pytest.mark.parametrize('Z, Num_head_q, Num_head_k, N_CTX_Q, N_CTX_K, D_HEAD', [
     (4, 48, 24, 1024, 1024, 64),
     (1, 24, 6, 8192, 8192, 64),
     (1, 4, 2, 16384, 16384, 128),
@@ -1490,10 +1490,10 @@ def test_op_fwd(Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, 
 @pytest.mark.parametrize('use_alibi', [True, False])
 @pytest.mark.parametrize('layout', ['bshd', 'bhsd'])
 @pytest.mark.parametrize('persistent', ['fixed', 'dynamic'])
-def test_op_persistent_fwd(Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, persistent,
+def test_op_persistent_fwd(Z, Num_head_q, Num_head_k, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, persistent,
                            dtype=torch.float16):
     torch.manual_seed(20)
-    q, k, v, input_metadata = input_helper(Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout)
+    q, k, v, input_metadata = input_helper(Z, Num_head_q, Num_head_k, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout)
     if causal:
         input_metadata.need_causal()
 
@@ -1518,11 +1518,11 @@ def test_op_persistent_fwd(Z, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, 
         k = k.transpose(1, 2).clone()
         v = v.transpose(1, 2).clone()
     # Replicate K and V if using MQA/GQA
-    if Num_head_q != HK:
+    if Num_head_q != Num_head_k:
         k = k.view(k.shape[0], k.shape[1], -1, k.shape[2],
-                   k.shape[3]).expand(-1, -1, Num_head_q // HK, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
+                   k.shape[3]).expand(-1, -1, Num_head_q // Num_head_k, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
         v = v.view(v.shape[0], v.shape[1], -1, v.shape[2],
-                   v.shape[3]).expand(-1, -1, Num_head_q // HK, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
+                   v.shape[3]).expand(-1, -1, Num_head_q // Num_head_k, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
 
     scores = torch.einsum('bhqd,bhkd->bhqk', q, k).float() * input_metadata.sm_scale
     if causal:
@@ -1757,20 +1757,20 @@ def test_op_varlen_fwd(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
     torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=1e-2)
 
 
-@pytest.mark.parametrize('Z, Num_head_q, HK, N_CTX, D_HEAD', [(2, 48, 24, 128, 64), (4, 48, 12, 256, 64), (4, 48, 4, 512, 64),
+@pytest.mark.parametrize('Z, Num_head_q, Num_head_k, N_CTX, D_HEAD', [(2, 48, 24, 128, 64), (4, 48, 12, 256, 64), (4, 48, 4, 512, 64),
                                                       (4, 48, 2, 1024, 64), (8, 48, 6, 4096, 64), (4, 48, 8, 16384, 64),
                                                       (4, 64, 16, 128, 128), (4, 64, 4, 4096, 128),
                                                       (4, 64, 8, 16384, 128), (4, 16, 4, 1024, 128),
                                                       (4, 16, 2, 8192, 128), (32, 128, 32, 8192, 128)])
 @pytest.mark.parametrize('causal', [False])
-def test_op_varlen_mqa_fwd(Z, Num_head_q, HK, N_CTX, D_HEAD, causal, dtype=torch.float16):
-    q, k, v, input_metadata = varlen_input_helper(Z, Num_head_q, HK, N_CTX, N_CTX, D_HEAD, dtype)
+def test_op_varlen_mqa_fwd(Z, Num_head_q, Num_head_k, N_CTX, D_HEAD, causal, dtype=torch.float16):
+    q, k, v, input_metadata = varlen_input_helper(Z, Num_head_q, Num_head_k, N_CTX, N_CTX, D_HEAD, dtype)
     ref_out = torch.empty_like(q)
     tri_out = torch.empty_like(q)
-    # Make KV look like Num_head_q/HK "groups" of HK. Later, we will reshape so the
+    # Make KV look like Num_head_q/Num_head_k "groups" of Num_head_k. Later, we will reshape so the
     # size aligns with Q.
-    k_ref = k.view(k.shape[0], k.shape[1], 1, k.shape[2]).expand(-1, -1, Num_head_q // HK, -1)
-    v_ref = v.view(v.shape[0], v.shape[1], 1, v.shape[2]).expand(-1, -1, Num_head_q // HK, -1)
+    k_ref = k.view(k.shape[0], k.shape[1], 1, k.shape[2]).expand(-1, -1, Num_head_q // Num_head_k, -1)
+    v_ref = v.view(v.shape[0], v.shape[1], 1, v.shape[2]).expand(-1, -1, Num_head_q // Num_head_k, -1)
     for i in range(0, input_metadata.num_contexts):
         start_q, start_k = input_metadata.cu_seqlens_q[i], input_metadata.cu_seqlens_k[i]
         end_q, end_k = input_metadata.cu_seqlens_q[i + 1], input_metadata.cu_seqlens_k[i + 1]
@@ -1940,11 +1940,11 @@ def model_benchmark_configs(args):
 
     for model_name, config in configs.items():
         Num_head_q = config["num_attention_heads"]
-        HK = Num_head_q if config["num_key_value_heads"] is None else config["num_key_value_heads"]
+        Num_head_k = Num_head_q if config["num_key_value_heads"] is None else config["num_key_value_heads"]
         N_CTX_Q = args.sq if args.sq else 4096
         N_CTX_K = args.sk if args.sk else N_CTX_Q
         HEAD_DIM = config["hidden_size"] // Num_head_q
-        fa_configs.append((model_name, batch_size, Num_head_q, HK, N_CTX_Q, N_CTX_K, HEAD_DIM))
+        fa_configs.append((model_name, batch_size, Num_head_q, Num_head_k, N_CTX_Q, N_CTX_K, HEAD_DIM))
 
     return fa_configs
 
@@ -1956,7 +1956,7 @@ def run_benchmark(custom, args):
     sk = args.sq if not args.sk else args.sk
     head_size = 128 if not args.d else args.d
     mode = 'fwd'
-    x_names = ['BATCH', 'Num_head_q', 'HK', 'N_CTX_Q', 'N_CTX_K']
+    x_names = ['BATCH', 'Num_head_q', 'Num_head_k', 'N_CTX_Q', 'N_CTX_K']
     causal = args.causal
     int8 = args.int8
     quantize_p = args.quantize_p and int8
@@ -1975,7 +1975,7 @@ def run_benchmark(custom, args):
 
         if args.model:
             x_vals_list = model_benchmark_configs(args)
-            x_names = ['model', 'BATCH', 'Num_head_q', 'HK', 'N_CTX_Q', 'N_CTX_K', 'D_HEAD']
+            x_names = ['model', 'BATCH', 'Num_head_q', 'Num_head_k', 'N_CTX_Q', 'N_CTX_K', 'D_HEAD']
             plot_name = f'fused-attention-{mode}-layout{args.layout}'
             extra_args = {'dtype': dtype, 'causal': causal, 'mode': mode}
 
@@ -1987,7 +1987,7 @@ def run_benchmark(custom, args):
                                  ylabel='Time (ms)' if print_time else 'TFLOPS', plot_name=plot_name, args=extra_args))
 
     @triton.testing.perf_report(configs)
-    def bench_flash_attention(BATCH, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda",
+    def bench_flash_attention(BATCH, Num_head_q, Num_head_k, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda",
                               model=None):
         assert mode in ["fwd", "bwd"]
         assert not (int8_kv and quantize_p)
@@ -2007,7 +2007,7 @@ def run_benchmark(custom, args):
 
         flops_per_matmul = 0
         if varlen:
-            q, k, v, input_metadata = varlen_input_helper(BATCH, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype,
+            q, k, v, input_metadata = varlen_input_helper(BATCH, Num_head_q, Num_head_k, N_CTX_Q, N_CTX_K, D_HEAD, dtype,
                                                           args.equal_seqlens)
             for i in range(0, input_metadata.num_contexts):
                 seqlen_q = input_metadata.cu_seqlens_q[i + 1] - input_metadata.cu_seqlens_q[i]
@@ -2015,7 +2015,7 @@ def run_benchmark(custom, args):
                 # x2 for 2 GEMMs
                 flops_per_matmul += seqlen_q.item() * seqlen_k.item() * Num_head_q * D_HEAD * 2
         else:
-            q, k, v, input_metadata = input_helper(BATCH, Num_head_q, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, args.layout)
+            q, k, v, input_metadata = input_helper(BATCH, Num_head_q, Num_head_k, N_CTX_Q, N_CTX_K, D_HEAD, dtype, args.layout)
             flops_per_matmul = 2.0 * BATCH * Num_head_q * N_CTX_Q * N_CTX_K * D_HEAD
         if causal:
             input_metadata.need_causal()
@@ -2039,8 +2039,8 @@ def run_benchmark(custom, args):
                 v = v.transpose(-3, -2)
             # check if GQA
             Num_head_q = q.shape[-3]
-            HK = k.shape[-3]
-            if Num_head_q != HK:  # TODO: sdpa(..., enable_gqa=True work) should work
+            Num_head_k = k.shape[-3]
+            if Num_head_q != Num_head_k:  # TODO: sdpa(..., enable_gqa=True work) should work
                 k = k.repeat_interleave(q.size(-3) // k.size(-3), -3)
                 v = v.repeat_interleave(q.size(-3) // v.size(-3), -3)
 
