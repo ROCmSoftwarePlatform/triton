@@ -428,6 +428,29 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_k
     tri_output = att_out # .flatten(1,2)
 
     # reference
+    
+    ref_output, ref_logits = ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, device="cuda")
+
+    print("first 10 logits:")
+    print(f"ref: {ref_logits.flatten()[:10]}")
+    print(f"tri: {attn_logits.flatten()[:10]}")
+    torch.testing.assert_close(ref_logits, attn_logits, atol=1e-2, rtol=1e-2)
+    print("attn_logits from stage 1 matches with ref")
+
+    print("first 10 outputs:")
+    print(f"ref: {ref_output.flatten()[:10]}")
+    print(f"tri: {tri_output.flatten()[:10]}")
+    torch.testing.assert_close(ref_output, tri_output, atol=1e-2, rtol=1e-2)
+    print("attn_output from stage 2 matches with ref")
+
+
+def ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, device="cuda"):
+    B, H = q.shape[0], q.shape[1]
+    
+    kv_lora_rank = w_kc.shape[-1]
+    qk_nope_head_dim = w_kc.shape[1]
+    qk_rope_head_dim = kv_cache.shape[-1] - kv_lora_rank
+    
     q_input = torch.empty(
             B, H, kv_lora_rank + qk_rope_head_dim
         ).to(device)
@@ -451,38 +474,69 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_k
 
     attn_output, attn_logits_ref = attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap)
 
-    print("first 10 logits:")
-    print(f"ref: {attn_logits_ref.flatten()[:10]}")
-    print(f"tri: {attn_logits.flatten()[:10]}")
-    torch.testing.assert_close(attn_logits_ref, attn_logits, atol=1e-2, rtol=1e-2)
-    print("attn_logits are correct")
-
     attn_output = attn_output.view(-1, H, kv_lora_rank)
 
     attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
 
-    ref_output = attn_bmm_output.transpose(0, 1) # .flatten(1, 2)
+    ref_output = attn_bmm_output.transpose(0, 1) #  # .flatten(1, 2)
+    
+    return ref_output, attn_logits_ref
     # ref_output, _ = self.o_proj(attn_output)
-    # print(ref_output.shape)
-    # print(tri_output.shape)
 
-    print("first 10 outputs:")
-    print(f"ref: {ref_output.flatten()[:10]}")
-    print(f"tri: {tri_output.flatten()[:10]}")
-    torch.testing.assert_close(ref_output, tri_output, atol=1e-2, rtol=1e-2)
-    print("attn_output are correct")
+def benchmark():
 
+    configs = []
+
+    x_vals_list = [(8, 16, 1024, 512, 128, 64, 2), (8, 16, 4096, 512, 128, 64, 2), (8, 16, 8192, 512, 128, 64, 2)]
+    x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
+    line_vals = ["naive", "fused"]
+    plot_name = f"MLA-decode"
+
+    configs.append(
+        triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
+                                 line_names=line_vals, styles=[('red', '-'),
+                                                               ('green', '-')], ylabel='ms', plot_name=plot_name,
+                                 args={'sm_scale': 1.0, 'logit_cap': 0.0, 'device': "cuda"}))
+
+    @triton.testing.perf_report(configs)
+    def bench_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits, sm_scale, logit_cap, device, provider):
+        warmup = 25
+        rep = 100
+
+        D = qk_nope_head_dim
+        Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc = input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, device)
+
+        if "fused" in provider:
+            fn = lambda: {
+                decode_attention_fwd_normal(
+                    q,
+                    kv_cache,
+                    w_kc,
+                    w_vc,
+                    D,
+                    att_out,
+                    Req_to_tokens,
+                    B_req_idx,
+                    B_Seqlen,
+                    attn_logits,
+                    num_kv_splits,
+                    sm_scale,
+                    logit_cap=0.0,
+                )
+            }
+
+        if "naive" in provider:
+            fn = lambda: ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, device="cuda")
+
+        ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
+        return ms
+
+    bench_MLA.run(save_path=".", print_data=True, show_plots=False)
 
 
 def main():
     torch.manual_seed(0)
-    B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim = 8, 16, 1024, 512, 128, 64
-    num_kv_splits = 2
-    sm_scale = 1.0
-    logit_cap = 0.0
-    device = "cuda"
-
-    test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits, sm_scale, logit_cap, device)
+    benchmark()
 
 
 if __name__ == '__main__':
