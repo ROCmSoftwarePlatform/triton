@@ -550,6 +550,7 @@ autotune_configs, autotune_keys = get_autotune_configs()
 def attn_fwd(
         # Basic SDPA
         Q, K, V, B, A, Sm_scale : constexpr_or_f32, L, Out,
+        Q_descale, K_descale, P_scale, P_descale, V_descale,
         stride_qz, stride_qh, stride_qm, stride_qk,
         stride_kz, stride_kh, stride_kn, stride_kk,
         stride_vz, stride_vh, stride_vk, stride_vn,
@@ -588,9 +589,7 @@ def attn_fwd(
         # INT8
         INT8: tl.constexpr,
         INT8_KV: tl.constexpr,
-        Q_descale, K_descale,
         USE_P_SCALE: tl.constexpr,
-        P_scale, P_descale, V_descale,
         # Persistent related arguments
         PERSISTENT_TYPE: tl.constexpr,  # 0: disable, 1: fixed, 2: dynamic
         persistent_atomic_counter,
@@ -607,7 +606,7 @@ def attn_fwd(
     ## tl.constexpr to variable
     IS_CAUSAL: tl.constexpr = CAUSAL_TYPE != 0
     IS_CAUSAL_BOTTOM_RIGHT: tl.constexpr = CAUSAL_TYPE == 2
-    USE_BIAS: tl.constexpr = BIAS_TYPE == 1
+    USE_BIAS: tl.constexpr = (BIAS_TYPE == 1)
     tl.static_assert(BIAS_TYPE == 0 or BIAS_TYPE == 1, f'Unsupported BIAS_TYPE {BIAS_TYPE}')
     L_not_null = L.cast(dtype=tl.uint64, bitcast=True) != 0  # Allows null L for training=False
 
@@ -1411,7 +1410,7 @@ class _attention(torch.autograd.Function):
                 # causal, (Planned Feature) windowed attention
                 CAUSAL_TYPE=CausalType.BOTTOM_RIGHT if metadata.causal else CausalType.NONE,
                 # bias
-                BIAS_TYPE=BiasType.MATRIX if metadata.bias is None else BiasType.NONE,
+                BIAS_TYPE=BiasType.NONE if metadata.bias is None else BiasType.MATRIX,
                 # alibi
                 USE_ALIBI=False if metadata.alibi_slopes is None else True,
                 # INT8
