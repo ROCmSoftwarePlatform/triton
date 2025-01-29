@@ -217,7 +217,7 @@ def _fwd_kernel_stage2(
     stride_w_vch,
     stride_w_vcd,
     NUM_KV_SPLITS: tl.constexpr,
-    BLOCK_LORA: tl.constexpr, # we assume lora is pow of 2 and its the actual c
+    LORA: tl.constexpr, # we assume lora (low rank dim c) is pow of 2 and its the actual c
     BLOCK_SIZE_K: tl.constexpr, # we split lora dim for inner loop ??
     BLOCK_DV: tl.constexpr, # head_dim of v rounded to the nearest power of 2
     Lv: tl.constexpr, # The actual head_dim of v
@@ -228,17 +228,18 @@ def _fwd_kernel_stage2(
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
 
     offs_d = tl.arange(0, BLOCK_DV)
-    offs_c = tl.arange(0, BLOCK_LORA)
+    offs_c = tl.arange(0, LORA)
     # TODO check this
     mask_d = offs_d < Lv
 
     e_sum = 0.0
     e_max = -float("inf")
-    acc = tl.zeros([BLOCK_LORA], dtype=tl.float32)
+    acc = tl.zeros([LORA], dtype=tl.float32)
 
     offs_v = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + offs_c
-    offs_logic = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + BLOCK_LORA
+    offs_logic = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + LORA
     offs_w_kv = cur_head * stride_w_vch + offs_d[:, None] * stride_w_vcd + offs_c[None, :] * stride_w_vcc
+    w_kv_prts = W_VC + offs_w_kv
 
     for split_kv_id in range(0, NUM_KV_SPLITS):
         kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
@@ -263,13 +264,14 @@ def _fwd_kernel_stage2(
 
     acc = acc / e_sum # c = 512
 
-    # for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-    w_vc = tl.load(W_VC + offs_w_kv) # dc, head is parallelized (128, 512)
+    result = tl.zeros([BLOCK_DV], dtype=tl.float32)
 
-    # TODO if we can't load it we do blocked sum (c, ) * (c, d)  => (d,)
-    # tl.static_print("", w_vc)
-    # tl.static_print("", acc)
-    result = tl.sum(w_vc * acc[None, :], 1)
+    for k in range(0, tl.cdiv(LORA, BLOCK_SIZE_K)):
+        w_vc = tl.load(w_kv_prts, mask=offs_c[None, :] < LORA - k * BLOCK_SIZE_K, other=0.0) # dc, head is parallelized (128, 512)
+
+        result += tl.sum(w_vc * acc[None, :], 1)
+
+        w_kv_prts += BLOCK_SIZE_K * stride_w_vcc
 
     tl.store(
         O + cur_batch * stride_obs + cur_head * stride_oh + offs_d,
@@ -324,7 +326,7 @@ def _decode_softmax_reducev_fwd(
         w_vc.stride(1),
         w_vc.stride(2),
         NUM_KV_SPLITS=NUM_KV_SPLITS,
-        BLOCK_LORA=kv_lora_rank,
+        LORA=kv_lora_rank,
         BLOCK_SIZE_K=BLOCK_K, # TODO check do we need this
         BLOCK_DV=BLOCK_DV,
         Lv=Lv,
@@ -405,7 +407,6 @@ def main():
         sm_scale,
         logit_cap=0.0,
     )
-
 
 if __name__ == '__main__':
     sys.exit(main())
