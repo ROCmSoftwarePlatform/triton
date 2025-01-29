@@ -283,7 +283,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
                     BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, OFFS_M: tl.constexpr, OFFS_N: tl.constexpr,
                     PRE_LOAD_V: tl.constexpr, MASK_STEPS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr,
                     RETURN_ENCODED_SOFTMAX: tl.constexpr, PADDED_HEAD: tl.constexpr, Head_dim: constexpr_or_i32,
-                    QK_SCALE: constexpr_or_f32, INT8_GEMM: tl.constexpr, USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr):
+                    Qk_scale: constexpr_or_f32, INT8_GEMM: tl.constexpr, USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr):
     # loop over k, v, and update accumulator
     for start_n in range(block_min, block_max, BLOCK_N):
         # For padded blocks, we will overrun the tensor size if
@@ -318,11 +318,11 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
             qk = tl.where(causal_mask, qk, float("-inf"))
         # -- compute qk ----
         if INT8_GEMM:
-            qk += ((((tl.dot(q, k).to(tl.float32) * q_descale)) * k_descale) * QK_SCALE)
+            qk += ((((tl.dot(q, k).to(tl.float32) * q_descale)) * k_descale) * Qk_scale)
         else:
             if INT8_KV:
                 k = (k * k_descale).to(q.type.element_ty)
-            qk += (tl.dot(q, k) * QK_SCALE)
+            qk += (tl.dot(q, k) * Qk_scale)
 
         if bias_ptrs is not None:
             bias_offs_n = start_n + tl.arange(0, BLOCK_N) if MASK_STEPS else None
@@ -658,7 +658,7 @@ def attn_fwd(Q, K, V, bias, Sm_scale: constexpr_or_f32, L, Out, stride_qz, strid
                 acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
                 # scale sm_scale by log_2(e) and use 2^x in the loop as we do not
                 # have native e^x support in HW.
-                QK_SCALE: tl.constexpr = Sm_scale * 1.44269504089
+                Qk_scale: tl.constexpr = Sm_scale * 1.44269504089
                 # Q is loaded once at the beginning and shared by all N blocks.
                 q_ptrs_mask = offs_m[:, None] < seqlen_q
                 if PADDED_HEAD:
@@ -714,7 +714,7 @@ def attn_fwd(Q, K, V, bias, Sm_scale: constexpr_or_f32, L, Out, stride_qz, strid
                                                     False, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
                                                     # _, MASK_STEPS, ...
                                                     PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX,
-                                                    PADDED_HEAD, Head_dim, QK_SCALE, INT8_GEMM, USE_P_SCALE,
+                                                    PADDED_HEAD, Head_dim, Qk_scale, INT8_GEMM, USE_P_SCALE,
                                                     INT8_KV)
                     block_min = block_max
                     block_max = n_blocks * BLOCK_N
@@ -739,7 +739,7 @@ def attn_fwd(Q, K, V, bias, Sm_scale: constexpr_or_f32, L, Out, stride_qz, strid
                         p_scale, IS_CAUSAL, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
                         # _, MASK_STEPS, ...
                         PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_HEAD, Head_dim,
-                        QK_SCALE, INT8_GEMM, USE_P_SCALE, INT8_KV)
+                        Qk_scale, INT8_GEMM, USE_P_SCALE, INT8_KV)
 
                 if INT8 and not INT8_KV:
                     if USE_P_SCALE:
