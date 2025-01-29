@@ -28,17 +28,17 @@ import triton.language as tl
 import sys
 import torch
 
+
 def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
+
 
 is_hip_ = is_hip()
 
 logger = logging.getLogger(__name__)
 
 # TODO: Remove this when triton>=3.2.0. This issue will not affect performance and accuracy.
-logger.warning(
-    "The following error message 'operation scheduled before its operands' can be ignored."
-)
+logger.warning("The following error message 'operation scheduled before its operands' can be ignored.")
 
 
 @triton.jit
@@ -48,36 +48,16 @@ def tanh(x):
 
 
 @triton.jit
-def _fwd_kernel_stage1(
-    Q, # Holds [Q_NOPE; Q_PE], b x h x (d+r)
-    K_Buffer, # Holds [KV; K_PE], b*s x (c+r)
-    W_KC, # c x h x d
-    sm_scale,
-    Req_to_tokens,
-    B_req_idx,
-    B_Seqlen,
-    Att_Out, # b x h x NUM_KV_SPLITS x (kv_lora_rank + 1)
-    stride_req_to_tokens_b,
-    stride_qbs,
-    stride_qh,
-    stride_buf_kbs,
-    stride_mid_ob,
-    stride_mid_oh,
-    stride_mid_os,
-    stride_w_kc_c,
-    stride_w_kc_h,
-    stride_w_kc_d,
-    kv_lora_rank: tl.constexpr,
-    qk_nope_head_dim: tl.constexpr,
-    qk_rope_head_dim: tl.constexpr,
-    kv_group_num: tl.constexpr,
-    BLOCK_D: tl.constexpr,
-    BLOCK_C: tl.constexpr,
-    BLOCK_R: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    NUM_KV_SPLITS: tl.constexpr,
-    logit_cap: tl.constexpr
-):
+def _fwd_kernel_stage1(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
+                       K_Buffer,  # Holds [KV; K_PE], b*s x (c+r)
+                       W_KC,  # c x h x d
+                       sm_scale, Req_to_tokens, B_req_idx, B_Seqlen,
+                       Att_Out,  # b x h x NUM_KV_SPLITS x (kv_lora_rank + 1)
+                       stride_req_to_tokens_b, stride_qbs, stride_qh, stride_buf_kbs, stride_mid_ob, stride_mid_oh,
+                       stride_mid_os, stride_w_kc_c, stride_w_kc_h, stride_w_kc_d, kv_lora_rank: tl.constexpr,
+                       qk_nope_head_dim: tl.constexpr, qk_rope_head_dim: tl.constexpr, kv_group_num: tl.constexpr,
+                       BLOCK_D: tl.constexpr, BLOCK_C: tl.constexpr, BLOCK_R: tl.constexpr, BLOCK_N: tl.constexpr,
+                       NUM_KV_SPLITS: tl.constexpr, logit_cap: tl.constexpr):
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
     split_kv_id = tl.program_id(2)
@@ -86,12 +66,10 @@ def _fwd_kernel_stage1(
 
     offs_d = tl.arange(0, BLOCK_D)
     offs_c = tl.arange(0, BLOCK_C)
-    offs_q_r = tl.arange(qk_nope_head_dim, qk_nope_head_dim + BLOCK_R) # to get the q_pe
-    offs_k_r = tl.arange(kv_lora_rank, kv_lora_rank + BLOCK_R) # to get the k_pe
+    offs_q_r = tl.arange(qk_nope_head_dim, qk_nope_head_dim + BLOCK_R)  # to get the q_pe
+    offs_k_r = tl.arange(kv_lora_rank, kv_lora_rank + BLOCK_R)  # to get the k_pe
 
-    offs_dv = tl.arange(0, BLOCK_C)
     mask_d = offs_d < qk_nope_head_dim
-    mask_dv = offs_dv < kv_lora_rank
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
     cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
 
@@ -107,11 +85,11 @@ def _fwd_kernel_stage1(
 
     w_kc_offset = W_KC + cur_kv_head * stride_w_kc_h
     w_kc_ptrs = w_kc_offset + offs_d[:, None] * stride_w_kc_d + offs_c[None, :] * stride_w_kc_c
-    mask_w_kc = (offs_d[:,None] < qk_nope_head_dim) & (mask_c[None,:])
+    mask_w_kc = (offs_d[:, None] < qk_nope_head_dim) & (mask_c[None, :])
 
     w_kc = tl.load(w_kc_ptrs, mask=mask_w_kc, other=0.0)
 
-    q = tl.sum(q[:, None] *  w_kc, 0) # 1 x c
+    q = tl.sum(q[:, None] * w_kc, 0)  # 1 x c
 
     kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
     split_kv_start = kv_len_per_split * split_kv_id
@@ -129,29 +107,23 @@ def _fwd_kernel_stage1(
                 mask=offs_n < split_kv_end,
                 other=0,
             )
-            offs_buf_kv = (
-                kv_loc[:, None] * stride_buf_kbs
-                + offs_c[None, :]
-            )
-            offs_buf_k_pe = (
-                kv_loc[:, None] * stride_buf_kbs
-                + offs_k_r[None, :]
-            )
+            offs_buf_kv = (kv_loc[:, None] * stride_buf_kbs + offs_c[None, :])
+            offs_buf_k_pe = (kv_loc[:, None] * stride_buf_kbs + offs_k_r[None, :])
 
             kv = tl.load(
                 K_Buffer + offs_buf_kv,
                 mask=(offs_n[:, None] < split_kv_end) & (mask_c[None, :]),
                 other=0.0,
-            ) # the shared latent tensor for keys and values
+            )  # the shared latent tensor for keys and values
 
             k_pe = tl.load(
                 K_Buffer + offs_buf_k_pe,
                 mask=(offs_n[:, None] < split_kv_end) & (mask_k_r[None, :]),
                 other=0.0,
-            ) # positional embedding part of keys
+            )  # positional embedding part of keys
 
-            qk = tl.sum(q[None, :] * kv, 1) # ((1 x c) * (BLOCK_N x c)).sum(1) = (BLOCK_N)
-            qk += tl.sum(q_pe[None, :] * k_pe, 1) # ((1 x r) * (BLOCK_N x r)).sum(1) = (BLOCK_N)
+            qk = tl.sum(q[None, :] * kv, 1)  # ((1 x c) * (BLOCK_N x c)).sum(1) = (BLOCK_N)
+            qk += tl.sum(q_pe[None, :] * k_pe, 1)  # ((1 x r) * (BLOCK_N x r)).sum(1) = (BLOCK_N)
 
             qk *= sm_scale
 
@@ -164,32 +136,23 @@ def _fwd_kernel_stage1(
             re_scale = tl.exp(e_max - n_e_max)
             p = tl.exp(qk - n_e_max)
             acc *= re_scale
-            acc += tl.sum(p[:, None] * kv, 0) # ((BLOCK_N x 1) * (BLOCK_N x c)).sum(0) = 1 x c
+            acc += tl.sum(p[:, None] * kv, 0)  # ((BLOCK_N x 1) * (BLOCK_N x c)).sum(0) = 1 x c
 
             e_sum = e_sum * re_scale + tl.sum(p, 0)
             e_max = n_e_max
 
         # acc: 1 x c
 
-        offs_mid_o = (
-            cur_batch * stride_mid_ob
-            + cur_head * stride_mid_oh
-            + split_kv_id * stride_mid_os
-            + offs_dv
-        )
+        offs_mid_o = (cur_batch * stride_mid_ob + cur_head * stride_mid_oh + split_kv_id * stride_mid_os + offs_c)
 
         tl.store(
             Att_Out + offs_mid_o,
             acc / e_sum,
-            mask=(mask_dv),
+            mask=(mask_c),
         )
 
-        offs_mid_o_1 = (
-            cur_batch * stride_mid_ob
-            + cur_head * stride_mid_oh
-            + split_kv_id * stride_mid_os
-            + kv_lora_rank
-        )
+        offs_mid_o_1 = (cur_batch * stride_mid_ob + cur_head * stride_mid_oh + split_kv_id * stride_mid_os +
+                        kv_lora_rank)
 
         tl.store(
             Att_Out + offs_mid_o_1,
@@ -215,7 +178,7 @@ def _decode_att_m_fwd(
     batch, head_num = B_req_idx.shape[0], q.shape[1]
 
     grid = (batch, head_num, NUM_KV_SPLITS)
-    kv_group_num = 1 # q.shape[1] // k_buffer.shape[1]
+    kv_group_num = 1  # q.shape[1] // k_buffer.shape[1]
 
     if kv_group_num == 1:
         num_warps = 4
@@ -232,39 +195,12 @@ def _decode_att_m_fwd(
 
     w_kc = w_kc.view(kv_lora_rank, head_num, qk_nope_head_dim)
 
-    _fwd_kernel_stage1[grid](
-        q,
-        k_buffer,
-        w_kc,
-        sm_scale,
-        Req_to_tokens,
-        B_req_idx,
-        B_Seqlen,
-        att_out,
-        Req_to_tokens.stride(0),
-        q.stride(0),
-        q.stride(1),
-        k_buffer.stride(0),
-        att_out.stride(0),
-        att_out.stride(1),
-        att_out.stride(2),
-        w_kc.stride(0),
-        w_kc.stride(1),
-        w_kc.stride(2),
-        kv_lora_rank,
-        qk_nope_head_dim,
-        qk_rope_head_dim,
-        kv_group_num=kv_group_num,
-        BLOCK_D=BLOCK_D,
-        BLOCK_C=BLOCK_C,
-        BLOCK_R=BLOCK_R,
-        BLOCK_N=BLOCK,
-        NUM_KV_SPLITS=NUM_KV_SPLITS,
-        logit_cap=logit_cap,
-        num_warps=num_warps,
-        num_stages=2
-    )
-
+    _fwd_kernel_stage1[grid](q, k_buffer, w_kc, sm_scale, Req_to_tokens, B_req_idx, B_Seqlen, att_out,
+                             Req_to_tokens.stride(0), q.stride(0), q.stride(1), k_buffer.stride(0), att_out.stride(0),
+                             att_out.stride(1), att_out.stride(2), w_kc.stride(0), w_kc.stride(1), w_kc.stride(2),
+                             kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, kv_group_num=kv_group_num,
+                             BLOCK_D=BLOCK_D, BLOCK_C=BLOCK_C, BLOCK_R=BLOCK_R, BLOCK_N=BLOCK,
+                             NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, num_warps=num_warps, num_stages=2)
 
 @triton.jit
 def _fwd_kernel_stage2(
@@ -429,22 +365,21 @@ def decode_attention_fwd_normal(
     _decode_softmax_reducev_fwd(attn_logits, w_vc, q, o, v_head_dim, b_seq_len, num_kv_splits)
 
 def main():
+    torch.manual_seed(0)
     device = "cuda"
     # args = parse_args()
-    B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim, causal = 8, 16, 1024, 512, 128, 64, 128, False
-    assert qk_nope_head_dim == v_head_dim
-    D = v_head_dim
+    B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim = 8, 16, 1024, 512, 128, 64
+    D = qk_nope_head_dim
 
     Req_to_tokens = torch.arange(B * S).reshape(B, S).to(device)
     B_req_idx = torch.arange(B).to(device)
-    B_Seqlen = torch.full((B,), S).to(device)
+    B_Seqlen = torch.full((B, ), S).to(device)
     num_kv_splits = 2
     sm_scale = 1.0
     logit_cap = 0.0
 
-
     q = torch.randn(B, H, qk_nope_head_dim + qk_rope_head_dim, device=device)
-    kv_cache = torch.randn(B*S, kv_lora_rank + qk_rope_head_dim, device=device)
+    kv_cache = torch.randn(B * S, kv_lora_rank + qk_rope_head_dim, device=device)
     # v = k[:,:kv_lora_rank]
 
     att_out = torch.empty(B, H, S, D, device=device)
@@ -460,7 +395,7 @@ def main():
         kv_cache,
         w_kc,
         w_vc,
-        v_head_dim,
+        D,
         att_out,
         Req_to_tokens,
         B_req_idx,
@@ -473,9 +408,6 @@ def main():
 
     print(att_out)
 
+
 if __name__ == '__main__':
     sys.exit(main())
-
-
-
-
