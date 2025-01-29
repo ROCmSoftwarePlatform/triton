@@ -1326,8 +1326,12 @@ class _attention(torch.autograd.Function):
         M = torch.empty((batch, nheads_q, metadata.max_seqlens_q), device=q.device, dtype=torch.float32)
 
         # Seed the RNG so we get reproducible results for testing.
-        philox_seed = 0x1BF52
-        philox_offset = 0x1D4B42
+        # Note: these arguments are to meet the hipGraph support requirement in PyTorch
+        philox_seed = torch.tensor([0x1BF52], device=q.device, dtype=torch.uint64)
+        philox_offset1 = torch.tensor([0x1D4000], device=q.device, dtype=torch.uint64)
+        philox_offset2 = 0x000B42
+        philox_seed_output = torch.tensor([0], device=q.device, dtype=torch.uint64)
+        philox_offset_output = torch.tensor([0], device=q.device, dtype=torch.uint64)
 
         if metadata.bias is not None:
             bias_strides = (metadata.bias.stride(0), metadata.bias.stride(1), metadata.bias.stride(2),
@@ -1378,13 +1382,11 @@ class _attention(torch.autograd.Function):
                 # dropout and PRNG
                 ENABLE_DROPOUT=metadata.dropout_p > 0.0,
                 dropout_p=metadata.dropout_p,
-                philox_seed=philox_seed,
-                philox_offset_base=philox_offset,
-                # philox_seed_ptr,
-                # philox_offset1 : '*u32',
-                # philox_offset2 : 'i32',
-                # philox_seed_output : '*u64',
-                # philox_offset_output : '*u64',
+                philox_seed_ptr=philox_seed,
+                philox_offset1=philox_offset1,
+                philox_offset2=philox_offset2,
+                philox_seed_output=philox_seed_output,
+                philox_offset_output=philox_offset_output,
                 RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax,
                 encoded_softmax=encoded_softmax,
                 # causal, (Planned Feature) windowed attention
@@ -1410,8 +1412,8 @@ class _attention(torch.autograd.Function):
         ctx.causal = metadata.causal
         ctx.alibi_slopes = metadata.alibi_slopes
         ctx.dropout_p = metadata.dropout_p
-        ctx.philox_seed = philox_seed
-        ctx.philox_offset = philox_offset
+        ctx.philox_seed = philox_seed_output
+        ctx.philox_offset = philox_offset_output
         ctx.encoded_softmax = encoded_softmax
         ctx.return_encoded_softmax = metadata.return_encoded_softmax
         return o, encoded_softmax, attn_fwd.best_config
