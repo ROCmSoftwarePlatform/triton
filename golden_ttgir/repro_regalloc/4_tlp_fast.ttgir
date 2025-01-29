@@ -1,0 +1,815 @@
+// prefetch single tile
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+
+// 2047 - (1+8+16+32+64+128+256+512) = 1030
+
+  //rocdl.sched.barrier 1030 // global+lds+mfma; translates to 0x406
+  //rocdl.sched.barrier 2038 // mfma
+  //rocdl.sched.barrier 1142 // mfma+lds
+  //rocdl.sched.barrier 1926 // mfma+global
+  //rocdl.sched.barrier 1039 // lds+global
+  //rocdl.sched.barrier 1030 // mfma+lds+global
+  //rocdl.sched.barrier 1791 // ds_read
+  //rocdl.sched.barrier 1535 // ds_write
+  //rocdl.sched.barrier 1503 // global_load + ds_write
+
+  //rocdl.sched.group.barrier   8, 1, 0 // mfma
+  //rocdl.sched.group.barrier 256, 1, 0 // ds_read
+  //rocdl.sched.group.barrier 512, 1, 0 // ds_write
+  //rocdl.sched.group.barrier  32, 1, 0 // global_load
+
+#loc = loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":72:0)
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 16], isTransposed = true}>
+#shared = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = false}>
+#shared1 = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], hasLeadingOffset = false}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32} loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":72:0), %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32} loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":72:0), %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32} loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":72:0), %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32} loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":72:0), %arg4: i32 {tt.divisibility = 16 : i32} loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":72:0), %arg5: i32 {tt.divisibility = 16 : i32} loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":72:0), %arg6: i32 {tt.divisibility = 16 : i32} loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":72:0), %arg7: i32 {tt.divisibility = 16 : i32} loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":72:0), %arg8: i32 {tt.divisibility = 16 : i32} loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":72:0), %arg9: i32 {tt.divisibility = 16 : i32} loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":72:0), %arg10: i32 {tt.divisibility = 16 : i32} loc("/home/dtanner/repos/rocm_triton/golden_ttgir/gemm_sub.py":72:0)) attributes {noinline = false} {
+    //%cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma> loc(#loc1)
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma> loc(#loc1)
+    %true = arith.constant true loc(#loc1)
+    %c2_i32 = arith.constant 2 : i32 loc(#loc1)
+    %c1_i32 = arith.constant 1 : i32 loc(#loc1)
+    %c32_i32 = arith.constant 32 : i32 loc(#loc1)
+    %c63_i32 = arith.constant 63 : i32 loc(#loc1)
+    %c64_i32 = arith.constant 64 : i32 loc(#loc1)
+    %c128_i32 = arith.constant 128 : i32 loc(#loc1)
+    %c192_i32 = arith.constant 192 : i32 loc(#loc1)
+    %c4_i32 = arith.constant 4 : i32 loc(#loc1)
+    %c256_i32 = arith.constant 256 : i32 loc(#loc1)
+    %c255_i32 = arith.constant 255 : i32 loc(#loc1)
+    %c76_i32 = arith.constant 76 : i32 loc(#loc1)
+    %c8_i32 = arith.constant 8 : i32 loc(#loc1)
+    %c0_i32 = arith.constant 0 : i32 loc(#loc1)
+    %0 = tt.get_program_id x : i32 loc(#loc1)
+    %1 = arith.remsi %0, %c8_i32 : i32 loc(#loc1)
+    %2 = arith.muli %1, %c76_i32 : i32 loc(#loc1)
+    %3 = arith.divsi %0, %c8_i32 : i32 loc(#loc1)
+    %4 = arith.addi %2, %3 : i32 loc(#loc1)
+    %5 = arith.addi %arg5, %c255_i32 : i32 loc(#loc1)
+    %6 = arith.divsi %5, %c256_i32 : i32 loc(#loc1)
+    %7 = arith.muli %6, %c4_i32 : i32 loc(#loc1)
+    %8 = arith.divsi %4, %7 : i32 loc(#loc1)
+    %9 = arith.muli %8, %c4_i32 : i32 loc(#loc1)
+    %10 = arith.remsi %4, %7 : i32 loc(#loc1)
+    %11 = arith.addi %arg4, %c255_i32 : i32 loc(#loc1)
+    %12 = arith.divsi %11, %c256_i32 : i32 loc(#loc1)
+    %13 = arith.subi %12, %9 : i32 loc(#loc1)
+    %14 = arith.minsi %13, %c4_i32 : i32 loc(#loc1)
+    %15 = arith.remsi %10, %14 : i32 loc(#loc1)
+    %16 = arith.addi %9, %15 : i32 loc(#loc1)
+    %17 = arith.muli %16, %c256_i32 : i32 loc(#loc1)
+    %18 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc1)
+    %19 = tt.expand_dims %18 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked> loc(#loc1)
+    %20 = arith.muli %17, %arg7 : i32 loc(#loc1)
+    %21 = tt.splat %arg7 : i32 -> tensor<256x1xi32, #blocked> loc(#loc1)
+    %22 = arith.muli %19, %21 : tensor<256x1xi32, #blocked> loc(#loc1)
+    %23 = tt.addptr %arg0, %20 : !tt.ptr<f16>, i32 loc(#loc1)
+    %24 = tt.broadcast %22 : tensor<256x1xi32, #blocked> -> tensor<256x64xi32, #blocked> loc(#loc1)
+    %25 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc1)
+    %26 = tt.expand_dims %25 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked> loc(#loc1)
+    %27 = tt.broadcast %26 : tensor<1x64xi32, #blocked> -> tensor<256x64xi32, #blocked> loc(#loc1)
+    %28 = arith.addi %27, %24 : tensor<256x64xi32, #blocked> loc(#loc1)
+    %29 = tt.addptr %23, %c64_i32 : !tt.ptr<f16>, i32 loc(#loc1)
+    %30 = arith.addi %arg6, %c63_i32 : i32 loc(#loc1)
+    %31 = arith.divsi %30, %c64_i32 : i32 loc(#loc1)
+    %32 = arith.cmpi sgt, %31, %c0_i32 : i32 loc(#loc1)
+    %33 = tt.splat %32 : i1 -> tensor<256x64xi1, #blocked> loc(#loc1)
+    // GR[0]
+    %34 = amdgpu.buffer_load %23[%28], %33 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> loc(#loc1)
+    %35 = arith.cmpi sgt, %31, %c1_i32 : i32 loc(#loc1)
+    %36 = tt.splat %35 : i1 -> tensor<256x64xi1, #blocked> loc(#loc1)
+    %37 = amdgpu.buffer_load %29[%28], %36 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> loc(#loc1)
+    %38 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> loc(#loc1)
+    %39 = tt.expand_dims %38 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<64x1xi32, #blocked1> loc(#loc1)
+    %40 = tt.broadcast %39 : tensor<64x1xi32, #blocked1> -> tensor<64x256xi32, #blocked1> loc(#loc1)
+    %41 = arith.divsi %10, %14 : i32 loc(#loc1)
+    %42 = arith.muli %41, %c256_i32 : i32 loc(#loc1)
+    %43 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> loc(#loc1)
+    %44 = tt.expand_dims %43 {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> -> tensor<1x256xi32, #blocked1> loc(#loc1)
+    %45 = arith.muli %42, %arg8 : i32 loc(#loc1)
+    %46 = tt.splat %arg8 : i32 -> tensor<1x256xi32, #blocked1> loc(#loc1)
+    %47 = arith.muli %44, %46 : tensor<1x256xi32, #blocked1> loc(#loc1)
+    %48 = tt.broadcast %47 : tensor<1x256xi32, #blocked1> -> tensor<64x256xi32, #blocked1> loc(#loc1)
+    %49 = tt.addptr %arg1, %45 : !tt.ptr<f16>, i32 loc(#loc1)
+    %50 = arith.addi %48, %40 : tensor<64x256xi32, #blocked1> loc(#loc1)
+    %51 = tt.addptr %49, %c64_i32 : !tt.ptr<f16>, i32 loc(#loc1)
+    %52 = tt.splat %32 : i1 -> tensor<64x256xi1, #blocked1> loc(#loc1)
+    // GR[1]
+    %53 = amdgpu.buffer_load %49[%50], %52 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> loc(#loc1)
+    %54 = tt.splat %35 : i1 -> tensor<64x256xi1, #blocked1> loc(#loc1)
+    %55 = amdgpu.buffer_load %51[%50], %54 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> loc(#loc1)
+    %56 = arith.cmpi sgt, %arg7, %c0_i32 : i32 loc(#loc1)
+    llvm.intr.assume %56 : i1 loc(#loc1)
+    llvm.intr.assume %true : i1 loc(#loc1)
+    llvm.intr.assume %true : i1 loc(#loc1)
+    %57 = arith.cmpi sgt, %arg8, %c0_i32 : i32 loc(#loc1)
+    llvm.intr.assume %57 : i1 loc(#loc1)
+    %58 = arith.cmpi sgt, %arg9, %c0_i32 : i32 loc(#loc1)
+    llvm.intr.assume %58 : i1 loc(#loc1)
+    llvm.intr.assume %true : i1 loc(#loc1)
+    %59 = arith.cmpi sgt, %arg10, %c0_i32 : i32 loc(#loc1)
+    llvm.intr.assume %59 : i1 loc(#loc1)
+    %60 = arith.cmpi sgt, %16, %c0_i32 : i32 loc(#loc1)
+    llvm.intr.assume %60 : i1 loc(#loc1)
+    %61 = arith.cmpi sgt, %41, %c0_i32 : i32 loc(#loc1)
+    llvm.intr.assume %61 : i1 loc(#loc1)
+    %62 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma}>> loc(#loc1)
+    %63 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #mma}>> loc(#loc1)
+    %64 = tt.expand_dims %62 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma}>> -> tensor<256x1xi32, #mma> loc(#loc1)
+    %65 = tt.expand_dims %63 {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #mma}>> -> tensor<1x256xi32, #mma> loc(#loc1)
+    %66 = ttg.local_alloc  : () -> !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> loc(#loc1)
+    %67 = ttg.local_alloc  : () -> !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> loc(#loc1)
+    // LW[0]
+    %68 = ttg.memdesc_subview %66[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc1)
+    ttg.local_store %34, %68 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc1)
+    %69 = ttg.memdesc_subview %67[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc1)
+    ttg.local_store %53, %69 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc1)
+    // LR[0]
+    // A[MK] = 64x32
+    %a00_68 = ttg.memdesc_subview %66[%c0_i32,   %c0_i32,  %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable> loc(#loc1)
+    %a10_68 = ttg.memdesc_subview %66[%c0_i32,  %c64_i32,  %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable> loc(#loc1)
+    %a20_68 = ttg.memdesc_subview %66[%c0_i32, %c128_i32,  %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable> loc(#loc1)
+    %a30_68 = ttg.memdesc_subview %66[%c0_i32, %c192_i32,  %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable> loc(#loc1)
+    %a01_68 = ttg.memdesc_subview %66[%c0_i32,   %c0_i32, %c32_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable> loc(#loc1)
+    %a11_68 = ttg.memdesc_subview %66[%c0_i32,  %c64_i32, %c32_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable> loc(#loc1)
+    %a21_68 = ttg.memdesc_subview %66[%c0_i32, %c128_i32, %c32_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable> loc(#loc1)
+    %a31_68 = ttg.memdesc_subview %66[%c0_i32, %c192_i32, %c32_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable> loc(#loc1)
+
+    // B[NK] = 32x64
+    %b00_69 = ttg.memdesc_subview %67[%c0_i32,  %c0_i32,   %c0_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> loc(#loc1)
+    %b10_69 = ttg.memdesc_subview %67[%c0_i32,  %c0_i32,  %c64_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> loc(#loc1)
+    %b20_69 = ttg.memdesc_subview %67[%c0_i32,  %c0_i32, %c128_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> loc(#loc1)
+    %b30_69 = ttg.memdesc_subview %67[%c0_i32,  %c0_i32, %c192_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> loc(#loc1)
+    %b01_69 = ttg.memdesc_subview %67[%c0_i32, %c32_i32,   %c0_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> loc(#loc1)
+    %b11_69 = ttg.memdesc_subview %67[%c0_i32, %c32_i32,  %c64_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> loc(#loc1)
+    %b21_69 = ttg.memdesc_subview %67[%c0_i32, %c32_i32, %c128_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> loc(#loc1)
+    %b31_69 = ttg.memdesc_subview %67[%c0_i32, %c32_i32, %c192_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> loc(#loc1)
+
+    %a00_70 = ttg.local_load %a00_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %b00_71 = ttg.local_load %b00_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+
+    %a10_70 = ttg.local_load %a10_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %b10_71 = ttg.local_load %b10_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+
+    %72 = arith.subi %31, %c2_i32 : i32 loc(#loc1)
+
+    //////////////////////////////////////////////////////////////////////////////
+    // Loop Begin
+    //////////////////////////////////////////////////////////////////////////////
+
+    %73:25 = scf.for %arg11 = %c0_i32 to %72 step %c1_i32 iter_args(
+        %arg12 = %cst, // c00
+        %arg13 = %c0_i32,
+        %arg14 = %37, // vgprs of global data
+        %arg15 = %55, // vgprs of global data
+        %arg16 = %a00_70, // a0
+        %arg17 = %b00_71, // b0
+        %arg18 = %29,
+        %arg19 = %51,
+        %arg20 = %cst, // c01
+        %arg21 = %cst, // c02
+        %arg22 = %cst, // c03
+        %arg23 = %cst, // c10
+        %arg24 = %cst, // c11
+        %arg25 = %cst, // c12
+        %arg26 = %cst, // c13
+        %arg27 = %cst, // c20
+        %arg28 = %cst, // c21
+        %arg29 = %cst, // c22
+        %arg30 = %cst, // c23
+        %arg31 = %cst, // c30
+        %arg32 = %cst, // c31
+        %arg33 = %cst, // c32
+        %arg34 = %cst, // c33
+        %arg35 = %a10_70, // a1
+        %arg38 = %b10_71 // b1
+        ) -> (
+          tensor<64x64xf32, #mma>,
+          i32,
+          tensor<256x64xf16, #blocked>,
+          tensor<64x256xf16, #blocked1>,
+          tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>,
+          tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>,
+          !tt.ptr<f16>,
+          !tt.ptr<f16>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x64xf32, #mma>,
+          tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>,
+          tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+          ) : i32 {
+
+      //////////////////////////////////////////////////////////////////////
+      // dot 0-3
+      %c00 = tt.dot %arg16, %arg17, %arg12 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 8, 0 // mfma
+      %c01 = tt.dot %arg16, %arg38, %arg20 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 8, 0 // mfma
+      rocdl.sched.barrier 0
+
+      %b20_71 = ttg.local_load %b20_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %b30_71 = ttg.local_load %b30_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %c10 = tt.dot %arg35, %arg17, %arg23 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.barrier 0
+
+      %c11 = tt.dot %arg35, %arg38, %arg24 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 8, 0 // mfma
+      rocdl.sched.barrier 0
+
+      //////////////////////////////////////////////////////////////////////
+      // dot 4-7
+      %c02 = tt.dot %arg16, %b20_71, %arg21 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 8, 0 // mfma
+      %c03 = tt.dot %arg16, %b30_71, %arg22 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 8, 0 // mfma
+      rocdl.sched.barrier 0
+
+      %a20_70 = ttg.local_load %a20_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %a30_70 = ttg.local_load %a30_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %c12 = tt.dot %arg35, %b20_71, %arg25 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.barrier 0
+
+      %c13 = tt.dot %arg35, %b30_71, %arg26 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 8, 0 // mfma
+      rocdl.sched.barrier 0
+
+      //////////////////////////////////////////////////////////////////////
+      // dot 8-11
+      %c20 = tt.dot %a20_70, %arg17, %arg27 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      %c21 = tt.dot %a20_70, %arg38, %arg28 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      %c30 = tt.dot %a30_70, %arg17, %arg31 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      %c31 = tt.dot %a30_70, %arg38, %arg32 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.barrier 1030
+
+      //////////////////////////////////////////////////////////////////////
+      // dot 12-15
+      %c22 = tt.dot %a20_70, %b20_71, %arg29 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.barrier 1030
+
+      %a01_70 = ttg.local_load %a01_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %b01_71 = ttg.local_load %b01_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %c23 = tt.dot %a20_70, %b30_71, %arg30 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.barrier 1030
+
+      %b11_71 = ttg.local_load %b11_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %a11_70 = ttg.local_load %a11_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %c32 = tt.dot %a30_70, %b20_71, %arg33 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.barrier 1030
+
+      %c33 = tt.dot %a30_70, %b30_71, %arg34 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 8, 0 // mfma
+      rocdl.sched.barrier 1030
+
+      //////////////////////////////////////////////////////////////////////
+      // dot 16-19
+      %d00 = tt.dot %a01_70, %b01_71, %c00 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 8, 0 // mfma
+      rocdl.sched.barrier 1030
+
+      %b21_71 = ttg.local_load %b21_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %b31_71 = ttg.local_load %b31_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %d01 = tt.dot %a01_70, %b11_71, %c01 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.barrier 1030
+
+      %a21_70 = ttg.local_load %a21_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %a31_70 = ttg.local_load %a31_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %d10 = tt.dot %a11_70, %b01_71, %c10 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.barrier 1030
+
+      %d11 = tt.dot %a11_70, %b11_71, %c11 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 8, 0 // mfma
+      rocdl.sched.barrier 1030
+
+      //////////////////////////////////////////////////////////////////////
+      // 8 ds_write + global_load
+      %w102 = ttg.memdesc_subview %66[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc1)
+      ttg.local_store %arg14, %w102 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc1)
+      %g96 = tt.addptr %arg18, %c64_i32 : !tt.ptr<f16>, i32 loc(#loc1)
+      %g97 = amdgpu.buffer_load %g96[%28] {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> loc(#loc1)
+
+      //////////////////////////////////////////////////////////////////////
+      // dot 20-23
+      %d02 = tt.dot %a01_70, %b21_71, %c02 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      %d03 = tt.dot %a01_70, %b31_71, %c03 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      %d12 = tt.dot %a11_70, %b21_71, %c12 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      %d13 = tt.dot %a11_70, %b31_71, %c13 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.barrier 1030
+
+      //////////////////////////////////////////////////////////////////////
+      // 8 ds_write + global_load
+      %w103 = ttg.memdesc_subview %67[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc1)
+      ttg.local_store %arg15, %w103 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc1)
+      %g98 = tt.addptr %arg19, %c64_i32 : !tt.ptr<f16>, i32 loc(#loc1)
+      %g104 = amdgpu.buffer_load %g98[%50] {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> loc(#loc1)
+
+      //////////////////////////////////////////////////////////////////////
+      // dot 24-27
+      %d20 = tt.dot %a21_70, %b01_71, %c20 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      %d21 = tt.dot %a21_70, %b11_71, %c21 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      %d30 = tt.dot %a31_70, %b01_71, %c30 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      %d31 = tt.dot %a31_70, %b11_71, %c31 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 512, 1, 0 // ds_write
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier  32, 1, 0 // global_load
+      rocdl.sched.barrier 0
+
+      //////////////////////////////////////////////////////////////////////
+      // dot 28-31
+      %d22 = tt.dot %a21_70, %b21_71, %c22 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 8, 0 // mfma
+      rocdl.sched.barrier 0
+
+      // 4 ds_reads + 8 mfmas
+      %a0 = ttg.local_load %a00_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %b0 = ttg.local_load %b00_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %d23 = tt.dot %a21_70, %b31_71, %c23 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.barrier 0
+
+      %a1 = ttg.local_load %a10_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %b1 = ttg.local_load %b10_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+      %d32 = tt.dot %a31_70, %b21_71, %c32 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.group.barrier   8, 2, 0 // mfma
+      rocdl.sched.group.barrier 256, 1, 0 // ds_read
+      rocdl.sched.barrier 0
+
+      %d33 = tt.dot %a31_70, %b31_71, %c33 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+      rocdl.sched.group.barrier   8, 8, 0 // mfma
+      rocdl.sched.barrier 0
+
+      scf.yield
+          %d00,
+          %arg13,
+          %g97,
+          %g104,
+          %a0,
+          %b0,
+          %g96,
+          %g98,
+          %d01,
+          %d02,
+          %d03,
+          %d10,
+          %d11,
+          %d12,
+          %d13,
+          %d20,
+          %d21,
+          %d22,
+          %d23,
+          %d30,
+          %d31,
+          %d32,
+          %d33,
+          %a1, // [23] -> [23]
+          //%a2, // 24 -> a2
+          //%a3, // 25 -> a3
+          %b1 // [26] -> [24]
+          //%b2, // 27 -> b2
+          //%b3  // 28 -> b3
+          :
+            tensor<64x64xf32, #mma>,
+            i32,
+            tensor<256x64xf16, #blocked>,
+            tensor<64x256xf16, #blocked1>,
+            tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>,
+            tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>,
+            !tt.ptr<f16>,
+            !tt.ptr<f16>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x64xf32, #mma>,
+            tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>,
+            //tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>,
+            //tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>,
+            tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+            //tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>,
+            //tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> 
+            loc(#loc1)
+    } loc(#loc1)
+
+    //////////////////////////////////////////////////////////////////////////////
+    // End Loop
+    //////////////////////////////////////////////////////////////////////////////
+
+    // Dot[K-2]
+    %eg00 = tt.dot    %73#4,    %73#5,  %73#0 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %eg01 = tt.dot    %73#4,   %73#24,  %73#8 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %eg10 = tt.dot   %73#23,    %73#5, %73#11 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %eg11 = tt.dot   %73#23,   %73#24, %73#12 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    rocdl.sched.barrier 0
+
+    %eb20_71 = ttg.local_load %b20_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %eg02 = tt.dot    %73#4, %eb20_71,  %73#9 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %eb30_71 = ttg.local_load %b30_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %eg03 = tt.dot    %73#4, %eb30_71, %73#10 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %eg12 = tt.dot   %73#23, %eb20_71, %73#13 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %eg13 = tt.dot   %73#23, %eb30_71, %73#14 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    rocdl.sched.barrier 0
+
+    %ea20_70 = ttg.local_load %a20_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %eg20 = tt.dot %ea20_70,    %73#5, %73#15 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %eg21 = tt.dot %ea20_70,   %73#24, %73#16 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ea30_70 = ttg.local_load %a30_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %eg30 = tt.dot %ea30_70,    %73#5, %73#19 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %eg31 = tt.dot %ea30_70,   %73#24, %73#20 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    rocdl.sched.barrier 0
+
+    %eg22 = tt.dot %ea20_70, %eb20_71, %73#17 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %eg23 = tt.dot %ea20_70, %eb30_71, %73#18 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %eg32 = tt.dot %ea30_70, %eb20_71, %73#21 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %eg33 = tt.dot %ea30_70, %eb30_71, %73#22 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    rocdl.sched.barrier 0
+
+    //////////////////////////////////////////////////////////////////////////////
+
+    %eb01_71 = ttg.local_load %b01_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ea01_70 = ttg.local_load %a01_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ed00 = tt.dot %ea01_70, %eb01_71, %eg00 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %eb11_71 = ttg.local_load %b11_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ed01 = tt.dot %ea01_70, %eb11_71, %eg01 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ea11_70 = ttg.local_load %a11_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ed10 = tt.dot %ea11_70, %eb01_71, %eg10 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ed11 = tt.dot %ea11_70, %eb11_71, %eg11 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    rocdl.sched.barrier 0
+
+    %eb21_71 = ttg.local_load %b21_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ed02 = tt.dot %ea01_70, %eb21_71, %eg02 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %eb31_71 = ttg.local_load %b31_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ed03 = tt.dot %ea01_70, %eb31_71, %eg03 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ed12 = tt.dot %ea11_70, %eb21_71, %eg12 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ed13 = tt.dot %ea11_70, %eb31_71, %eg13 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    rocdl.sched.barrier 0
+
+    %ea21_70 = ttg.local_load %a21_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ed20 = tt.dot %ea21_70, %eb01_71, %eg20 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ed21 = tt.dot %ea21_70, %eb11_71, %eg21 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ea31_70 = ttg.local_load %a31_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ed30 = tt.dot %ea31_70, %eb01_71, %eg30 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ed31 = tt.dot %ea31_70, %eb11_71, %eg31 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    rocdl.sched.barrier 0
+
+    %ed22 = tt.dot %ea21_70, %eb21_71, %eg22 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ed23 = tt.dot %ea21_70, %eb31_71, %eg23 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ed32 = tt.dot %ea31_70, %eb21_71, %eg32 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ed33 = tt.dot %ea31_70, %eb31_71, %eg33 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    rocdl.sched.barrier 0
+
+    //////////////////////////////////////////////////////////////////////////////
+
+    // LR[K-1]
+    %79 = ttg.memdesc_subview %66[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc1)
+    ttg.local_store %73#2, %79 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable> loc(#loc1)
+    %80 = ttg.memdesc_subview %67[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc1)
+    ttg.local_store %73#3, %80 {OpIdx = #amdgpu.OpIdx<1>} : tensor<64x256xf16, #blocked1> -> !ttg.memdesc<64x256xf16, #shared1, #smem, mutable> loc(#loc1)
+
+    // s_barrier
+    rocdl.sched.barrier 0
+
+    // Dot[K-1]
+    %efb00 = ttg.local_load %b00_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %efa00 = ttg.local_load %a00_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ef00 = tt.dot %efa00, %efb00, %ed00 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %efb10 = ttg.local_load %b10_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ef01 = tt.dot %efa00, %efb10, %ed01 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %efb20 = ttg.local_load %b20_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ef02 = tt.dot %efa00, %efb20, %ed02 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %efb30 = ttg.local_load %b30_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ef03 = tt.dot %efa00, %efb30, %ed03 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    rocdl.sched.barrier 0
+
+    %efa10 = ttg.local_load %a10_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ef10 = tt.dot %efa10, %efb00, %ed10 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ef11 = tt.dot %efa10, %efb10, %ed11 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ef12 = tt.dot %efa10, %efb20, %ed12 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ef13 = tt.dot %efa10, %efb30, %ed13 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    rocdl.sched.barrier 0
+
+    %efa20 = ttg.local_load %a20_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ef20 = tt.dot %efa20, %efb00, %ed20 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ef21 = tt.dot %efa20, %efb10, %ed21 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ef22 = tt.dot %efa20, %efb20, %ed22 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ef23 = tt.dot %efa20, %efb30, %ed23 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    rocdl.sched.barrier 0
+
+    %efa30 = ttg.local_load %a30_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %ef30 = tt.dot %efa30, %efb00, %ed30 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ef31 = tt.dot %efa30, %efb10, %ed31 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ef32 = tt.dot %efa30, %efb20, %ed32 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %ef33 = tt.dot %efa30, %efb30, %ed33 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    rocdl.sched.barrier 0
+
+    //////////////////////////////////////////////////////////////////////////////
+
+    %efb01 = ttg.local_load %b01_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %efa01 = ttg.local_load %a01_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %e00_86 = tt.dot %efa01, %efb01, %ef00 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %efb11 = ttg.local_load %b11_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %e01_86 = tt.dot %efa01, %efb11, %ef01 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %efa11 = ttg.local_load %a11_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %e10_86 = tt.dot %efa11, %efb01, %ef10 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %e11_86 = tt.dot %efa11, %efb11, %ef11 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+
+    %efb21 = ttg.local_load %b21_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %e02_86 = tt.dot %efa01, %efb21, %ef02 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %efb31 = ttg.local_load %b31_69 : !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %e03_86 = tt.dot %efa01, %efb31, %ef03 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %e12_86 = tt.dot %efa11, %efb21, %ef12 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %e13_86 = tt.dot %efa11, %efb31, %ef13 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+
+    %efa21 = ttg.local_load %a21_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %e20_86 = tt.dot %efa21, %efb01, %ef20 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %e21_86 = tt.dot %efa21, %efb11, %ef21 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %efa31 = ttg.local_load %a31_68 : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> loc(#loc1)
+    %e30_86 = tt.dot %efa31, %efb01, %ef30 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %e31_86 = tt.dot %efa31, %efb11, %ef31 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+
+    %e22_86 = tt.dot %efa21, %efb21, %ef22 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %e23_86 = tt.dot %efa21, %efb31, %ef23 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %e32_86 = tt.dot %efa31, %efb21, %ef32 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+    %e33_86 = tt.dot %efa31, %efb31, %ef33 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma> loc(#loc1)
+
+    ttg.local_dealloc %66 : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable> loc(#loc1)
+    ttg.local_dealloc %67 : !ttg.memdesc<1x64x256xf16, #shared1, #smem, mutable> loc(#loc1)
+
+    // finish all dots first and now all a,b vgpr operands are done, global and local addresses are done
+    rocdl.sched.barrier 1030
+
+    /////////////////////////////////////////////////
+    // Store Addresses
+    /////////////////////////////////////////////////
+
+    // epilogue address; same for whole wave?
+    %e88 = arith.muli %arg9, %17 : i32 loc(#loc1)
+    %e91 = tt.addptr %arg2, %e88 : !tt.ptr<f16>, i32 loc(#loc1)
+    %ea = tt.addptr %e91, %42 : !tt.ptr<f16>, i32 loc(#loc1)
+
+    // epilogue index
+    //%89 = tt.splat %arg9 : i32 -> tensor<256x1xi32, #mma> loc(#loc1)
+    %e0_89 = tt.splat %arg9 : i32 -> tensor<64x1xi32, #mma> loc(#loc1)
+    %e1_89 = tt.splat %arg9 : i32 -> tensor<64x1xi32, #mma> loc(#loc1)
+    %e2_89 = tt.splat %arg9 : i32 -> tensor<64x1xi32, #mma> loc(#loc1)
+    %e3_89 = tt.splat %arg9 : i32 -> tensor<64x1xi32, #mma> loc(#loc1)
+
+    // extract slice of dims
+    %e0_64 = amdgpu.extract_slice %64 [  0,0] : tensor<256x1xi32, #mma> to tensor<64x1xi32, #mma>
+    %e1_64 = amdgpu.extract_slice %64 [ 64,0] : tensor<256x1xi32, #mma> to tensor<64x1xi32, #mma>
+    %e2_64 = amdgpu.extract_slice %64 [128,0] : tensor<256x1xi32, #mma> to tensor<64x1xi32, #mma>
+    %e3_64 = amdgpu.extract_slice %64 [192,0] : tensor<256x1xi32, #mma> to tensor<64x1xi32, #mma>
+
+    //%90 = arith.muli %89, %64 : tensor<256x1xi32, #mma> loc(#loc1)
+    %e0_90 = arith.muli %e0_89, %e0_64 : tensor<64x1xi32, #mma> loc(#loc1)
+    %e1_90 = arith.muli %e1_89, %e1_64 : tensor<64x1xi32, #mma> loc(#loc1)
+    %e2_90 = arith.muli %e2_89, %e2_64 : tensor<64x1xi32, #mma> loc(#loc1)
+    %e3_90 = arith.muli %e3_89, %e3_64 : tensor<64x1xi32, #mma> loc(#loc1)
+
+    //%92 = tt.broadcast %90 : tensor<256x1xi32, #mma> -> tensor<256x256xi32, #mma> loc(#loc1)
+    %e0_92 = tt.broadcast %e0_90 : tensor<64x1xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+    %e1_92 = tt.broadcast %e1_90 : tensor<64x1xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+    %e2_92 = tt.broadcast %e2_90 : tensor<64x1xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+    %e3_92 = tt.broadcast %e3_90 : tensor<64x1xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+
+    // extract slice of dims
+    %e0_65 = amdgpu.extract_slice %65 [0,  0] : tensor<1x256xi32, #mma> to tensor<1x64xi32, #mma>
+    %e1_65 = amdgpu.extract_slice %65 [0, 64] : tensor<1x256xi32, #mma> to tensor<1x64xi32, #mma>
+    %e2_65 = amdgpu.extract_slice %65 [0,128] : tensor<1x256xi32, #mma> to tensor<1x64xi32, #mma>
+    %e3_65 = amdgpu.extract_slice %65 [0,192] : tensor<1x256xi32, #mma> to tensor<1x64xi32, #mma>
+
+    //%93 = tt.broadcast %65 : tensor<1x256xi32, #mma> -> tensor<256x256xi32, #mma> loc(#loc1)
+    %e0_93 = tt.broadcast %e0_65 : tensor<1x64xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+    %e1_93 = tt.broadcast %e1_65 : tensor<1x64xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+    %e2_93 = tt.broadcast %e2_65 : tensor<1x64xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+    %e3_93 = tt.broadcast %e3_65 : tensor<1x64xi32, #mma> -> tensor<64x64xi32, #mma> loc(#loc1)
+
+    /////////////////////////////////////////////////
+    // Blocked Stores
+    /////////////////////////////////////////////////
+
+    // store 0 - no spills
+    rocdl.sched.barrier 1030
+    %ei00 = arith.addi %e0_92, %e0_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec00 = arith.truncf %e00_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec00, %ea[%ei00] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    %ei01 = arith.addi %e0_92, %e1_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec01 = arith.truncf %e01_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec01, %ea[%ei01] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    %ei02 = arith.addi %e0_92, %e2_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec02 = arith.truncf %e02_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec02, %ea[%ei02] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    %ei03 = arith.addi %e0_92, %e3_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec03 = arith.truncf %e03_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec03, %ea[%ei03] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    // store 1 - no spills
+    rocdl.sched.barrier 1030 // BB
+    %ei10 = arith.addi %e1_92, %e0_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec10 = arith.truncf %e10_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec10, %ea[%ei10] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    %ei11 = arith.addi %e1_92, %e1_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec11 = arith.truncf %e11_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec11, %ea[%ei11] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    %ei12 = arith.addi %e1_92, %e2_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec12 = arith.truncf %e12_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec12, %ea[%ei12] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    %ei13 = arith.addi %e1_92, %e3_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec13 = arith.truncf %e13_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec13, %ea[%ei13] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    // store 2 - no spills
+    rocdl.sched.barrier 1030 // BB
+    %ei20 = arith.addi %e2_92, %e0_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec20 = arith.truncf %e20_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec20, %ea[%ei20] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    %ei21 = arith.addi %e2_92, %e1_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec21 = arith.truncf %e21_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec21, %ea[%ei21] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    %ei22 = arith.addi %e2_92, %e2_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec22 = arith.truncf %e22_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec22, %ea[%ei22] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    %ei23 = arith.addi %e2_92, %e3_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec23 = arith.truncf %e23_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec23, %ea[%ei23] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    // store 3 - no spills
+    rocdl.sched.barrier 1030 // BB
+    %ei30 = arith.addi %e3_92, %e0_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec30 = arith.truncf %e30_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec30, %ea[%ei30] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    %ei31 = arith.addi %e3_92, %e1_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec31 = arith.truncf %e31_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec31, %ea[%ei31] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    %ei32 = arith.addi %e3_92, %e2_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec32 = arith.truncf %e32_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec32, %ea[%ei32] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    %ei33 = arith.addi %e3_92, %e3_93 : tensor<64x64xi32, #mma> loc(#loc1)
+    %ec33 = arith.truncf %e33_86 : tensor<64x64xf32, #mma> to tensor<64x64xf16, #mma> loc(#loc1)
+    amdgpu.buffer_store %ec33, %ea[%ei33] : tensor<64x64xf16, #mma> loc(#loc1)
+
+    tt.return loc(#loc1)
+  } loc(#loc1)
+} loc(#loc1)
+#loc1 = loc(unknown)
+
