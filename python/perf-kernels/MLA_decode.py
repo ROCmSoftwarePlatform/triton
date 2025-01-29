@@ -217,7 +217,7 @@ def _fwd_kernel_stage2(
     stride_w_vch,
     stride_w_vcd,
     NUM_KV_SPLITS: tl.constexpr,
-    BLOCK_LORA: tl.constexpr, # we assume lora is pow of 2 and its the actual c
+    LORA: tl.constexpr, # we assume lora (low rank dim c) is pow of 2 and its the actual c
     BLOCK_SIZE_K: tl.constexpr, # we split lora dim for inner loop ??
     BLOCK_DV: tl.constexpr, # head_dim of v rounded to the nearest power of 2
     Lv: tl.constexpr, # The actual head_dim of v
@@ -228,17 +228,18 @@ def _fwd_kernel_stage2(
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
 
     offs_d = tl.arange(0, BLOCK_DV)
-    offs_c = tl.arange(0, BLOCK_LORA)
+    offs_c = tl.arange(0, LORA)
     # TODO check this
     mask_d = offs_d < Lv
 
     e_sum = 0.0
     e_max = -float("inf")
-    acc = tl.zeros([BLOCK_LORA], dtype=tl.float32)
+    acc = tl.zeros([LORA], dtype=tl.float32)
 
     offs_v = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + offs_c
-    offs_logic = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + BLOCK_LORA
+    offs_logic = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + LORA
     offs_w_kv = cur_head * stride_w_vch + offs_d[:, None] * stride_w_vcd + offs_c[None, :] * stride_w_vcc
+    w_kv_prts = W_VC + offs_w_kv
 
     for split_kv_id in range(0, NUM_KV_SPLITS):
         kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
@@ -263,13 +264,14 @@ def _fwd_kernel_stage2(
 
     acc = acc / e_sum # c = 512
 
-    # for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-    w_vc = tl.load(W_VC + offs_w_kv) # dc, head is parallelized (128, 512)
+    result = tl.zeros([BLOCK_DV], dtype=tl.float32)
 
-    # TODO if we can't load it we do blocked sum (c, ) * (c, d)  => (d,)
-    # tl.static_print("", w_vc)
-    # tl.static_print("", acc)
-    result = tl.sum(w_vc * acc[None, :], 1)
+    for k in range(0, tl.cdiv(LORA, BLOCK_SIZE_K)):
+        w_vc = tl.load(w_kv_prts, mask=offs_c[None, :] < LORA - k * BLOCK_SIZE_K, other=0.0) # dc, head is parallelized (128, 512)
+
+        result += tl.sum(w_vc * acc[None, :], 1)
+
+        w_kv_prts += BLOCK_SIZE_K * stride_w_vcc
 
     tl.store(
         O + cur_batch * stride_obs + cur_head * stride_oh + offs_d,
@@ -324,7 +326,7 @@ def _decode_softmax_reducev_fwd(
         w_vc.stride(1),
         w_vc.stride(2),
         NUM_KV_SPLITS=NUM_KV_SPLITS,
-        BLOCK_LORA=kv_lora_rank,
+        LORA=kv_lora_rank,
         BLOCK_SIZE_K=BLOCK_K, # TODO check do we need this
         BLOCK_DV=BLOCK_DV,
         Lv=Lv,
@@ -371,9 +373,9 @@ def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_
     device = q_input.device
 
     o = torch.empty((*q_input.shape[:-1], v_input.shape[-1]), dtype=q_input.dtype, device=q_input.device)
-    attn_logits = torch.randn(B, H, num_kv_splits, kv_lora_rank + 1, device=device)
+    attn_logits = torch.empty(B, H, num_kv_splits, kv_lora_rank + 1, device=device)
     decode_attention_fwd_normal_ref(q_input, k_input, v_input, o, Req_to_tokens, B_req_idx, B_Seqlen, attn_logits, num_kv_splits, sm_scale, logit_cap)
-    return o
+    return o, attn_logits
 
 
 def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0, device="cuda"):
@@ -388,7 +390,7 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_k
     kv_cache = torch.randn(B * S, kv_lora_rank + qk_rope_head_dim, device=device)
     # v = k[:,:kv_lora_rank]
 
-    att_out = torch.empty(B, H, S, D, device=device)
+    att_out = torch.empty(B, H, D, device=device)
     attn_logits = torch.randn(B, H, num_kv_splits, kv_lora_rank + 1, device=device)
 
     w_kc = torch.randn(kv_lora_rank, H * qk_nope_head_dim, device=device)
@@ -412,7 +414,7 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_k
         logit_cap=0.0,
     )
 
-    tri_output = att_out
+    tri_output = att_out # .flatten(1,2)
 
     # reference
     q_input = torch.empty(
@@ -438,30 +440,42 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_k
     q_input[..., kv_lora_rank :] = q_pe
     k_input[..., kv_lora_rank :] = k_pe
 
-    attn_output = attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap)
+    attn_output, attn_logits_ref = attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap)
+    
+    print("first 10 logits:")
+    print(f"ref: {attn_logits_ref.flatten()[:10]}")
+    print(f"tri: {attn_logits.flatten()[:10]}")      
+    torch.testing.assert_close(attn_logits_ref, attn_logits, atol=1e-2, rtol=1e-2)
+    print("attn_logits are correct")
+    
     attn_output = attn_output.view(-1, H, kv_lora_rank)
 
     w_vc = w_vc.view(kv_lora_rank, H, qk_nope_head_dim).permute((1,0,2))
 
     attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
     
-    ref_output = attn_bmm_output.transpose(0, 1).flatten(1, 2)
+    ref_output = attn_bmm_output.transpose(0, 1) # .flatten(1, 2)
     # ref_output, _ = self.o_proj(attn_output)
-    print(ref_output.shape)
-    print(tri_output.shape)
+    # print(ref_output.shape)
+    # print(tri_output.shape)
 
+    print("first 10 outputs:")
+    print(f"ref: {ref_output.flatten()[:10]}")
+    print(f"tri: {tri_output.flatten()[:10]}")   
     torch.testing.assert_close(ref_output, tri_output, atol=1e-2, rtol=1e-2)
+    print("attn_output are correct")
 
 
 
 def main():
     torch.manual_seed(0)
-    device = "cuda"
-    # args = parse_args()
     B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim = 8, 16, 1024, 512, 128, 64
-    D = qk_nope_head_dim
+    num_kv_splits = 2
+    sm_scale = 1.0
+    logit_cap = 0.0
+    device = "cuda"
 
-    test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim)
+    test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits, sm_scale, logit_cap, device)
 
 
 if __name__ == '__main__':
