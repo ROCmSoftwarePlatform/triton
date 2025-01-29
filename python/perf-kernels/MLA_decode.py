@@ -55,7 +55,7 @@ def _fwd_kernel_stage1(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
                        sm_scale, Req_to_tokens, B_req_idx, B_Seqlen,
                        Att_Out,  # b x h x NUM_KV_SPLITS x (kv_lora_rank + 1)
                        stride_req_to_tokens_b, stride_qbs, stride_qh, stride_buf_kbs, stride_mid_ob, stride_mid_oh,
-                       stride_mid_os, stride_w_kc_c, stride_w_kc_h, stride_w_kc_d, kv_lora_rank: tl.constexpr,
+                       stride_mid_os, stride_w_kc_h, stride_w_kc_d, stride_w_kc_c, kv_lora_rank: tl.constexpr,
                        qk_nope_head_dim: tl.constexpr, qk_rope_head_dim: tl.constexpr, kv_group_num: tl.constexpr,
                        BLOCK_D: tl.constexpr, BLOCK_C: tl.constexpr, BLOCK_R: tl.constexpr, BLOCK_N: tl.constexpr,
                        NUM_KV_SPLITS: tl.constexpr, logit_cap: tl.constexpr):
@@ -186,15 +186,13 @@ def _decode_att_m_fwd(
     else:
         num_warps = 2
 
-    kv_lora_rank = w_kc.shape[0]
-    qk_nope_head_dim = w_kc.shape[1] // head_num
+    kv_lora_rank = w_kc.shape[-1]
+    qk_nope_head_dim = w_kc.shape[1]
     qk_rope_head_dim = k_buffer.shape[-1] - kv_lora_rank
 
     BLOCK_D = triton.next_power_of_2(qk_nope_head_dim)
     BLOCK_C = triton.next_power_of_2(kv_lora_rank)
     BLOCK_R = triton.next_power_of_2(qk_rope_head_dim)
-
-    w_kc = w_kc.view(kv_lora_rank, head_num, qk_nope_head_dim)
 
     _fwd_kernel_stage1[grid](q, k_buffer, w_kc, sm_scale, Req_to_tokens, B_req_idx, B_Seqlen, att_out,
                              Req_to_tokens.stride(0), q.stride(0), q.stride(1), k_buffer.stride(0), att_out.stride(0),
@@ -214,8 +212,8 @@ def _fwd_kernel_stage2(
     stride_mid_os,
     stride_obs,
     stride_oh,
-    stride_w_vcc,
     stride_w_vch,
+    stride_w_vcc,
     stride_w_vcd,
     NUM_KV_SPLITS: tl.constexpr,
     LORA: tl.constexpr, # we assume lora (low rank dim c) is pow of 2 and its the actual c
@@ -303,7 +301,8 @@ def _decode_softmax_reducev_fwd(
     # tiling on the head_dim_v
     BLOCK_K = 8
 
-    kv_lora_rank = w_vc.shape[0]
+    # hcd
+    kv_lora_rank = w_vc.shape[1]
 
     NUM_KV_SPLITS = num_kv_splits
 
@@ -315,8 +314,6 @@ def _decode_softmax_reducev_fwd(
 
     grid = (batch, head_num)
     # grid = lambda META: (batch, head_num, triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']))
-    w_vc = w_vc.view(kv_lora_rank, head_num, Lv)
-
     _fwd_kernel_stage2[grid](
         logits,
         w_vc,
@@ -383,6 +380,24 @@ def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_
     return o, attn_logits
 
 
+def input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, device):
+    Req_to_tokens = torch.arange(B * S).reshape(B, S).to(device)
+    B_req_idx = torch.arange(B).to(device)
+    B_Seqlen = torch.full((B, ), S).to(device)
+
+    q = torch.randn(B, H, D + qk_rope_head_dim, device=device)
+    kv_cache = torch.randn(B * S, kv_lora_rank + qk_rope_head_dim, device=device)
+    # v = k[:,:kv_lora_rank]
+
+    att_out = torch.empty(B, H, D, device=device)
+    attn_logits = torch.randn(B, H, num_kv_splits, kv_lora_rank + 1, device=device)
+
+    w_kc = torch.randn(H, D, kv_lora_rank, device=device)
+    w_vc = torch.randn(H, kv_lora_rank, D, device=device)
+
+    return Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc
+
+
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim', [
     (8, 16, 128, 512, 128, 64),
     (8, 16, 1024, 512, 128, 64),
@@ -390,20 +405,7 @@ def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_
 def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0, device="cuda"):
     torch.manual_seed(0)
     D = qk_nope_head_dim
-
-    Req_to_tokens = torch.arange(B * S).reshape(B, S).to(device)
-    B_req_idx = torch.arange(B).to(device)
-    B_Seqlen = torch.full((B, ), S).to(device)
-
-    q = torch.randn(B, H, qk_nope_head_dim + qk_rope_head_dim, device=device)
-    kv_cache = torch.randn(B * S, kv_lora_rank + qk_rope_head_dim, device=device)
-    # v = k[:,:kv_lora_rank]
-
-    att_out = torch.empty(B, H, D, device=device)
-    attn_logits = torch.randn(B, H, num_kv_splits, kv_lora_rank + 1, device=device)
-
-    w_kc = torch.randn(kv_lora_rank, H * qk_nope_head_dim, device=device)
-    w_vc = torch.randn(kv_lora_rank, H * qk_nope_head_dim, device=device)
+    Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc = input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, device)
 
     # Initialize additional parameters
 
@@ -432,8 +434,6 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_k
 
     q_nope, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
 
-    w_kc = w_kc.view(kv_lora_rank, H, qk_nope_head_dim).permute((1,2,0))
-
     q_nope_out = torch.bmm(q_nope.transpose(0, 1), w_kc)
 
     q_input[..., : kv_lora_rank] = q_nope_out.transpose(0, 1)
@@ -458,8 +458,6 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_k
     print("attn_logits are correct")
 
     attn_output = attn_output.view(-1, H, kv_lora_rank)
-
-    w_vc = w_vc.view(kv_lora_rank, H, qk_nope_head_dim).permute((1,0,2))
 
     attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
 
