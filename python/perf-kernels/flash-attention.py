@@ -41,6 +41,7 @@ else:
     from triton.language import float32 as constexpr_or_f32
     # from triton.language import int1 as constexpr_or_bool
 
+
 # Note: we don't use Enum class because accessing the integer requires using
 #       `.value` property, which makes the code verbose.
 class CausalType:
@@ -48,15 +49,18 @@ class CausalType:
     TOP_LEFT = 1
     BOTTOM_RIGHT = 2
 
+
 class BiasType:
     NONE = 0
     MATRIX = 1
     VECTOR = 2  # CAVEAT: Unsupported in kernel
 
+
 class PersistentType:
     NONE = 0
     FIXED = 1
     DYNAMIC = 2
+
 
 class MetaData():
     cu_seqlens_q = None
@@ -212,20 +216,21 @@ def load_fn(ptrs, offset_first, offset_second, boundary_first, boundary_second):
         tensor = tl.load(ptrs)
     return tensor
 
+
 # Convenience function to store with boundary checks.
 # Used for encoded_softmax so the performance is not a concern
 @triton.jit
 def mstore2d(
-        registers,
-        REG_ROWS : tl.constexpr,
-        REG_COLS : tl.constexpr,
-        o_base,
-        o_start_row,
-        o_start_col,
-        o_rows,
-        o_cols,
-        stride_row,
-        stride_col,
+    registers,
+    REG_ROWS: tl.constexpr,
+    REG_COLS: tl.constexpr,
+    o_base,
+    o_start_row,
+    o_start_col,
+    o_rows,
+    o_cols,
+    stride_row,
+    stride_col,
 ):
     off_rows = tl.arange(0, REG_ROWS) + o_start_row
     off_cols = tl.arange(0, REG_COLS) + o_start_col
@@ -239,6 +244,7 @@ def mstore2d(
         o_ptrs_mask = o_ptrs_mask & (off_cols[None, :] < o_cols)
     tl.store(o_ptrs, registers, mask=o_ptrs_mask)
     return o_ptrs, o_ptrs_mask
+
 
 @triton.jit
 def print_gpu(prefix, val=None):
@@ -289,6 +295,7 @@ def compute_alibi_tensor(alibi_slopes, seqlen_q, seqlen_k):
     return -1 * alibi_slopes.unsqueeze(-1).unsqueeze(-1) * relative_pos  # (Z, H, N_CTX_Q, N_CTX_K)
 
 
+# yapf: disable
 @triton.jit
 def _attn_fwd_inner(
         # Inputs
@@ -327,6 +334,7 @@ def _attn_fwd_inner(
         INT8_GEMM: tl.constexpr,
         INT8_KV: tl.constexpr,
         USE_P_SCALE: tl.constexpr):
+    # yapf: enable
     # loop over k, v, and update accumulator
     for start_n in range(block_min, block_max, BLOCK_N):
         # For padded blocks, we will overrun the tensor size if
@@ -398,6 +406,7 @@ def _attn_fwd_inner(
             philox_offset = batch_philox_offset + start_m * BLOCK_M * Max_seqlen_k + start_n
             keep = dropout_mask(philox_seed, philox_offset, dropout_p, BLOCK_M, BLOCK_N, Max_seqlen_k)
             if RETURN_ENCODED_SOFTMAX:
+                # yapf: disable
                 mstore2d(tl.where(keep, p, -p).to(encoded_sm_base.type.element_ty),
                          BLOCK_M,
                          BLOCK_N,
@@ -408,8 +417,10 @@ def _attn_fwd_inner(
                          o_cols=actual_seqlen_k,
                          stride_row=Max_seqlen_k,
                          stride_col=1)
+                # yapf: enable
             p = tl.where(keep, p, 0.0)
         elif RETURN_ENCODED_SOFTMAX:
+            # yapf: disable
             mstore2d(p.to(encoded_sm_base.type.element_ty),
                      BLOCK_M,
                      BLOCK_N,
@@ -420,6 +431,7 @@ def _attn_fwd_inner(
                      o_cols=actual_seqlen_k,
                      stride_row=Max_seqlen_k,
                      stride_col=1)
+            # yapf: enable
         # -- update output accumulator --
         alpha = tl.math.exp2(m_i - m_ij)
         acc = acc * alpha[:, None]
@@ -528,6 +540,7 @@ def get_autotune_configs():
 autotune_configs, autotune_keys = get_autotune_configs()
 
 
+# yapf: disable
 @triton.autotune(
     configs=autotune_configs,
     key=autotune_keys,
@@ -589,11 +602,12 @@ def attn_fwd(
         BLOCK_N: tl.constexpr,
         PRE_LOAD_V: tl.constexpr,
         ):
+    # yapf: enable
     # Adaptor code for AOTriton, to minimize main body code change
     ## tl.constexpr to variable
-    IS_CAUSAL : tl.constexpr = CAUSAL_TYPE != 0
-    IS_CAUSAL_BOTTOM_RIGHT : tl.constexpr = CAUSAL_TYPE == 2
-    USE_BIAS : tl.constexpr = BIAS_TYPE == 1
+    IS_CAUSAL: tl.constexpr = CAUSAL_TYPE != 0
+    IS_CAUSAL_BOTTOM_RIGHT: tl.constexpr = CAUSAL_TYPE == 2
+    USE_BIAS: tl.constexpr = BIAS_TYPE == 1
     tl.static_assert(BIAS_TYPE == 0 or BIAS_TYPE == 1, f'Unsupported BIAS_TYPE {BIAS_TYPE}')
     L_not_null = L.cast(dtype=tl.uint64, bitcast=True) != 0  # Allows null L for training=False
 
@@ -607,8 +621,7 @@ def attn_fwd(
             if philox_seed_output.cast(dtype=tl.uint64, bitcast=True) != 0:
                 tl.store(philox_seed_output, philox_seed)
             if philox_offset_output.cast(dtype=tl.uint64, bitcast=True) != 0:
-                tl.store(philox_offset_output,
-                         philox_offset_base.to(dtype=philox_seed_output.type.element_ty))
+                tl.store(philox_offset_output, philox_offset_base.to(dtype=philox_seed_output.type.element_ty))
 
     if PERSISTENT_TYPE != 0:  # if persistent, kernel loops over multiple tiles
         Num_WG = Num_CU * GRID_CU_MULTIP  # number of workgroups launched
@@ -779,7 +792,7 @@ def attn_fwd(
                 acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
                 # scale sm_scale by log_2(e) and use 2^x in the loop as we do not
                 # have native e^x support in HW.
-                Qk_scale : constexpr_or_f32 = Sm_scale * 1.44269504089
+                Qk_scale: constexpr_or_f32 = Sm_scale * 1.44269504089
                 # Q is loaded once at the beginning and shared by all N blocks.
                 q_ptrs_mask = offs_m[:, None] < seqlen_q
                 if PADDED_HEAD:
@@ -825,6 +838,7 @@ def attn_fwd(
                 # value because there is no masking. Similarly we do not need padding.
                 if n_full_blocks > 0:
                     block_max = (n_blocks - masked_blocks) * BLOCK_N
+                    # yapf: disable
                     acc, l_i, m_i = _attn_fwd_inner(
                             # Inputs
                             acc,
@@ -862,6 +876,7 @@ def attn_fwd(
                             INT8_KV=INT8_KV,
                             USE_P_SCALE=USE_P_SCALE,
                             )
+                    # yapf: enable
                     block_min = block_max
                     block_max = n_blocks * BLOCK_N
 
@@ -876,6 +891,7 @@ def attn_fwd(
                     v_ptrs += n_full_blocks * BLOCK_N * stride_vk
                     if USE_BIAS:
                         bias_ptrs += n_full_blocks * BLOCK_N * stride_bn
+                    # yapf: disable
                     acc, l_i, m_i = _attn_fwd_inner(
                             # Inputs
                             acc,
@@ -913,6 +929,7 @@ def attn_fwd(
                             INT8_KV=INT8_KV,
                             USE_P_SCALE=USE_P_SCALE,
                             )
+                    # yapf: enable
 
                 if INT8 and not INT8_KV:
                     if USE_P_SCALE:
@@ -1361,6 +1378,7 @@ class _attention(torch.autograd.Function):
 
         atomic_counter = torch.zeros([1], device=q.device, dtype=torch.int32)
 
+        # yapf: disable
         attn_fwd[grid](
                 # Basic SDPA and Tensors
                 q, k, v, metadata.bias, metadata.alibi_slopes, metadata.sm_scale, M, o,
@@ -1405,6 +1423,7 @@ class _attention(torch.autograd.Function):
                 persistent_atomic_counter=atomic_counter,
                 Num_CU=NUM_CU,
                 Batch=batch)
+        # yapf: enable
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.grid = grid
