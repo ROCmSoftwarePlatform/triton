@@ -28,6 +28,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton.language.extra import libdevice
 from utils.benchmark_utils import get_available_models, get_model_configs
 
 IS_JIT_COMPILING = True
@@ -559,10 +560,10 @@ def attn_fwd(
         ENABLE_DROPOUT: tl.constexpr,
         dropout_p,
         philox_seed_ptr,
-        philox_offset1 : '*u32',
-        philox_offset2 : 'i32',
-        philox_seed_output : '*u64',
-        philox_offset_output : '*u64',
+        philox_offset1,
+        philox_offset2 : tl.int32,  # TODO: move to tl.int64
+        philox_seed_output, # Should be '*u64', but code-formatter complains
+        philox_offset_output, # Should be '*u64', but code-formatter complains
         RETURN_ENCODED_SOFTMAX: tl.constexpr,
         encoded_softmax,
         # causal, (Planned Feature) windowed attention
