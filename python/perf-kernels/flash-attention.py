@@ -65,7 +65,7 @@ class MetaData():
     bias = None
     alibi_slopes = None
     causal = False
-    persistent = None
+    persistent = PersistentType.NONE
     num_contexts = 0
     varlen = False
     int8 = False
@@ -89,7 +89,7 @@ class MetaData():
             self.max_seqlens_k = max(cu_seqlens_k[i + 1].item() - cu_seqlens_k[i].item(), self.max_seqlens_k)
 
     def set_persistent(self, persistent):
-        self.persistent = persistent
+        self.persistent = PersistentType.DYNAMIC if persistent == "dynamic" else PersistentType.FIXED
 
     def set_int8_params(self, q_descale, k_descale, v_descale, p_scale, p_descale):
         self.int8 = True
@@ -1348,7 +1348,7 @@ class _attention(torch.autograd.Function):
         # number of compute units available
         NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count
 
-        if metadata.persistent is not None:
+        if metadata.persistent:
             grid = lambda META: (min(NUM_CU * META['GRID_CU_MULTIP'],
                                      triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']) * nheads_q * batch), )
         else:
@@ -1398,10 +1398,7 @@ class _attention(torch.autograd.Function):
                 INT8_KV=metadata.int8 and metadata.int8_kv,
                 USE_P_SCALE=metadata.int8 and metadata.use_p_scale,
                 # Persistent related arguments
-                PERSISTENT_TYPE=PersistentType.NONE if metadata.persistent is None else (
-                        PersistentType.DYNAMIC if metadata.persistent == "dynamic" else
-                        PersistentType.FIXED
-                    )
+                PERSISTENT_TYPE=metadata.persistent,
                 persistent_atomic_counter=atomic_counter,
                 Num_CU=NUM_CU,
                 Batch=batch)
