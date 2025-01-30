@@ -161,6 +161,7 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_ptr, dg_ptr
             # Compute gradients sum of all colums for each row
             n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
             # older version of triton doesn't accept below init
+            # comment out for now to make it compatible with triton 3.1
             # grad_sum: tl.float32 = 0.0
             grad_sum = 0.0
             for blk_idx in tl.range(0, n_cols_blks, num_stages=2):
