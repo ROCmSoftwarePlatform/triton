@@ -77,7 +77,6 @@ jobs:
     strategy:
       matrix:
         runner: [gfx942]
-        triton_version: [local]
       fail-fast: false # disables failing the entire job when one matrix entry fails
     container:
       image: rocm/pytorch:latest
@@ -107,20 +106,10 @@ jobs:
           rm -rf ./triton/python/build
       - name: Install Triton
         run: |
-          if [ "${{ matrix.triton_version }}" = "local" ]; then
-            echo "Installing Local Triton..."
-            pip uninstall -y triton
-            cd python
-            pip install -v -e .
-            pip install numpy==1.26.4
-          else
-            echo "Installing Upstream Triton..."
-            git clone https://github.com/triton-lang/triton
-            cd triton
-            pip install ninja cmake wheel pybind11 # build-time dependencies
-            pip install --verbose --no-build-isolation ./python
-            cd ..
-          fi
+          pip uninstall -y triton
+          cd python
+          pip install -v -e .
+          pip install numpy==1.26.4
       - name: Show Triton version
         run: |
           pip show triton
