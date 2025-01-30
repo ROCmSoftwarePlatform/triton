@@ -81,6 +81,8 @@ def _fwd_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
     offs_c = tl.arange(0, BLOCK_C)
     offs_q_r = tl.arange(0, BLOCK_R)  # to get the q_pe
     offs_k_r = tl.arange(kv_lora_rank, kv_lora_rank + BLOCK_R)  # to get the k_pe
+    # For tl.dot to meet dim requirement
+    offs_i = tl.arange(0, 16)
 
     mask_d = offs_d < qk_nope_head_dim
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
@@ -115,9 +117,13 @@ def _fwd_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
     w_kc = tl.load(w_kc_ptrs, mask=mask_w_kc, other=0.0)
 
     # this doesn't work with fp8
-    q = tl.sum(q[:, None] * w_kc, 0)  # 1 x c
+    # q = tl.sum(q[:, None] * w_kc, 0)  # 1 x c
 
-    # q = tl.dot(q[None, :], w_kc)  # 1 x c
+    q = tl.view(q, 16, BLOCK_D // 16)
+    w_kc = tl.view(w_kc, BLOCK_D // 16, 16 * BLOCK_C)
+    q = tl.dot(q, w_kc)
+
+    q = tl.sum(q.view(16 * 16, BLOCK_C), 0)
 
     if USE_FP8:
         q = q.to(K_Buffer.type.element_ty)
@@ -324,8 +330,12 @@ def _fwd_kernel_stage2(Mid_O, W_VC,  # hdc
         mask_out = offs_n + n * BLOCK_SIZE_N < Lv
         w_vc = tl.load(w_kv_prts, mask=mask_v, other=0.0)  # dc, head is parallelized (128, 512)
 
-        result = tl.sum(w_vc * acc[None, :], 1)
-        # result = tl.dot(w_vc * acc[:, None])
+        # result = tl.sum(w_vc * acc[None, :], 1)
+        w_vc = w_vc.view(BLOCK_SIZE_N * 16, LORA // 16)
+        acc = acc.view(LORA // 16, 16)
+        result = tl.dot(w_vc * acc)
+
+        result = tl.sum(result.view(BLOCK_SIZE_N, 16 * 16), 1)
 
         if USE_FP8:
             result = result.to(O.type.element_ty)
@@ -680,7 +690,7 @@ def parse_args():
         prog="Benchmark MLA",
         allow_abbrev=False,
     )
-    
+
     parser.add_argument("-fuse_rope", action='store_true', default=False, help="Test fusing rope inside kernel.")
     return parser.parse_args()
 
