@@ -4,13 +4,10 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [main_perf]
-  merge_group:
-    branches: [main_perf]
-    types: [checks_requested]
 
 concurrency:
   group: ${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main_perf' }}
+  cancel-in-progress: true
 
 permissions: read-all
 
@@ -80,7 +77,7 @@ jobs:
     strategy:
       matrix:
         runner: [gfx942]
-        triton_version: [local, upstream]
+        triton_version: [local]
       fail-fast: false # disables failing the entire job when one matrix entry fails
     container:
       image: rocm/pytorch:rocm6.2.3_ubuntu22.04_py3.10_pytorch_release_2.3.0
