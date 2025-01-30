@@ -31,7 +31,6 @@ import pytest
 
 import argparse
 
-    
 from utils.rotary_embedding import DeepseekScalingRotaryEmbedding
 
 def is_hip():
@@ -53,7 +52,7 @@ def tanh(x):
 
 
 @triton.jit
-def _fwd_kernel_stage1(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
+def _fwd_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
                     K_Buffer,  # Holds [KV; K_PE], b*s x (c+r)
                     W_KC,  # c x h x d
                     cos_sin_cache, # max_seq_len x (rotary_dim * 2)
@@ -61,15 +60,17 @@ def _fwd_kernel_stage1(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
                     sm_scale, Req_to_tokens, B_req_idx, B_Seqlen,
                     Att_Out,  # b x h x NUM_KV_SPLITS x (kv_lora_rank + 1)
                     stride_req_to_tokens_b,
-                    stride_qbs, stride_qh, stride_buf_kbs, stride_mid_ob, stride_mid_oh,
+                    stride_q_nope_b, stride_q_nope_h, stride_q_pe_b, stride_q_pe_h, stride_buf_kbs, stride_mid_ob, stride_mid_oh,
                     stride_mid_os, stride_w_kc_h, stride_w_kc_d, stride_w_kc_c,
                     stride_cos_sin_cache_s,
                     stride_positions_b,
+                    Q_descale, W_KC_descale,
                     rotary_dim: tl.constexpr,
                     kv_lora_rank: tl.constexpr,
                     qk_nope_head_dim: tl.constexpr, qk_rope_head_dim: tl.constexpr, kv_group_num: tl.constexpr,
                     BLOCK_D: tl.constexpr, BLOCK_C: tl.constexpr, BLOCK_R: tl.constexpr, BLOCK_N: tl.constexpr,
-                    NUM_KV_SPLITS: tl.constexpr, logit_cap: tl.constexpr, ROPE_FUSED: tl.constexpr):
+                    NUM_KV_SPLITS: tl.constexpr, logit_cap: tl.constexpr, ROPE_FUSED: tl.constexpr, USE_FP8: tl.constexpr):
+
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
     split_kv_id = tl.program_id(2)
@@ -78,27 +79,27 @@ def _fwd_kernel_stage1(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
 
     offs_d = tl.arange(0, BLOCK_D)
     offs_c = tl.arange(0, BLOCK_C)
-    offs_q_r = tl.arange(qk_nope_head_dim, qk_nope_head_dim + BLOCK_R)  # to get the q_pe
+    offs_q_r = tl.arange(0, BLOCK_R)  # to get the q_pe
     offs_k_r = tl.arange(kv_lora_rank, kv_lora_rank + BLOCK_R)  # to get the k_pe
 
     mask_d = offs_d < qk_nope_head_dim
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
     cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
 
-    off_q = cur_batch * stride_qbs + cur_head * stride_qh + offs_d
-    q = tl.load(Q + off_q, mask=mask_d, other=0.0)
+    off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d
+    q = tl.load(Q_NOPE + off_q, mask=mask_d, other=0.0)
 
-    off_q_pe = cur_batch * stride_qbs + cur_head * stride_qh + offs_q_r
-    mask_q_r = offs_q_r < qk_nope_head_dim + qk_rope_head_dim
+    off_q_pe = cur_batch * stride_q_pe_b + cur_head * stride_q_pe_h + offs_q_r
+    mask_q_r = offs_q_r < qk_rope_head_dim
     mask_c = offs_c < kv_lora_rank
     mask_k_r = offs_k_r < kv_lora_rank + qk_rope_head_dim
 
-    q_pe = tl.load(Q + off_q_pe, mask=mask_q_r, other=0.0)
+    q_pe = tl.load(Q_PE + off_q_pe, mask=mask_q_r, other=0.0)
 
     # apply rotary embedding for q_pe
     if ROPE_FUSED:
         seqlen_k = NUM_KV_SPLITS * BLOCK_N
-        pos_q = tl.load(positions + cur_batch * stride_positions_b + seqlen_k) # its the last 
+        pos_q = tl.load(positions + cur_batch * stride_positions_b + seqlen_k) # its the last
         offs_rotary = tl.arange(0, rotary_dim)
         cos_q = tl.load(cos_sin_cache + pos_q * stride_cos_sin_cache_s + offs_rotary)
         sin_q = tl.load(cos_sin_cache + pos_q * stride_cos_sin_cache_s + offs_rotary + rotary_dim)
@@ -113,7 +114,15 @@ def _fwd_kernel_stage1(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
 
     w_kc = tl.load(w_kc_ptrs, mask=mask_w_kc, other=0.0)
 
+    # this doesn't work with fp8
     q = tl.sum(q[:, None] * w_kc, 0)  # 1 x c
+
+    # q = tl.dot(q[None, :], w_kc)  # 1 x c
+
+    if USE_FP8:
+        q = q.to(K_Buffer.type.element_ty)
+        q *= Q_descale
+        q *= W_KC_descale
 
     kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
     split_kv_start = kv_len_per_split * split_kv_id
@@ -156,7 +165,7 @@ def _fwd_kernel_stage1(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
                 k_pe_1, k_pe_2 = k_pe.reshape(BLOCK_N, qk_rope_head_dim//2, 2).split()
                 k_pe_rot = tl.join(-k_pe_2, k_pe_1).reshape(BLOCK_N, qk_rope_head_dim)
                 k_pe = k_pe * cos + k_pe_rot * sin
-            
+
             qk = tl.sum(q[None, :] * kv, 1)  # ((1 x c) * (BLOCK_N x c)).sum(1) = (BLOCK_N)
             qk += tl.sum(q_pe[None, :] * k_pe, 1)  # ((1 x r) * (BLOCK_N x r)).sum(1) = (BLOCK_N)
 
@@ -196,11 +205,14 @@ def _fwd_kernel_stage1(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
 
 
 def _decode_att_m_fwd(
-    q,
-    k_buffer,
+    q_nope,
+    q_rope,
+    kv_cache,
     att_out,
     w_kc,
     cos_sin_cache, positions, rotary_dim,
+    q_descale, # scalar value
+    w_kc_descale, # scalar value
     Req_to_tokens,
     B_req_idx,
     B_Seqlen,
@@ -208,14 +220,15 @@ def _decode_att_m_fwd(
     sm_scale,
     logit_cap,
     fuse_rope,
+    USE_FP8
 ):
     BLOCK = 64
     NUM_KV_SPLITS = num_kv_splits
 
-    batch, head_num = B_req_idx.shape[0], q.shape[1]
+    batch, head_num = B_req_idx.shape[0], q_nope.shape[1]
 
     grid = (batch, head_num, NUM_KV_SPLITS)
-    kv_group_num = 1  # q.shape[1] // k_buffer.shape[1]
+    kv_group_num = 1  # q.shape[1] // kv_cache.shape[1]
 
     if kv_group_num == 1:
         num_warps = 4
@@ -224,31 +237,32 @@ def _decode_att_m_fwd(
 
     kv_lora_rank = w_kc.shape[-1]
     qk_nope_head_dim = w_kc.shape[1]
-    qk_rope_head_dim = k_buffer.shape[-1] - kv_lora_rank
+    qk_rope_head_dim = kv_cache.shape[-1] - kv_lora_rank
 
     BLOCK_D = triton.next_power_of_2(qk_nope_head_dim)
     BLOCK_C = triton.next_power_of_2(kv_lora_rank)
     BLOCK_R = triton.next_power_of_2(qk_rope_head_dim)
 
 
-    _fwd_kernel_stage1[grid](q, k_buffer, w_kc, cos_sin_cache, positions, sm_scale, Req_to_tokens, B_req_idx, B_Seqlen, att_out,
-                             Req_to_tokens.stride(0), q.stride(0), q.stride(1), k_buffer.stride(0), att_out.stride(0),
+    _fwd_kernel_stage1[grid](q_nope, q_rope, kv_cache, w_kc, cos_sin_cache, positions, sm_scale, Req_to_tokens, B_req_idx, B_Seqlen, att_out,
+                             Req_to_tokens.stride(0), q_nope.stride(0), q_nope.stride(1), q_rope.stride(0), q_rope.stride(1), kv_cache.stride(0), att_out.stride(0),
                              att_out.stride(1), att_out.stride(2), w_kc.stride(0), w_kc.stride(1), w_kc.stride(2),
-                             cos_sin_cache.stride(0), positions.stride(0), rotary_dim,
-                             kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, kv_group_num=kv_group_num,
+                             cos_sin_cache.stride(0), positions.stride(0),
+                             q_descale, w_kc_descale, rotary_dim, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, kv_group_num=kv_group_num,
                              BLOCK_D=BLOCK_D, BLOCK_C=BLOCK_C, BLOCK_R=BLOCK_R, BLOCK_N=BLOCK,
-                             NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, num_warps=num_warps, num_stages=2, ROPE_FUSED=fuse_rope)
+                             NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, USE_FP8=USE_FP8, num_warps=num_warps, num_stages=2, ROPE_FUSED=fuse_rope)
+
 
 
 @triton.jit
 def _fwd_kernel_stage2(Mid_O, W_VC,  # hdc
                        O, B_Seqlen, stride_mid_ob, stride_mid_oh, stride_mid_os, stride_obs, stride_oh, stride_w_vch,
-                       stride_w_vcc, stride_w_vcd, NUM_KV_SPLITS: tl.constexpr,
+                       stride_w_vcc, stride_w_vcd, W_VC_descale, NUM_KV_SPLITS: tl.constexpr,
                        LORA: tl.constexpr,  # we assume lora (low rank dim c) is pow of 2 and its the actual c
                        BLOCK_SIZE_N: tl.constexpr,  # we split lora dim for inner loop ??
                        BLOCK_DV: tl.constexpr,  # head_dim of v rounded to the nearest power of 2
                        Lv: tl.constexpr,  # The actual head_dim of v
-                       ):
+                       USE_FP8: tl.constexpr):
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
 
@@ -290,6 +304,19 @@ def _fwd_kernel_stage2(Mid_O, W_VC,  # hdc
 
     acc = acc / e_sum  # c = 512
 
+    if USE_FP8:
+        acc_min = acc.min(0)
+        acc_max = acc.max(0)
+        amax = tl.max(tl.abs(acc_min), acc_max)
+
+        FP8_MAX = 448.0
+
+        scale = FP8_MAX / amax
+        acc_de_scale = amax / -FP8_MAX
+        # acc_scaled = acc * scale
+        # acc_scaled = tl.clip(acc_scaled, -FP8_MAX, FP8_MAX).to(tl.float8e4nv)
+        acc = (acc * scale).to(tl.float8e4nv)
+
     result = tl.zeros([BLOCK_SIZE_N], dtype=tl.float32)
 
     for n in range(0, tl.cdiv(BLOCK_DV, BLOCK_SIZE_N)):
@@ -298,10 +325,17 @@ def _fwd_kernel_stage2(Mid_O, W_VC,  # hdc
         w_vc = tl.load(w_kv_prts, mask=mask_v, other=0.0)  # dc, head is parallelized (128, 512)
 
         result = tl.sum(w_vc * acc[None, :], 1)
+        # result = tl.dot(w_vc * acc[:, None])
+
+        if USE_FP8:
+            result = result.to(O.type.element_ty)
+            result *= acc_de_scale
+            result *= W_VC_descale
 
         w_kv_prts += BLOCK_SIZE_N * stride_w_vcd
 
         offs_out = cur_batch * stride_obs + cur_head * stride_oh + offs_n + n * BLOCK_SIZE_N
+
         tl.store(
             O + offs_out,
             result,
@@ -317,9 +351,11 @@ def _decode_softmax_reducev_fwd(
     w_vc,  # hdc each work group loads 512(c) * 128(d)
     q,
     o,
+    w_vc_descale,
     Lv,  # head dim of v
     b_seq_len,
     num_kv_splits,
+    USE_FP8
 ):
     batch, head_num = q.shape[0], q.shape[1]
     # Lv = v_buffer.shape[-1],should be compressed c dim
@@ -354,11 +390,13 @@ def _decode_softmax_reducev_fwd(
         w_vc.stride(0),
         w_vc.stride(1),
         w_vc.stride(2),
+        w_vc_descale,
         NUM_KV_SPLITS=NUM_KV_SPLITS,
         LORA=kv_lora_rank,
         BLOCK_SIZE_N=BLOCK_K,
         BLOCK_DV=BLOCK_DV,
         Lv=Lv,
+        USE_FP8=USE_FP8,
         num_warps=4,
         num_stages=2,
         **extra_kargs,
@@ -383,11 +421,23 @@ def decode_attention_fwd_normal(
     sm_scale,
     logit_cap=0.0,
     fuse_rope=False,
+    use_fp8=False,
 ):
-    _decode_att_m_fwd(q, kv_cache, attn_logits, w_kc, cos_sin_cache, positions, rotary_dim, req_to_token, b_req_idx, b_seq_len, num_kv_splits, sm_scale,
-                      logit_cap, fuse_rope)
 
-    _decode_softmax_reducev_fwd(attn_logits, w_vc, q, o, v_head_dim, b_seq_len, num_kv_splits)
+    kv_lora_rank = w_kc.shape[-1]
+    qk_nope_head_dim = w_kc.shape[1]
+    qk_rope_head_dim = kv_cache.shape[-1] - kv_lora_rank
+    q_nope, q_rope = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
+
+    q_nope, q_nope_descale, w_kc, w_kc_descale, w_vc, w_vc_descale = quantize_input_fp8(q_nope, w_kc, w_vc, use_fp8)
+
+    # TODO handle the float8_e4m3fn case
+    # scales are per head
+
+    _decode_att_m_fwd(q_nope, q_rope, kv_cache, attn_logits, w_kc, cos_sin_cache, positions, rotary_dim, q_nope_descale, w_kc_descale, req_to_token, b_req_idx, b_seq_len, num_kv_splits, sm_scale,
+                      logit_cap, fuse_rope, use_fp8)
+
+    _decode_softmax_reducev_fwd(attn_logits, w_vc, q, o, w_vc_descale, v_head_dim, b_seq_len, num_kv_splits, use_fp8)
 
 
 def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap):
@@ -430,18 +480,38 @@ def input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, devi
             q.dtype,
             device=device,
         )
-    
+
     positions = torch.arange(0, S + 1).unsqueeze(0).repeat(B, 1).to(q.device) # k positions and q position as last
 
     return Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc, rotary_dim, rotary_emb, positions
 
+
+def input_to_float8(x, dtype=torch.float8_e4m3fnuz):
+    finfo = torch.finfo(dtype)
+    min_val, max_val = x.aminmax()
+    amax = torch.maximum(min_val.abs(), max_val.abs()).clamp(min=1e-12)
+    scale = finfo.max / amax
+    x_scl_sat = (x * scale).clamp(min=finfo.min, max=finfo.max)
+    return x_scl_sat.to(dtype).contiguous(), scale.float().reciprocal().item()
+
+
+def quantize_input_fp8(q, w_kc, w_vc, use_fp8):
+    q_descale = w_kc_descale = w_vc_descale = None
+
+    if use_fp8:
+        q, q_descale = input_to_float8(q)
+        w_kc, w_kc_descale = input_to_float8(w_kc)
+        w_vc, w_vc_descale = input_to_float8(w_vc)
+
+    return q, q_descale, w_kc, w_kc_descale, w_vc, w_vc_descale
 
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim', [
     (8, 16, 128, 512, 128, 64),
     (8, 16, 1024, 512, 128, 64),
 ])
 @pytest.mark.parametrize('fuse_rope', [False, True])
-def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_rope, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0,
+@pytest.mark.parametrize('use_fp8', [False])
+def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_rope, use_fp8, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0,
                 device="cuda"):
     torch.manual_seed(0)
     torch.set_default_device(device)
@@ -469,13 +539,14 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_
                     sm_scale,
                     logit_cap=0.0,
                     fuse_rope=fuse_rope,
+                    use_fp8=use_fp8
                 )
 
     tri_output, tri_logits = att_out, attn_logits  # .flatten(1,2)
 
     # reference
     ref_output, ref_logits = ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
-                                  logit_cap, rotary_emb, positions, rope_fused=fuse_rope, device="cuda")
+                                  logit_cap, rotary_emb, positions, rope_fused=fuse_rope, use_fp8=use_fp8, device="cuda")
 
     print("first 10 logits:")
     print(f"ref: {ref_logits.flatten()[:10]}")
@@ -490,21 +561,26 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_
     print("attn_output from stage 2 matches with ref")
 
 
-def ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, rotary_emb, positions, rope_fused=False,
+def ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, rotary_emb, positions, rope_fused=False, use_fp8=False,
              device="cuda"):
-    
+
     B, H = q.shape[0], q.shape[1]
 
     kv_lora_rank = w_kc.shape[-1]
     qk_nope_head_dim = w_kc.shape[1]
     qk_rope_head_dim = kv_cache.shape[-1] - kv_lora_rank
 
-
     q_input = torch.empty(B, H, kv_lora_rank + qk_rope_head_dim).to(device)
 
     q_nope, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
 
+    q_nope, q_nope_descale, w_kc, w_kc_descale, w_vc, w_vc_descale = quantize_input_fp8(q_nope, w_kc, w_vc, use_fp8)
+
     q_nope_out = torch.bmm(q_nope.transpose(0, 1), w_kc)
+
+    if use_fp8:
+        q_nope_out *= q_nope_descale
+        q_nope_out *= w_kc_descale
 
     q_input[..., :kv_lora_rank] = q_nope_out.transpose(0, 1)
 
@@ -517,8 +593,7 @@ def ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv
 
     if rope_fused:
         q_pe, k_pe = rotary_emb(positions, q_pe, k_pe)
-    
-    
+
     q_input[..., kv_lora_rank:] = q_pe
     k_input[..., kv_lora_rank:] = k_pe
 
@@ -527,7 +602,14 @@ def ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv
 
     attn_output = attn_output.view(-1, H, kv_lora_rank)
 
+    if use_fp8:
+        attn_output, attn_output_descale = input_to_float8(attn_output)
+
     attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
+
+    if use_fp8:
+        attn_bmm_output *= attn_output_descale
+        attn_bmm_output *= w_vc_descale
 
     ref_output = attn_bmm_output.transpose(0, 1)  #  # .flatten(1, 2)
 
