@@ -76,7 +76,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        runner: [gfx942]
+        runner: [rocm]
         triton_version: [local]
       fail-fast: false # disables failing the entire job when one matrix entry fails
     container:
