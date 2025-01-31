@@ -681,7 +681,7 @@ def benchmark(args):
     configs.append(
         triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
                                  line_names=line_vals, styles=[('red', '-'), ('green', '-')], ylabel='ms',
-                                 plot_name=plot_name, args={'sm_scale': 1.0, 'logit_cap': 0.0, 'device': "cuda"}))
+                                 plot_name=plot_name, args={'sm_scale': 1.0, 'logit_cap': 0.0, 'device': args.device}))
 
     @triton.testing.perf_report(configs)
     def bench_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits, sm_scale, logit_cap, device,
@@ -738,14 +738,15 @@ def parse_args():
     parser.add_argument("-fuse_rope", action='store_true', default=False, help="Test fusing rope inside kernel.")
     parser.add_argument("-fp8_gemm", action='store_true', default=False, help="Enable the fp8 gemm")
     parser.add_argument("-dtype", default='fp16')
+    parser.add_argument("-device", default='cuda')
     return parser.parse_args()
 
 arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
 
 def main():
     torch.manual_seed(0)
-    torch.set_default_device("cuda")
     args = parse_args()
+    torch.set_default_device(args.device)
     benchmark(args)
 
 
