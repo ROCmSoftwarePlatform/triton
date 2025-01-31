@@ -181,6 +181,8 @@ def _decode_att_m_fwd(
     BLOCK_DMODEL = triton.next_power_of_2(Lk)
     BLOCK_DV = triton.next_power_of_2(Lv)
 
+    print(f"grid size in _decode_att_m_fwd (ref): {grid[0]*grid[1]*grid[2]}")
+
     _fwd_kernel_stage1[grid](
         q,
         k_buffer,
@@ -508,6 +510,11 @@ def _decode_softmax_reducev_fwd(
         extra_kargs = {"waves_per_eu": 4, "matrix_instr_nonkdim": 16, "kpack": 2}
 
     grid = (batch, head_num)
+
+    print(f"grid size in _decode_softmax_reducev_fwd (ref): {grid[0]*grid[1]}")
+
+
+
     _fwd_kernel_stage2[grid](
         logits,
         o,
