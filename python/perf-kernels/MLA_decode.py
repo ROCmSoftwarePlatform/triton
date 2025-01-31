@@ -58,7 +58,7 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
                     cos_sin_cache, # max_seq_len x (rotary_dim * 2)
                     positions, # sequence positions
                     sm_scale, Req_to_tokens, B_req_idx, B_Seqlen,
-                    Att_Out,  # b x h x NUM_KV_SPLITS x (kv_lora_rank + 1)
+                    Att_Out, # b x h x NUM_KV_SPLITS x (kv_lora_rank + 1)
                     stride_req_to_tokens_b,
                     stride_q_nope_b, stride_q_nope_h, stride_q_pe_b, stride_q_pe_h, stride_buf_kbs, stride_mid_ob, stride_mid_oh,
                     stride_mid_os, stride_w_kc_h, stride_w_kc_d, stride_w_kc_c,
@@ -90,7 +90,7 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
 
     if USE_FP8:
         off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d[None, :] + offs_i[:, None]
-        q = tl.load(Q_NOPE + off_q, mask=(mask_d[None, :] & offs_i[:, None] < 1), other=0.0)
+        q = tl.load(Q_NOPE + off_q, mask=(mask_d[None, :] & (offs_i[:, None] < 1)), other=0.0)
     else:
         off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d
         q = tl.load(Q_NOPE + off_q, mask=mask_d, other=0.0)
@@ -110,7 +110,7 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
 
     if USE_FP8:
         q = tl.dot(q, w_kc)
-
+        # tl.where(offs_i[:, None] < 1, q, 0.0)
         q = tl.sum(q, 0)
     else:
         # this doesn't work with fp8
@@ -149,7 +149,7 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
             # debug assert
             if (cur_batch==0 and cur_head==0) and split_kv_id < NUM_KV_SPLITS - 1:
                     tl.device_assert(False, "Only last split should compute k_pe")
-            
+
             kv_loc = tl.load(
                 Req_to_tokens + stride_req_to_tokens_b * cur_batch_req_idx + cur_batch_seq_len - 1
             )
