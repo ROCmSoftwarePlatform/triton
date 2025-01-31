@@ -493,26 +493,26 @@ def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_
     device = q_input.device
 
     o = torch.empty((*q_input.shape[:-1], v_input.shape[-1]), dtype=q_input.dtype, device=q_input.device)
-    attn_logits = torch.empty(B, H, num_kv_splits, kv_lora_rank + 1, device=device)
+    attn_logits = torch.empty(B, H, num_kv_splits, kv_lora_rank + 1, dtype=q_input.dtype, device=device)
     decode_attention_fwd_normal_ref(q_input, k_input, v_input, o, Req_to_tokens, B_req_idx, B_Seqlen, attn_logits,
                                     num_kv_splits, sm_scale, logit_cap)
     return o, attn_logits
 
 
-def input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, device, rope_base=10, rope_max_seq_len=16324, rope_scaling=1.0):
-    Req_to_tokens = torch.arange(B * S).reshape(B, S).to(device)
-    B_req_idx = torch.arange(B).to(device)
-    B_Seqlen = torch.full((B, ), S).to(device)
+def input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device, rope_base=10, rope_max_seq_len=16324, rope_scaling=1.0):
+    Req_to_tokens = torch.arange(B * S, device=device).reshape(B, S)
+    B_req_idx = torch.arange(B, device=device)
+    B_Seqlen = torch.full((B, ), S, device=device)
 
-    q = torch.randn(B, H, D + qk_rope_head_dim, device=device)
-    kv_cache = torch.randn(B * S, kv_lora_rank + qk_rope_head_dim, device=device)
+    q = torch.randn(B, H, D + qk_rope_head_dim, dtype=dtype, device=device)
+    kv_cache = torch.randn(B * S, kv_lora_rank + qk_rope_head_dim, dtype=dtype, device=device)
     # v = k[:,:kv_lora_rank]
 
-    att_out = torch.empty(B, H, D, device=device)
-    attn_logits = torch.empty(B, H, num_kv_splits, kv_lora_rank + 1, device=device)
+    att_out = torch.empty(B, H, D, dtype=dtype, device=device)
+    attn_logits = torch.empty(B, H, num_kv_splits, kv_lora_rank + 1, dtype=dtype, device=device)
 
-    w_kc = torch.randn(H, D, kv_lora_rank, device=device)
-    w_vc = torch.randn(H, kv_lora_rank, D, device=device)
+    w_kc = torch.randn(H, D, kv_lora_rank, dtype=dtype, device=device)
+    w_vc = torch.randn(H, kv_lora_rank, D, dtype=dtype, device=device)
 
 
     rotary_dim = qk_rope_head_dim
@@ -527,7 +527,7 @@ def input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, devi
             device=device,
         )
 
-    positions = torch.tensor([S]).unsqueeze(0).repeat(B, 1).to(q.device) # k positions and q position as last
+    positions = torch.tensor([S], device=device).unsqueeze(0).repeat(B, 1) # k positions and q position as last
 
     return Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc, rotary_dim, rotary_emb, positions
 
@@ -556,14 +556,14 @@ def quantize_input_fp8(q, w_kc, w_vc, use_fp8):
 ])
 @pytest.mark.parametrize('fuse_rope', [False])
 @pytest.mark.parametrize('use_fp8', [False, True])
-def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_rope, use_fp8, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0,
-                device="cuda", dtype=torch.float16):
+@pytest.mark.parametrize('dtype', [torch.float16, torch.float32])
+def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_rope, use_fp8, dtype, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0,
+                device="cuda"):
     torch.manual_seed(0)
-    torch.set_default_device(device)
-    torch.set_default_dtype(dtype)
+
     D = qk_nope_head_dim
     Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc, rotary_dim, rotary_emb, positions = input_helper(
-        B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, device)
+        B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device)
 
     # Initialize additional parameters
 
@@ -629,7 +629,7 @@ def ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seq
     qk_nope_head_dim = w_kc.shape[1]
     qk_rope_head_dim = k_input.shape[-1] - kv_lora_rank
 
-    q_input = torch.empty(B, H, kv_lora_rank + qk_rope_head_dim).to(device)
+    q_input = torch.empty(B, H, kv_lora_rank + qk_rope_head_dim, dtype=q.dtype).to(device)
     q_nope, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
     q_nope, q_nope_descale, w_kc, w_kc_descale, w_vc, w_vc_descale = quantize_input_fp8(q_nope, w_kc, w_vc, use_fp8)
 
@@ -640,7 +640,6 @@ def ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seq
         q_nope_out = q_nope_out.to(q.dtype)
     else:
         q_nope_out = torch.bmm(q_nope.transpose(0, 1), w_kc)
-
 
     q_input[..., :kv_lora_rank] = q_nope_out.transpose(0, 1)
 
@@ -675,6 +674,7 @@ def ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seq
 def benchmark(args):
     fuse_rope = args.fuse_rope
     fp8_gemm = args.fp8_gemm
+    dtype = args.dtype
     configs = []
 
 
@@ -697,7 +697,7 @@ def benchmark(args):
         D = qk_nope_head_dim
 
         Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc, rotary_dim, rotary_emb, positions = input_helper(
-            B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, device)
+            B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device)
 
         if "fused" in provider:
             fn = lambda: {
@@ -742,13 +742,13 @@ def parse_args():
 
     parser.add_argument("-fuse_rope", action='store_true', default=False, help="Test fusing rope inside kernel.")
     parser.add_argument("-fp8_gemm", action='store_true', default=False, help="Enable the fp8 gemm")
+    parser.add_argument("-dtype", default='fp16')
     return parser.parse_args()
 
 
 def main():
     torch.manual_seed(0)
     torch.set_default_device("cuda")
-    torch.set_default_dtype(torch.float32)
     args = parse_args()
     benchmark(args)
 
