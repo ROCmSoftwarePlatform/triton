@@ -272,23 +272,22 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_ptr, dg_ptr
 
 
 @triton.jit
-def _rmsnorm_bwd_dg_reduce(dg_in_ptr, dg_out_ptr, dg_in_stride, n_rows, n_cols, BLOCK_SIZE: tl.constexpr):
+def _rmsnorm_bwd_dg_reduce(dg_in_ptr, dg_out_ptr, dg_in_stride, n_rows, n_cols, BLOCK_SIZE_M: tl.constexpr,
+                           BLOCK_SIZE_N: tl.constexpr):
     # we want parallelism in N direction
     # if N is small, we will just use one CU,
     # otherwise, it can be split by N/BLOCK_SIZE
-    col_block_id = tl.program_id(0)
-    col_start = col_block_id * BLOCK_SIZE
-    cols = col_start + tl.arange(0, BLOCK_SIZE)  # shape = [BLOCK_SIZE]
-    mask = cols < n_cols
+    pid = tl.program_id(0)
+    cols = pid * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    for i in range(0, n_rows, BLOCK_SIZE_M):
+        rows = i + tl.arange(0, BLOCK_SIZE_M)
+        mask = (rows[:, None] < n_rows) & (cols[None, :] < n_cols)
+        offs = rows[:, None] * n_cols + cols[None, :]
+        acc += tl.load(dg_in_ptr + offs, mask=mask, other=0.)
 
-    acc = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
-    # Sum across the batch dimension
-    for row_idx in tl.range(0, n_rows, num_stages=0):
-        row_ptr = dg_in_ptr + row_idx * dg_in_stride
-        acc += tl.load(row_ptr + cols, mask=mask, other=0.0).to(tl.float32)
-
-    # Write out final sums
-    tl.store(dg_out_ptr + cols, acc.to(dg_out_ptr.type.element_ty), mask=mask)
+    sum_dg = tl.sum(acc, axis=0)
+    tl.store(dg_out_ptr + cols, sum_dg, mask=cols < n_cols)
 
 
 #def triton_rmsnorm_bwd(grad_output, x, g, rsigma, dx, dg, dg_tmp, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size,
@@ -354,8 +353,10 @@ class RMSNorm(torch.autograd.Function):
         rms_bwd_kernel[grid_bwd](grad_output, x, g, rsigma, dx, dg_tmp, x.stride(0), grad_output.stride(0), n_rows,
                                  n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS, num_warps=ctx.num_warps)
 
-        grid_reduce = lambda meta: (triton.cdiv(n_cols, blk_size), )
-        _rmsnorm_bwd_dg_reduce[grid_reduce](dg_tmp, dg, dg_tmp.stride(0), n_rows, n_cols, blk_size)
+        #        grid_reduce = lambda meta: (triton.cdiv(n_cols, blk_size), )
+        grid_reduce = lambda meta: [triton.cdiv(n_cols, meta['BLOCK_SIZE_N'])]
+        _rmsnorm_bwd_dg_reduce[grid_reduce](dg_tmp, dg, dg_tmp.stride(0), n_rows, n_cols, BLOCK_SIZE_M=32,
+                                            BLOCK_SIZE_N=128)
 
         return dx, dg, None, None, None, None, None, None, None, None, None, None, None
 
