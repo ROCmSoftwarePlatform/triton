@@ -116,7 +116,7 @@ class MetaData():
     def need_bias(self, bias, batch, nheads, seqlen_q, seqlen_k):
         assert bias.is_cuda
         assert bias.dim() == 4
-        assert bias.shape[0] == 1
+        assert bias.shape[0] == batch
         assert bias.shape[2:] == (seqlen_q, seqlen_k)
         self.bias = bias
 
@@ -1949,8 +1949,9 @@ def test_op_fwd_int8_kv(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, layout, dtype=to
 ])
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('use_bias', [True])
+@pytest.mark.parametrize('real_batch', [False, True])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
-def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype):
+def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, real_batch, dtype):
     torch.manual_seed(20)
     sm_scale = D_HEAD**-0.5
     input_metadata = MetaData(sm_scale=sm_scale)
@@ -1958,7 +1959,13 @@ def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype):
     if causal:
         input_metadata.need_causal()
     if use_bias:
-        bias = torch.randn((1, H, N_CTX_Q, N_CTX_K), dtype=dtype, device="cuda")
+        if real_batch:
+            # Concrete bias tensor
+            bias = torch.randn((Z, H, N_CTX_Q, N_CTX_K), dtype=dtype, device="cuda")
+        else:
+            # Duplicate
+            bias = torch.randn((1, H, N_CTX_Q, N_CTX_K), dtype=dtype, device="cuda")
+            bias = bias.expand((Z, H, N_CTX_Q, N_CTX_K))
         input_metadata.need_bias(bias, Z, H, N_CTX_Q, N_CTX_K)
     else:
         bias = None
