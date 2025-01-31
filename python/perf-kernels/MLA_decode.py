@@ -81,13 +81,19 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
     offs_c = tl.arange(0, BLOCK_C)
     offs_q_r = tl.arange(0, BLOCK_R)  # to get the q_pe
     offs_k_r = tl.arange(kv_lora_rank, kv_lora_rank + BLOCK_R)  # to get the k_pe
+    # For tl.dot to meet dim requirement
+    offs_i = tl.arange(0, 16)
 
     mask_d = offs_d < qk_nope_head_dim
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
     cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
 
-    off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d
-    q = tl.load(Q_NOPE + off_q, mask=mask_d, other=0.0)
+    if USE_FP8:
+        off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d[None, :] + offs_i[:, None]
+        q = tl.load(Q_NOPE + off_q, mask=(mask_d[None, :] & offs_i[:, None] < 1), other=0.0)
+    else:
+        off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d
+        q = tl.load(Q_NOPE + off_q, mask=mask_d, other=0.0)
 
     off_q_pe = cur_batch * stride_q_pe_b + cur_head * stride_q_pe_h + offs_q_r
     mask_q_r = offs_q_r < qk_rope_head_dim
@@ -103,7 +109,12 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
     w_kc = tl.load(w_kc_ptrs, mask=mask_w_kc, other=0.0)
 
     # this doesn't work with fp8
-    q = tl.sum(q[:, None] * w_kc, 0)  # 1 x c
+    if USE_FP8:
+        q = tl.dot(q, w_kc)
+
+        q = tl.sum(q, 0)
+    else:
+        q = tl.sum(q[:, None] * w_kc, 0)  # 1 x c
 
     if USE_FP8:
         q = q.to(K_Buffer.type.element_ty)
@@ -153,7 +164,7 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
 
     e_max = -float("inf")
     e_sum = 0.0
-    acc = tl.zeros([kv_lora_rank], dtype=tl.float32)
+    acc = tl.zeros([BLOCK_C], dtype=tl.float32)
 
     if split_kv_end > split_kv_start:
         for start_n in range(split_kv_start, split_kv_end, BLOCK_N):
@@ -274,14 +285,14 @@ def _decode_att_m_fwd(
                              NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, USE_FP8=USE_FP8, num_warps=num_warps, num_stages=2, ROPE_FUSED=fuse_rope)
 
 
-
 @triton.jit
 def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
                        O, B_Seqlen, stride_mid_ob, stride_mid_oh, stride_mid_os, stride_obs, stride_oh, stride_w_vch,
                        stride_w_vcc, stride_w_vcd, W_VC_descale, NUM_KV_SPLITS: tl.constexpr,
-                       LORA: tl.constexpr,  # we assume lora (low rank dim c) is pow of 2 and its the actual c
+                       kv_lora_rank: tl.constexpr,  # we assume lora (low rank dim c) is pow of 2 and its the actual c
                        BLOCK_SIZE_N: tl.constexpr,  # we split lora dim for inner loop ??
                        BLOCK_DV: tl.constexpr,  # head_dim of v rounded to the nearest power of 2
+                       BLOCK_C: tl.constexpr,  # lora rounded to the nearest power of 2
                        Lv: tl.constexpr,  # The actual head_dim of v
                        USE_FP8: tl.constexpr):
     cur_batch = tl.program_id(0)
@@ -289,18 +300,19 @@ def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
 
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
 
-    offs_d = tl.arange(0, BLOCK_DV)
-    offs_c = tl.arange(0, LORA)
+    offs_c = tl.arange(0, BLOCK_C)
     offs_n = tl.arange(0, BLOCK_SIZE_N)
-    # TODO check this
-    mask_d = offs_d < Lv
+    mask_c = offs_c < kv_lora_rank
 
     e_sum = 0.0
     e_max = -float("inf")
-    acc = tl.zeros([LORA], dtype=tl.float32)
+    if USE_FP8:
+        acc = tl.zeros([BLOCK_C, 16], dtype=tl.float32)
+    else:
+        acc = tl.zeros([BLOCK_C], dtype=tl.float32)
 
     offs_v = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + offs_c
-    offs_logic = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + LORA
+    offs_logic = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + kv_lora_rank
     offs_w_kv = cur_head * stride_w_vch + offs_n[:, None] * stride_w_vcd + offs_c[None, :] * stride_w_vcc
     w_kv_prts = W_VC + offs_w_kv
 
@@ -343,10 +355,13 @@ def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
     for n in range(0, tl.cdiv(BLOCK_DV, BLOCK_SIZE_N)):
         mask_v = offs_n[:, None] + n * BLOCK_SIZE_N < Lv
         mask_out = offs_n + n * BLOCK_SIZE_N < Lv
-        w_vc = tl.load(w_kv_prts, mask=mask_v, other=0.0)  # dc, head is parallelized (128, 512)
+        w_vc = tl.load(w_kv_prts, mask=(mask_v & mask_c[None, :]), other=0.0)  # dc, head is parallelized (128, 512)
 
-        result = tl.sum(w_vc * acc[None, :], 1)
-        # result = tl.dot(w_vc * acc[:, None])
+        if  USE_FP8:
+            result = tl.dot(w_vc, acc)
+        else:
+            result = tl.sum(w_vc * acc[None, :], 1)
+
 
         if USE_FP8:
             result = result.to(O.type.element_ty)
@@ -357,11 +372,18 @@ def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
 
         offs_out = cur_batch * stride_obs + cur_head * stride_oh + offs_n + n * BLOCK_SIZE_N
 
-        tl.store(
-            O + offs_out,
-            result,
-            mask=mask_out,
-        )
+        if USE_FP8:
+            tl.store(
+                O + offs_out[:, None] + tl.arange(0, 16)[None, :],
+                result,
+                mask=mask_out[:, None] & tl.arange(0, 16)[None, :] < 1,
+            )
+        else:
+            tl.store(
+                O + offs_out,
+                result,
+                mask=mask_out,
+            )
 
 
 # qk_nope_head_dim=v_head_dim=d
@@ -379,14 +401,14 @@ def _decode_softmax_reducev_fwd(
     USE_FP8
 ):
     batch, head_num = q.shape[0], q.shape[1]
-    # Lv = v_buffer.shape[-1],should be compressed c dim
-    # TODO check the BLOCK_DV here
-    BLOCK_DV = triton.next_power_of_2(Lv)
-    # tiling on the head_dim_v
-    BLOCK_K = 32
-
     # hcd
     kv_lora_rank = w_vc.shape[1]
+    # Lv = v_buffer.shape[-1],should be compressed c dim
+    BLOCK_DV = triton.next_power_of_2(Lv)
+    # TODO tune this !!!!! tiling on the head_dim_v
+    BLOCK_SIZE_N = 8
+
+    BLOCK_C = triton.next_power_of_2(kv_lora_rank)
 
     NUM_KV_SPLITS = num_kv_splits
 
@@ -416,9 +438,10 @@ def _decode_softmax_reducev_fwd(
         w_vc.stride(2),
         w_vc_descale,
         NUM_KV_SPLITS=NUM_KV_SPLITS,
-        LORA=kv_lora_rank,
-        BLOCK_SIZE_N=BLOCK_K,
+        kv_lora_rank=kv_lora_rank,
+        BLOCK_SIZE_N=BLOCK_SIZE_N,
         BLOCK_DV=BLOCK_DV,
+        BLOCK_C=BLOCK_C,
         Lv=Lv,
         USE_FP8=USE_FP8,
         num_warps=4,
@@ -455,8 +478,6 @@ def decode_attention_fwd_normal(
 
     q_nope, q_nope_descale, w_kc, w_kc_descale, w_vc, w_vc_descale = quantize_input_fp8(q_nope, w_kc, w_vc, use_fp8)
 
-    # TODO handle the float8_e4m3fn case
-    # scales are per head
 
     _decode_att_m_fwd(q_nope, q_rope, kv_cache, attn_logits, w_kc, cos_sin_cache, positions, rotary_dim, q_nope_descale, w_kc_descale, req_to_token, b_req_idx, b_seq_len, num_kv_splits, sm_scale,
                       logit_cap, fuse_rope, use_fp8)
@@ -531,6 +552,7 @@ def quantize_input_fp8(q, w_kc, w_vc, use_fp8):
 
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim', [
     (8, 16, 128, 512, 128, 64),
+    (8, 16, 128, 511, 128, 64),
     (8, 16, 1024, 512, 128, 64),
 ])
 @pytest.mark.parametrize('fuse_rope', [False])
@@ -762,7 +784,7 @@ def parse_args():
         prog="Benchmark MLA",
         allow_abbrev=False,
     )
-    
+
     parser.add_argument("-fuse_rope", action='store_true', default=False, help="Test fusing rope inside kernel.")
     return parser.parse_args()
 
