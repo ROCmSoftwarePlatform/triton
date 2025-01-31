@@ -143,7 +143,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, outpu
 
 @triton.jit
 def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_ptr, dg_ptr, input_row_stride, output_row_stride,
-                   n_rows, n_cols, epsilon, ZERO_CENTERED_GAMMA: tl.constexpr, BLOCK_SIZE: tl.constexpr,
+                   n_rows, n_cols, ZERO_CENTERED_GAMMA: tl.constexpr, BLOCK_SIZE: tl.constexpr,
                    USE_BLOCKED: tl.constexpr, NUM_PRGMS: tl.constexpr):
     row_start = tl.program_id(0)
     col_offsets = tl.arange(0, BLOCK_SIZE)
@@ -160,7 +160,9 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_ptr, dg_ptr
 
             # Compute gradients sum of all colums for each row
             n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
-            grad_sum: tl.float32 = 0.0
+            # older version of triton doesn't accept below init
+            # grad_sum: tl.float32 = 0.0
+            grad_sum = 0.0
             for blk_idx in tl.range(0, n_cols_blks, num_stages=2):
                 cols = blk_idx * BLOCK_SIZE + col_offsets
                 input_ptrs = row_input_ptr + cols
@@ -327,7 +329,6 @@ class RMSNorm(torch.autograd.Function):
         ctx.blk_size = blk_size
         ctx.USE_BLOCKED = USE_BLOCKED
         ctx.NUM_PRGMS = NUM_PRGMS
-        ctx.epsilon = epsilon
         ctx.num_warps = num_warps
 
         ctx.dx = dx
@@ -348,11 +349,10 @@ class RMSNorm(torch.autograd.Function):
         blk_size = ctx.blk_size
         USE_BLOCKED = ctx.USE_BLOCKED
         NUM_PRGMS = ctx.NUM_PRGMS
-        epsilon = ctx.epsilon
 
         grid_bwd = lambda meta: (NUM_PRGMS, )
         rms_bwd_kernel[grid_bwd](grad_output, x, g, rsigma, dx, dg_tmp, x.stride(0), grad_output.stride(0), n_rows,
-                                 n_cols, epsilon, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS)
+                                 n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS)
 
         grid_reduce = lambda meta: (triton.cdiv(n_cols, blk_size), )
         _rmsnorm_bwd_dg_reduce[grid_reduce](dg_tmp, dg, dg_tmp.stride(0), n_rows, n_cols, blk_size)
