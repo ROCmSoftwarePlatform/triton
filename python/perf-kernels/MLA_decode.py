@@ -348,9 +348,8 @@ def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
 
         scale = FP8_MAX / amax
         acc_descale = amax / FP8_MAX
-        # acc_scaled = acc * scale
-        # acc_scaled = tl.clip(acc_scaled, -FP8_MAX, FP8_MAX).to(tl.float8e4nv)
-        acc = (acc * scale).to(W_VC.type.element_ty)
+
+        acc = tl.clamp((acc * scale), -FP8_MAX, FP8_MAX).cast(W_VC.type.element_ty)
 
         result = tl.zeros([BLOCK_SIZE_N, 16], dtype=tl.float32)
     else:
@@ -728,6 +727,7 @@ def benchmark(args):
 
     bench_MLA.run(save_path=".", print_data=True, show_plots=False)
 
+arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
 
 def parse_args():
     parser = argparse.ArgumentParser(
