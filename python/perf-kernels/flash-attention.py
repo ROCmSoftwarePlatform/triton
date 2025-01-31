@@ -1324,10 +1324,6 @@ class _attention(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, q, k, v, o, metadata: MetaData):
-        # NOTE: a large bias tensor leads to overflow during pointer arithmetic
-        if (metadata.bias is not None):
-            assert (metadata.bias.numel() < 2**31)
-
         if o is None:
             if not metadata.int8:
                 o = torch.empty_like(q, dtype=v.dtype)
