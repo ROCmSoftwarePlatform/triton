@@ -667,9 +667,9 @@ def ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seq
     else:
         attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
 
-    # ref_output = attn_bmm_output.transpose(0, 1)  #  # .flatten(1, 2)
+    ref_output = attn_bmm_output.transpose(0, 1)  #  # .flatten(1, 2)
 
-    return attn_bmm_output, attn_logits_ref
+    return ref_output, attn_logits_ref
 
 
 def benchmark(args):
