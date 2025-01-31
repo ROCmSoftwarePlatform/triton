@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 # TODO: Remove this when triton>=3.2.0. This issue will not affect performance and accuracy.
 logger.warning("The following error message 'operation scheduled before its operands' can be ignored.")
 
+fp8_e4m3fnuz_max =torch.finfo(torch.float8_e4m3fnuz).max
 
 @triton.jit
 def tanh(x):
@@ -289,7 +290,7 @@ def _decode_att_m_fwd(
 @triton.jit
 def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
                        O, B_Seqlen, stride_mid_ob, stride_mid_oh, stride_mid_os, stride_obs, stride_oh, stride_w_vch,
-                       stride_w_vcc, stride_w_vcd, W_VC_descale, NUM_KV_SPLITS: tl.constexpr,
+                       stride_w_vcc, stride_w_vcd, W_VC_descale, fp8_e4m3fnuz_max, NUM_KV_SPLITS: tl.constexpr,
                        kv_lora_rank: tl.constexpr,  # we assume lora (low rank dim c) is pow of 2 and its the actual c
                        BLOCK_SIZE_N: tl.constexpr,  # we split d dim for inner loop
                        BLOCK_DV: tl.constexpr,  # head_dim of v rounded to the nearest power of 2
@@ -343,17 +344,14 @@ def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
 
     if USE_FP8:
         amax = tl.max(tl.abs(acc), 0)
+        amax = tl.clamp(amax, 1e-12, amax)
 
-        FP8_MAX = 448.0
+        scale = fp8_e4m3fnuz_max / amax
+        acc_descale = amax / fp8_e4m3fnuz_max
 
-        scale = FP8_MAX / amax
-        acc_descale = amax / FP8_MAX
+        acc = tl.clamp((acc * scale), -fp8_e4m3fnuz_max, fp8_e4m3fnuz_max).cast(W_VC.type.element_ty)
 
-        acc = tl.clamp((acc * scale), -FP8_MAX, FP8_MAX).cast(W_VC.type.element_ty)
-
-        result = tl.zeros([BLOCK_SIZE_N, 16], dtype=tl.float32)
-    else:
-        result = tl.zeros([BLOCK_SIZE_N], dtype=tl.float32)
+    result = tl.zeros([BLOCK_SIZE_N], dtype=tl.float32)
 
     for n in range(0, tl.cdiv(BLOCK_DV, BLOCK_SIZE_N)):
         mask_v = offs_n[:, None] + n * BLOCK_SIZE_N < Lv
@@ -361,10 +359,10 @@ def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
         w_vc = tl.load(w_kv_prts, mask=(mask_v & mask_c[None, :]), other=0.0)  # dc, head is parallelized (128, 512)
 
         if  USE_FP8:
-            result = tl.dot(w_vc, acc)
-            result *= acc_descale
-            result *= W_VC_descale
-            tl.sum(result, 1)
+            _result = tl.dot(w_vc, acc)
+            _result *= acc_descale
+            _result *= W_VC_descale
+            result = tl.sum(_result, 1)
         else:
             result = tl.sum(w_vc * acc[None, :], 1)
 
@@ -373,18 +371,11 @@ def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
 
         offs_out = cur_batch * stride_obs + cur_head * stride_oh + offs_n + n * BLOCK_SIZE_N
 
-        if USE_FP8:
-            tl.store(
-                O + offs_out,
-                tl.sum(result, 1).to(O.type.element_ty),
-                mask=mask_out,
-            )
-        else:
-            tl.store(
-                O + offs_out,
-                result.to(O.type.element_ty),
-                mask=mask_out,
-            )
+        tl.store(
+            O + offs_out,
+            result.to(O.type.element_ty),
+            mask=mask_out,
+        )
 
 
 # qk_nope_head_dim=v_head_dim=d
@@ -438,6 +429,7 @@ def _decode_softmax_reducev_fwd(
         w_vc.stride(1),
         w_vc.stride(2),
         w_vc_descale,
+        fp8_e4m3fnuz_max,
         NUM_KV_SPLITS=NUM_KV_SPLITS,
         kv_lora_rank=kv_lora_rank,
         BLOCK_SIZE_N=BLOCK_SIZE_N,
@@ -533,11 +525,10 @@ def input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtyp
 
 
 def input_to_float8(x, dtype=torch.float8_e4m3fnuz):
-    finfo = torch.finfo(dtype)
     min_val, max_val = x.aminmax()
     amax = torch.maximum(min_val.abs(), max_val.abs()).clamp(min=1e-12)
-    scale = finfo.max / amax
-    x_scl_sat = (x * scale).clamp(min=finfo.min, max=finfo.max)
+    scale = fp8_e4m3fnuz_max / amax
+    x_scl_sat = (x * scale).clamp(min=-fp8_e4m3fnuz_max, max=fp8_e4m3fnuz_max)
     return x_scl_sat.to(dtype).contiguous(), scale.float().reciprocal().item()
 
 
@@ -555,7 +546,7 @@ def quantize_input_fp8(q, w_kc, w_vc, use_fp8):
     (8, 128, 2048, 512, 128, 64),
 ])
 @pytest.mark.parametrize('fuse_rope', [False])
-@pytest.mark.parametrize('use_fp8', [False])
+@pytest.mark.parametrize('use_fp8', [False, True])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.float32])
 def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_rope, use_fp8, dtype, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0,
                 device="cuda"):
