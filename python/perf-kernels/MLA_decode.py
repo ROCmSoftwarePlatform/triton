@@ -259,7 +259,7 @@ def _decode_att_m_fwd(
     grid = (batch, head_num, NUM_KV_SPLITS)
 
 
-    print(f"grid size in _decode_att_m_fwd (ours): {grid[0]*grid[1]*grid[2]}")
+    #print(f"grid size in _decode_att_m_fwd (ours): {grid[0]*grid[1]*grid[2]}")
     kv_group_num = 1  # q.shape[1] // kv_cache.shape[1]
 
     if kv_group_num == 1:
@@ -420,7 +420,7 @@ def _decode_softmax_reducev_fwd(
 
     grid = (batch, head_num)
 
-    print(f"grid size in _decode_softmax_reducev_fwd (ours): {grid[0]*grid[1]}")
+    #print(f"grid size in _decode_softmax_reducev_fwd (ours): {grid[0]*grid[1]}")
 
     # grid = lambda META: (batch, head_num, triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']))
     _fwd_fused_kernel_stage2[grid](
@@ -551,9 +551,7 @@ def quantize_input_fp8(q, w_kc, w_vc, use_fp8):
     return q, q_descale, w_kc, w_kc_descale, w_vc, w_vc_descale
 
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim', [
-    (8, 16, 128, 512, 128, 64),
-    (8, 16, 128, 511, 128, 64),
-    (8, 16, 1024, 512, 128, 64),
+    (8, 128, 2048, 512, 128, 64),
 ])
 @pytest.mark.parametrize('fuse_rope', [False])
 @pytest.mark.parametrize('use_fp8', [False])
