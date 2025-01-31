@@ -263,6 +263,7 @@ class DeepseekScalingRotaryEmbedding(RotaryEmbedding):
         cos = freqs.cos() * self.mscale
         sin = freqs.sin() * self.mscale
         cache = torch.cat((cos, sin), dim=-1)
+
         return cache
 
     def forward(
@@ -294,9 +295,8 @@ class DeepseekScalingRotaryEmbedding(RotaryEmbedding):
             sin = sin.repeat_interleave(2, dim=-1).unsqueeze(-2)
 
         rotate_fn = _rotate_neox if self.is_neox_style else _rotate_gptj
-
-        query_rot = query_rot * cos[:,-1] + rotate_fn(query_rot) * sin[:,-1]
-        key_rot = key_rot * cos[:,:-1].flatten(0,1) + rotate_fn(key_rot) * sin[:,:-1].flatten(0,1)
+        query_rot = query_rot * cos + rotate_fn(query_rot) * sin
+        key_rot = key_rot * cos + rotate_fn(key_rot) * sin
 
         if self.rotary_dim < self.head_size:
             query = torch.cat((query_rot, query_pass), dim=-1)
