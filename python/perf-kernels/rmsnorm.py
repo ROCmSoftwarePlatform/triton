@@ -352,7 +352,7 @@ class RMSNorm(torch.autograd.Function):
 
         grid_bwd = lambda meta: (NUM_PRGMS, )
         rms_bwd_kernel[grid_bwd](grad_output, x, g, rsigma, dx, dg_tmp, x.stride(0), grad_output.stride(0), n_rows,
-                                 n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS)
+                                 n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED, NUM_PRGMS, num_warps=ctx.num_warps)
 
         grid_reduce = lambda meta: (triton.cdiv(n_cols, blk_size), )
         _rmsnorm_bwd_dg_reduce[grid_reduce](dg_tmp, dg, dg_tmp.stride(0), n_rows, n_cols, blk_size)
