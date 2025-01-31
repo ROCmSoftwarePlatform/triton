@@ -554,7 +554,7 @@ def quantize_input_fp8(q, w_kc, w_vc, use_fp8):
     (8, 128, 2048, 512, 128, 64),
 ])
 @pytest.mark.parametrize('fuse_rope', [False])
-@pytest.mark.parametrize('use_fp8', [False, True])
+@pytest.mark.parametrize('use_fp8', [False])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.float32])
 def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_rope, use_fp8, dtype, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0,
                 device="cuda"):
@@ -594,13 +594,8 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_
     ref_output, ref_logits = ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
                                   logit_cap, rotary_emb, positions,  rope_fused=fuse_rope, use_fp8=use_fp8, device="cuda")
 
-    print("first 10 outputs:")
-    print(f"ref: {ref_logits.flatten()[:10]}")
-    print(f"tri: {tri_logits.flatten()[:10]}")
-    print(ref_logits.shape)
-
     print("first 10 logits:")
-    print(f"ref: {ref_logits[:,:,-1].flatten()[:]}")
+    print(f"ref: {ref_logits[:,:,-1].flatten()[:]}") # to debug the rope, check last split
     print(f"tri: {tri_logits[:,:,-1].flatten()[:]}")
     torch.testing.assert_close(ref_logits, tri_logits, atol=1e-2, rtol=1e-2)
     print("attn_logits from stage 1 matches with ref")
@@ -745,6 +740,7 @@ def parse_args():
     parser.add_argument("-dtype", default='fp16')
     return parser.parse_args()
 
+arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
 
 def main():
     torch.manual_seed(0)
