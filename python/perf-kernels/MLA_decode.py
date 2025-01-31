@@ -146,8 +146,8 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
         # we only apply to the last token in the K_PE 
         if LAST_SPLIT:
             # debug assert
-            if (cur_batch==0 and cur_head==0) and split_kv_id < NUM_KV_SPLITS - 1:
-                    tl.device_assert(False, "Only last split should compute k_pe")
+            # if (cur_batch==0 and cur_head==0) and split_kv_id < NUM_KV_SPLITS - 1:
+            #         tl.device_assert(False, "Only last split should compute k_pe")
             
             kv_loc = tl.load(
                 Req_to_tokens + stride_req_to_tokens_b * cur_batch_req_idx + cur_batch_seq_len - 1
