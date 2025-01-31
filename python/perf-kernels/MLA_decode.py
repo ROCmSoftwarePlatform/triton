@@ -364,6 +364,7 @@ def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
             result = tl.dot(w_vc, acc)
             result *= acc_descale
             result *= W_VC_descale
+            tl.sum(result, 1)
         else:
             result = tl.sum(w_vc * acc[None, :], 1)
 
@@ -374,9 +375,9 @@ def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
 
         if USE_FP8:
             tl.store(
-                O + offs_out[:, None] + tl.arange(0, 16)[None, :],
-                result.to(O.type.element_ty),
-                mask=mask_out[:, None] & tl.arange(0, 16)[None, :] < 1,
+                O + offs_out,
+                tl.sum(result, 1).to(O.type.element_ty),
+                mask=mask_out,
             )
         else:
             tl.store(
