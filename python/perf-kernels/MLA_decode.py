@@ -673,7 +673,8 @@ def ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seq
 
 
 def benchmark(args):
-
+    fuse_rope = args.fuse_rope
+    fp8_gemm = args.fp8_gemm
     configs = []
 
 
@@ -717,14 +718,15 @@ def benchmark(args):
                     num_kv_splits,
                     sm_scale,
                     logit_cap=0.0,
-                    fuse_rope=args.fuse_rope
+                    fuse_rope=fuse_rope,
+                    use_fp8=fp8_gemm
                 )
             }
 
         if "ref" in provider:
             k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
             fn = lambda: ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
-                                  logit_cap, rotary_emb, positions, rope_fused=args.fuse_rope, device="cuda")
+                                  logit_cap, rotary_emb, positions, rope_fused=fuse_rope, use_fp8=fp8_gemm, device="cuda")
 
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
@@ -739,13 +741,14 @@ def parse_args():
     )
 
     parser.add_argument("-fuse_rope", action='store_true', default=False, help="Test fusing rope inside kernel.")
+    parser.add_argument("-fp8_gemm", action='store_true', default=False, help="Enable the fp8 gemm")
     return parser.parse_args()
 
 
 def main():
     torch.manual_seed(0)
     torch.set_default_device("cuda")
-    torch.set_default_dtype(torch.float16)
+    torch.set_default_dtype(torch.float32)
     args = parse_args()
     benchmark(args)
 
