@@ -349,7 +349,8 @@ def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
         scale = fp8_e4m3fnuz_max / amax
         acc_descale = amax / fp8_e4m3fnuz_max
 
-        acc = tl.clamp((acc * scale), -fp8_e4m3fnuz_max, fp8_e4m3fnuz_max).cast(W_VC.type.element_ty)
+        acc = tl.clamp((acc * scale), -fp8_e4m3fnuz_max, fp8_e4m3fnuz_max).to(W_VC.type.element_ty)
+        acc = tl.where(tl.arange(0, 16)[None, :] < 1, acc, 0.0)
 
     result = tl.zeros([BLOCK_SIZE_N], dtype=tl.float32)
 
@@ -365,7 +366,6 @@ def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
             result = tl.sum(_result, 1)
         else:
             result = tl.sum(w_vc * acc[None, :], 1)
-
 
         w_kv_prts += BLOCK_SIZE_N * stride_w_vcd
 
