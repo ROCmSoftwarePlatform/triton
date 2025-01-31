@@ -56,12 +56,6 @@ class BiasType:
     VECTOR = 2  # CAVEAT: Unsupported in kernel
 
 
-class PersistentType:
-    NONE = 0
-    FIXED = 1
-    DYNAMIC = 2
-
-
 class MetaData():
     cu_seqlens_q = None
     cu_seqlens_k = None
@@ -70,7 +64,7 @@ class MetaData():
     bias = None
     alibi_slopes = None
     causal = False
-    persistent = PersistentType.NONE
+    persistent = None
     num_contexts = 0
     varlen = False
     int8 = False
@@ -94,7 +88,7 @@ class MetaData():
             self.max_seqlens_k = max(cu_seqlens_k[i + 1].item() - cu_seqlens_k[i].item(), self.max_seqlens_k)
 
     def set_persistent(self, persistent):
-        self.persistent = PersistentType.DYNAMIC if persistent == "dynamic" else PersistentType.FIXED
+        self.persistent = persistent
 
     def set_int8_params(self, q_descale, k_descale, v_descale, p_scale, p_descale):
         self.int8 = True
@@ -597,7 +591,8 @@ def attn_fwd(
         INT8_KV: tl.constexpr,
         USE_P_SCALE: tl.constexpr,
         # Persistent related arguments
-        PERSISTENT_TYPE: tl.constexpr,  # 0: disable, 1: fixed, 2: dynamic
+        PERSISTENT: tl.constexpr,
+        PERSISTENT_DYNAMIC: tl.constexpr,
         persistent_atomic_counter,
         Num_CU : constexpr_or_i32,
         GRID_CU_MULTIP: tl.constexpr,
@@ -628,12 +623,12 @@ def attn_fwd(
             if philox_offset_output.cast(dtype=tl.uint64, bitcast=True) != 0:
                 tl.store(philox_offset_output, philox_offset_base.to(dtype=philox_seed_output.type.element_ty))
 
-    if PERSISTENT_TYPE != 0:  # if persistent, kernel loops over multiple tiles
+    if PERSISTENT:  # if persistent, kernel loops over multiple tiles
         Num_WG = Num_CU * GRID_CU_MULTIP  # number of workgroups launched
         num_tiles_per_head = tl.cdiv(Max_seqlen_q, BLOCK_M)  # the number of work units (tiles) of a single head
         num_tiles_per_sample = num_tiles_per_head * Num_head_q  # times the number of heads
         num_tiles_total = num_tiles_per_sample * Batch  # times the number of samples
-        if PERSISTENT_TYPE == 2:
+        if PERSISTENT_DYNAMIC:
             tile_id = persistent_atomic_counter.atomic_add(1)  # retuns the value BEFORE the atomic operation
         else:
             tile_id = tl.program_id(0)
@@ -642,7 +637,7 @@ def attn_fwd(
         num_tiles_total = 1
 
     while tile_id < num_tiles_total:  # loops more than once only if PERSISTENT
-        if PERSISTENT_TYPE != 0:
+        if PERSISTENT:
             # tile id basically tells us the Q block we are handling
             off_z = tile_id // num_tiles_per_sample  # at which batch sample are we
             off_h_q = tile_id % num_tiles_per_sample // num_tiles_per_head  # at which head are we inside the sample
@@ -987,8 +982,8 @@ def attn_fwd(
                     o_ptrs_mask = o_ptrs_mask & (offs_d[None, :] < Head_dim)
                 tl.store(o_ptrs, acc.to(Out.dtype.element_ty), mask=o_ptrs_mask)
 
-        if PERSISTENT_TYPE != 0:
-            if PERSISTENT_TYPE == 2:
+        if PERSISTENT:
+            if PERSISTENT_DYNAMIC:
                 tile_id = persistent_atomic_counter.atomic_add(1)
             else:
                 tile_id += Num_WG
@@ -1432,7 +1427,8 @@ class _attention(torch.autograd.Function):
                 INT8_KV=metadata.int8 and metadata.int8_kv,
                 USE_P_SCALE=metadata.int8 and metadata.use_p_scale,
                 # Persistent related arguments
-                PERSISTENT_TYPE=metadata.persistent,
+                PERSISTENT=metadata.persistent is not None,
+                PERSISTENT_DYNAMIC=metadata.persistent == "dynamic",
                 persistent_atomic_counter=atomic_counter,
                 Num_CU=NUM_CU,
                 Batch=batch)
