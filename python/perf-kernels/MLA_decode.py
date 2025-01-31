@@ -120,18 +120,19 @@ def _fwd_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
 
     w_kc = tl.load(w_kc_ptrs, mask=mask_w_kc, other=0.0)
 
-    # this doesn't work with fp8
     if USE_FP8:
         q = tl.dot(q, w_kc)
 
         q = tl.sum(q, 0)
     else:
+        # this doesn't work with fp8
         q = tl.sum(q[:, None] * w_kc, 0)  # 1 x c
 
     if USE_FP8:
-        q = q.to(K_Buffer.type.element_ty)
         q *= Q_descale
         q *= W_KC_descale
+        q = q.to(K_Buffer.type.element_ty)
+
 
     kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
     split_kv_start = kv_len_per_split * split_kv_id
@@ -267,7 +268,7 @@ def _fwd_kernel_stage2(Mid_O, W_VC,  # hdc
                        O, B_Seqlen, stride_mid_ob, stride_mid_oh, stride_mid_os, stride_obs, stride_oh, stride_w_vch,
                        stride_w_vcc, stride_w_vcd, W_VC_descale, NUM_KV_SPLITS: tl.constexpr,
                        kv_lora_rank: tl.constexpr,  # we assume lora (low rank dim c) is pow of 2 and its the actual c
-                       BLOCK_SIZE_N: tl.constexpr,  # we split lora dim for inner loop ??
+                       BLOCK_SIZE_N: tl.constexpr,  # we split d dim for inner loop
                        BLOCK_DV: tl.constexpr,  # head_dim of v rounded to the nearest power of 2
                        BLOCK_C: tl.constexpr,  # lora rounded to the nearest power of 2
                        Lv: tl.constexpr,  # The actual head_dim of v
@@ -307,7 +308,10 @@ def _fwd_kernel_stage2(Mid_O, W_VC,  # hdc
             old_scale = tl.exp(e_max - n_e_max)
             acc *= old_scale
             exp_logic = tl.exp(tlogic - n_e_max)
-            acc += exp_logic * tv
+            if USE_FP8:
+                acc += (exp_logic * tv)[:, None]
+            else:
+                acc += (exp_logic * tv)
 
             e_sum = e_sum * old_scale + exp_logic
             e_max = n_e_max
@@ -315,19 +319,19 @@ def _fwd_kernel_stage2(Mid_O, W_VC,  # hdc
     acc = acc / e_sum  # c = 512
 
     if USE_FP8:
-        acc_min = acc.min(0)
-        acc_max = acc.max(0)
-        amax = tl.max(tl.abs(acc_min), acc_max)
+        amax = tl.max(tl.abs(acc), 0)
 
         FP8_MAX = 448.0
 
         scale = FP8_MAX / amax
-        acc_de_scale = amax / -FP8_MAX
+        acc_descale = amax / FP8_MAX
         # acc_scaled = acc * scale
         # acc_scaled = tl.clip(acc_scaled, -FP8_MAX, FP8_MAX).to(tl.float8e4nv)
-        acc = (acc * scale).to(tl.float8e4nv)
+        acc = (acc * scale).to(W_VC.type.element_ty)
 
-    result = tl.zeros([BLOCK_SIZE_N], dtype=tl.float32)
+        result = tl.zeros([BLOCK_SIZE_N, 16], dtype=tl.float32)
+    else:
+        result = tl.zeros([BLOCK_SIZE_N], dtype=tl.float32)
 
     for n in range(0, tl.cdiv(BLOCK_DV, BLOCK_SIZE_N)):
         mask_v = offs_n[:, None] + n * BLOCK_SIZE_N < Lv
@@ -336,14 +340,12 @@ def _fwd_kernel_stage2(Mid_O, W_VC,  # hdc
 
         if  USE_FP8:
             result = tl.dot(w_vc, acc)
+            result *= acc_descale
+            result *= W_VC_descale
+            result = result.to(O.type.element_ty)
         else:
             result = tl.sum(w_vc * acc[None, :], 1)
 
-
-        if USE_FP8:
-            result = result.to(O.type.element_ty)
-            result *= acc_de_scale
-            result *= W_VC_descale
 
         w_kv_prts += BLOCK_SIZE_N * stride_w_vcd
 
@@ -383,7 +385,7 @@ def _decode_softmax_reducev_fwd(
     # Lv = v_buffer.shape[-1],should be compressed c dim
     BLOCK_DV = triton.next_power_of_2(Lv)
     # TODO tune this !!!!! tiling on the head_dim_v
-    BLOCK_SIZE_N = 8
+    BLOCK_SIZE_N = 16
 
     BLOCK_C = triton.next_power_of_2(kv_lora_rank)
 
@@ -529,8 +531,8 @@ def quantize_input_fp8(q, w_kc, w_vc, use_fp8):
     (8, 16, 128, 511, 128, 64),
     (8, 16, 1024, 512, 128, 64),
 ])
-@pytest.mark.parametrize('fuse_rope', [False, True])
-@pytest.mark.parametrize('use_fp8', [False])
+@pytest.mark.parametrize('fuse_rope', [False])
+@pytest.mark.parametrize('use_fp8', [False, True])
 def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_rope, use_fp8, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0,
                 device="cuda"):
     torch.manual_seed(0)
@@ -568,7 +570,7 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_
     ref_output, ref_logits = ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
                                   logit_cap, rotary_emb, positions, rope_fused=fuse_rope, use_fp8=use_fp8, device="cuda")
 
-    print("first 10 logits:")
+    print("first 10 outputs:")
     print(f"ref: {ref_logits.flatten()[:10]}")
     print(f"tri: {tri_logits.flatten()[:10]}")
     torch.testing.assert_close(ref_logits, tri_logits, atol=1e-2, rtol=1e-2)
@@ -595,12 +597,18 @@ def ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv
     q_nope, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
 
     q_nope, q_nope_descale, w_kc, w_kc_descale, w_vc, w_vc_descale = quantize_input_fp8(q_nope, w_kc, w_vc, use_fp8)
-
-    q_nope_out = torch.bmm(q_nope.transpose(0, 1), w_kc)
+    fp8_type = q_nope.dtype
 
     if use_fp8:
+        q_nope_out = torch.bmm(q_nope.transpose(0, 1).float(), w_kc.float())
+    else:
+        q_nope_out = torch.bmm(q_nope.transpose(0, 1), w_kc)
+
+    if use_fp8:
+        q_nope_out = q_nope_out.to(q.dtype)
         q_nope_out *= q_nope_descale
         q_nope_out *= w_kc_descale
+        q_nope_out = q_nope_out.to(q.dtype)
 
     q_input[..., :kv_lora_rank] = q_nope_out.transpose(0, 1)
 
@@ -625,11 +633,16 @@ def ref_impl(q, kv_cache, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv
     if use_fp8:
         attn_output, attn_output_descale = input_to_float8(attn_output)
 
-    attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
+    if use_fp8:
+        attn_bmm_output = torch.bmm(attn_output.transpose(0, 1).float(), w_vc.float())
+    else:
+        attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
 
     if use_fp8:
+        attn_bmm_output = attn_bmm_output.to(q.dtype)
         attn_bmm_output *= attn_output_descale
         attn_bmm_output *= w_vc_descale
+        attn_bmm_output = attn_bmm_output.to(q.dtype)
 
     ref_output = attn_bmm_output.transpose(0, 1)  #  # .flatten(1, 2)
 
@@ -641,7 +654,12 @@ def benchmark(args):
 
     configs = []
 
-    x_vals_list = [(8, 16, 1024, 512, 128, 64, 2), (8, 16, 4096, 512, 128, 64, 2), (8, 16, 8192, 512, 128, 64, 2)]
+    x_vals_list = [
+        (1, 128, 2048, 512, 128, 64, 16),
+        # (8, 16, 1024, 512, 128, 64, 2),
+        # (8, 16, 4096, 512, 128, 64, 2),
+        # (8, 16, 8192, 512, 128, 64, 2)
+    ]
     x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
     line_vals = ["ref", "fused"]
     plot_name = "MLA-decode"
