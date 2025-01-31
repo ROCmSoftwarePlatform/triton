@@ -56,6 +56,12 @@ class BiasType:
     VECTOR = 2  # CAVEAT: Unsupported in kernel
 
 
+class PersistentType:
+    NONE = 0
+    FIXED = 1
+    DYNAMIC = 2
+
+
 class MetaData():
     cu_seqlens_q = None
     cu_seqlens_k = None
@@ -64,7 +70,7 @@ class MetaData():
     bias = None
     alibi_slopes = None
     causal = False
-    persistent = None
+    persistent = PersistentType.NONE
     num_contexts = 0
     varlen = False
     int8 = False
@@ -88,7 +94,14 @@ class MetaData():
             self.max_seqlens_k = max(cu_seqlens_k[i + 1].item() - cu_seqlens_k[i].item(), self.max_seqlens_k)
 
     def set_persistent(self, persistent):
-        self.persistent = persistent
+        if persistent is None:
+            self.persistent = PersistentType.NONE
+        elif persistent == "fixed":
+            self.persistent = PersistentType.FIXED
+        elif persistent == "dynamic":
+            self.persistent = PersistentType.DYNAMIC
+        else:
+            assert False, f'Unknown persistent: {persistent}'
 
     def set_int8_params(self, q_descale, k_descale, v_descale, p_scale, p_descale):
         self.int8 = True
@@ -591,8 +604,7 @@ def attn_fwd(
         INT8_KV: tl.constexpr,
         USE_P_SCALE: tl.constexpr,
         # Persistent related arguments
-        PERSISTENT: tl.constexpr,
-        PERSISTENT_DYNAMIC: tl.constexpr,
+        PERSISTENT_TYPE: tl.constexpr,  # 0: disable, 1: fixed, 2: dynamic
         persistent_atomic_counter,
         Num_CU : constexpr_or_i32,
         GRID_CU_MULTIP: tl.constexpr,
@@ -610,6 +622,8 @@ def attn_fwd(
     USE_BIAS: tl.constexpr = (BIAS_TYPE == 1)
     tl.static_assert(BIAS_TYPE == 0 or BIAS_TYPE == 1, f'Unsupported BIAS_TYPE {BIAS_TYPE}')
     L_not_null = L.cast(dtype=tl.uint64, bitcast=True) != 0  # Allows null L for training=False
+    PERSISTENT: tl.constexpr = (PERSISTENT_TYPE > 0)
+    PERSISTENT_DYNAMIC: tl.constexpr = (PERSISTENT_TYPE == 2)
 
     ## philox
     philox_seed = 0
@@ -1427,8 +1441,7 @@ class _attention(torch.autograd.Function):
                 INT8_KV=metadata.int8 and metadata.int8_kv,
                 USE_P_SCALE=metadata.int8 and metadata.use_p_scale,
                 # Persistent related arguments
-                PERSISTENT=metadata.persistent is not None,
-                PERSISTENT_DYNAMIC=metadata.persistent == "dynamic",
+                PERSISTENT_TYPE=metadata.persistent,
                 persistent_atomic_counter=atomic_counter,
                 Num_CU=NUM_CU,
                 Batch=batch)
