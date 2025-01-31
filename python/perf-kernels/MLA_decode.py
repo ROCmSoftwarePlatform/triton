@@ -267,16 +267,23 @@ def _decode_att_m_fwd(
     if kv_group_num == 1:
         num_warps = 4
     else:
-        num_warps = 2
+        num_warps = 4
 
     kv_lora_rank = w_kc.shape[-1]
     qk_nope_head_dim = w_kc.shape[1]
     qk_rope_head_dim = kv_cache.shape[-1] - kv_lora_rank
 
+    # 128
     BLOCK_D = triton.next_power_of_2(qk_nope_head_dim)
+    # 512
     BLOCK_C = triton.next_power_of_2(kv_lora_rank)
+    # 64
     BLOCK_R = triton.next_power_of_2(qk_rope_head_dim)
-
+    print(f"wkc shape = {w_kc.shape}")
+    print(f"wkc stride = {w_kc.stride()}")
+    print(f"head = {head_num}")
+    print(f"kv cache shape = {kv_cache.shape}")
+    print(f"grid = {grid}")
 
     _fwd_fused_kernel_stage1[grid](q_nope, q_rope, kv_cache, w_kc, cos_sin_cache, positions, sm_scale, Req_to_tokens, B_req_idx, B_Seqlen, att_out,
                              Req_to_tokens.stride(0), q_nope.stride(0), q_nope.stride(1), q_rope.stride(0), q_rope.stride(1), kv_cache.stride(0), att_out.stride(0),
@@ -284,7 +291,7 @@ def _decode_att_m_fwd(
                              cos_sin_cache.stride(0), positions.stride(0),
                              q_descale, w_kc_descale, rotary_dim, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, kv_group_num=kv_group_num,
                              BLOCK_D=BLOCK_D, BLOCK_C=BLOCK_C, BLOCK_R=BLOCK_R, BLOCK_N=BLOCK,
-                             NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, USE_FP8=USE_FP8, num_warps=num_warps, num_stages=2, ROPE_FUSED=fuse_rope)
+                             NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, USE_FP8=USE_FP8, num_warps=num_warps, num_stages=1, ROPE_FUSED=fuse_rope)
 
 
 @triton.jit
@@ -666,7 +673,7 @@ def benchmark(args):
 
     x_vals_list = [(1, 128, 2048, 512, 128, 64, 8)]
     x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
-    line_vals = ["ref", "fused"]
+    line_vals = ["ref"]
     plot_name = "MLA-decode"
 
     configs.append(
