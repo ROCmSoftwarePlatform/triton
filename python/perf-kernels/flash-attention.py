@@ -28,6 +28,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton.language import uint64 as u64  # type annotation of strides
 from triton.language.extra import libdevice
 from utils.benchmark_utils import get_available_models, get_model_configs
 
@@ -564,12 +565,14 @@ def attn_fwd(
         # Basic SDPA
         Q, K, V, B, A, Sm_scale : constexpr_or_f32, L, Out,
         Q_descale, K_descale, P_scale, P_descale, V_descale,
-        stride_qz, stride_qh, stride_qm, stride_qk,
-        stride_kz, stride_kh, stride_kn, stride_kk,
-        stride_vz, stride_vh, stride_vk, stride_vn,
-        stride_oz, stride_oh, stride_om, stride_on,
-        stride_bz, stride_bh, stride_bm, stride_bn,
-        stride_az, stride_ah,
+        # Note: do not apply u64 to last stride
+        #       which should be hard-coded to 1 otherwise the performance will be -50%
+        stride_qz:u64, stride_qh:u64, stride_qm:u64, stride_qk,
+        stride_kz:u64, stride_kh:u64, stride_kn:u64, stride_kk,
+        stride_vz:u64, stride_vh:u64, stride_vk:u64, stride_vn,
+        stride_oz:u64, stride_oh:u64, stride_om:u64, stride_on,
+        stride_bz:u64, stride_bh:u64, stride_bm:u64, stride_bn,
+        stride_az, stride_ah,  # Let Triton decide its type/constexpr for this small tensor
         # MQA/GQA
         Num_head_q : constexpr_or_i32,
         Num_head_k : constexpr_or_i32,
