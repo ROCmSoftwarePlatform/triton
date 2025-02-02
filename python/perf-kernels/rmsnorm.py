@@ -396,10 +396,8 @@ def torch_rmsnorm_bwd(x, g, ZERO_CENTERED_GAMMA, out_dtype=torch.float16, epsilo
 arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
 
 
-#@pytest.mark.parametrize("in_dtype_str", ["fp32", "fp16", "bf16"])
-#@pytest.mark.parametrize("out_dtype_str", ["fp32", "fp16", "bf16"])
-@pytest.mark.parametrize("in_dtype_str", ["fp16", "bf16"])
-@pytest.mark.parametrize("out_dtype_str", ["fp16", "bf16"])
+@pytest.mark.parametrize("in_dtype_str", ["fp32", "fp16", "bf16"])
+@pytest.mark.parametrize("out_dtype_str", ["fp32", "fp16", "bf16"])
 @pytest.mark.parametrize('ZERO_CENTERED_GAMMA', [True, False])
 @pytest.mark.parametrize('M, N', [
     (1, 4),
@@ -446,8 +444,8 @@ def test_rmsnorm(M, N, ZERO_CENTERED_GAMMA, in_dtype_str, out_dtype_str):
 
     assert torch.allclose(y_triton, y_torch, atol=atol, rtol=rtol), \
         f"Mismatch in 'y' (in={in_dtype_str}, out={out_dtype_str})"
-    #    assert torch.allclose(rsigma_triton, rsigma_torch, atol=atol, rtol=rtol), \
-    #        f"Mismatch in 'rsigma' (in={in_dtype_str}, out={out_dtype_str})"
+    assert torch.allclose(rsigma, rsigma_torch, atol=atol, rtol=rtol), \
+        f"Mismatch in 'rsigma' (in={in_dtype_str}, out={out_dtype_str})"
 
     grad_output = torch.randn_like(y_torch)
 
@@ -459,16 +457,16 @@ def test_rmsnorm(M, N, ZERO_CENTERED_GAMMA, in_dtype_str, out_dtype_str):
 
     # Backpropagate through PyTorch
     y_ref.backward(grad_output)
-    grad_x_ref = x_ref.grad
-    grad_g_ref = g_ref.grad
-
-    grad_x_ref = grad_x_ref.to(out_dtype)
-    grad_g_ref = grad_g_ref.to(out_dtype)
+    grad_x_ref = x_ref.grad.to(out_dtype)
+    grad_g_ref = g_ref.grad.to(out_dtype)
 
     # 2) Triton backward
+    x_triton = x.clone().detach().requires_grad_()
+    g_triton = g.clone().detach().requires_grad_()
+    y_triton, rsigma_triton = torch_rmsnorm_fwd(x_triton, g_triton, ZERO_CENTERED_GAMMA, out_dtype)
     y_triton.backward(grad_output, retain_graph=True)
-    grad_x_triton = x.grad.to(out_dtype)
-    grad_g_triton = g.grad.to(out_dtype)
+    grad_x_triton = x_triton.grad.to(out_dtype)
+    grad_g_triton = g_triton.grad.to(out_dtype)
 
     # Compare backward outputs (grad_x and grad_g)
     err_x = (grad_x_triton - grad_x_ref).abs().max().item()
