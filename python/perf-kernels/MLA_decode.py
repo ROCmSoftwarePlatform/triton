@@ -694,8 +694,8 @@ def benchmark(args):
 
         D = qk_nope_head_dim
 
-        Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc, rotary_dim, rotary_emb, positions = input_helper(
-            B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device)
+        Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc, w_scale, rotary_dim, rotary_emb, positions = input_helper(
+            B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device, use_fp8=fp8_gemm)
 
         if "fused" in provider:
             fn = lambda: {
@@ -704,6 +704,7 @@ def benchmark(args):
                     kv_cache,
                     w_kc,
                     w_vc,
+                    w_scale,
                     rotary_emb.cos_sin_cache,
                     positions,
                     rotary_dim,
@@ -717,14 +718,13 @@ def benchmark(args):
                     sm_scale,
                     logit_cap=0.0,
                     fuse_rope=fuse_rope,
-                    use_fp8=fp8_gemm
                 )
             }
 
         if "ref" in provider:
             k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
-            fn = lambda: ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
-                                  logit_cap, rotary_emb, positions, rope_fused=fuse_rope, use_fp8=fp8_gemm, device="cuda")
+            fn = lambda: ref_compute(q, k_input, v_input, w_kc, w_vc, w_scale, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+                                  logit_cap, rotary_emb, positions, rope_fused=fuse_rope, device="cuda")
 
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
