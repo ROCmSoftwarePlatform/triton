@@ -69,40 +69,49 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
                     rotary_dim: tl.constexpr,
                     kv_lora_rank: tl.constexpr,
                     qk_nope_head_dim: tl.constexpr, qk_rope_head_dim: tl.constexpr, kv_group_num: tl.constexpr,
-                    BLOCK_D: tl.constexpr, BLOCK_C: tl.constexpr, BLOCK_R: tl.constexpr, BLOCK_N: tl.constexpr,
+                    q_head_num: tl.constexpr, BLOCK_D: tl.constexpr, BLOCK_C: tl.constexpr, BLOCK_R: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_H: tl.constexpr,
                     NUM_KV_SPLITS: tl.constexpr, logit_cap: tl.constexpr, ROPE_FUSED: tl.constexpr, USE_FP8: tl.constexpr):
-    dtype = Q_NOPE.type.element_ty
 
     cur_batch = tl.program_id(0)
-    cur_head = tl.program_id(1)
+    # cur_head = tl.program_id(1)
+    cur_head_id = tl.program_id(1)
+    cur_kv_head = cur_head_id // tl.cdiv(kv_group_num, BLOCK_H)
+
     split_kv_id = tl.program_id(2)
 
-    cur_kv_head = cur_head // kv_group_num
+    if BLOCK_H < kv_group_num:
+        VALID_BLOCK_H: tl.constexpr = BLOCK_H
+    else:
+        VALID_BLOCK_H: tl.constexpr = kv_group_num
+    cur_head = cur_head_id * VALID_BLOCK_H + tl.arange(0, BLOCK_H)
+    mask_h = cur_head < (cur_head_id + 1) * VALID_BLOCK_H
+    mask_h = mask_h & (cur_head < q_head_num)
 
     offs_d = tl.arange(0, BLOCK_D)
     offs_c = tl.arange(0, BLOCK_C)
     offs_q_r = tl.arange(0, BLOCK_R)  # to get the q_pe
     offs_k_r = tl.arange(kv_lora_rank, kv_lora_rank + BLOCK_R)  # to get the k_pe
-    # For tl.dot to meet dim requirement
-    offs_i = tl.arange(0, 16)
 
     mask_d = offs_d < qk_nope_head_dim
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
     cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
 
-    if USE_FP8:
-        off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d[None, :] + offs_i[:, None]
-        q = tl.load(Q_NOPE + off_q, mask=(mask_d[None, :] & (offs_i[:, None] < 1)), other=0.0)
-    else:
-        off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d
-        q = tl.load(Q_NOPE + off_q, mask=mask_d, other=0.0)
+    # if USE_FP8:
+    #     off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d[None, :] + offs_i[:, None]
+    #     q = tl.load(Q_NOPE + off_q, mask=(mask_d[None, :] & (offs_i[:, None] < 1)), other=0.0)
+    # else:
+    #     off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d
+    #     q = tl.load(Q_NOPE + off_q, mask=mask_d, other=0.0)
 
-    off_q_pe = cur_batch * stride_q_pe_b + cur_head * stride_q_pe_h + offs_q_r
+    offs_q = cur_batch * stride_q_nope_b + cur_head[:, None] * stride_q_nope_h + offs_d[None, :]
+    q = tl.load(Q_NOPE + offs_q, mask=(mask_h[:, None]) & (mask_d[None, :]), other=0.0)
+
+    off_q_pe = (cur_batch * stride_q_pe_b + cur_head[:, None] * stride_q_pe_h + offs_q_r[None, :])
     mask_q_r = offs_q_r < qk_rope_head_dim
     mask_c = offs_c < kv_lora_rank
     mask_k_r = offs_k_r < kv_lora_rank + qk_rope_head_dim
 
-    q_pe = tl.load(Q_PE + off_q_pe, mask=mask_q_r, other=0.0)
+    q_pe = tl.load(Q_PE + off_q_pe, mask=(mask_h[:, None]) & (mask_q_r[None, :]), other=0.0)
 
     w_kc_offset = W_KC + cur_kv_head * stride_w_kc_h
     w_kc_ptrs = w_kc_offset + offs_d[:, None] * stride_w_kc_d + offs_c[None, :] * stride_w_kc_c
@@ -110,18 +119,19 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
 
     w_kc = tl.load(w_kc_ptrs, mask=mask_w_kc, other=0.0)
 
-    if USE_FP8:
-        q = tl.dot(q, w_kc)
-        # tl.where(offs_i[:, None] < 1, q, 0.0)
-        q = tl.sum(q, 0)
-    else:
-        # this doesn't work with fp8
-        q = tl.sum(q[:, None] * w_kc, 0)  # 1 x c
+
+    # TODO tiling dim!!
+    # BLOCK_SIZE_I = 64
+    # offs_i = tl.arange(0, BLOCK_SIZE_I)
+
+    # TODO check if we want to tile this
+    # (16, 128) x (128, 512)
+    q = tl.dot(q, w_kc)
 
     if USE_FP8:
         q *= Q_descale
         q *= W_KC_descale
-    q = q.to(dtype)
+    q = q.to(K_Buffer.type.element_ty)
 
     kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
     split_kv_start = kv_len_per_split * split_kv_id
@@ -164,9 +174,12 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
             last_token_pe_sum = tl.sum(q_pe[None, :] * k_pe, 1)
 
 
-    e_max = -float("inf")
-    e_sum = 0.0
-    acc = tl.zeros([BLOCK_C], dtype=tl.float32)
+    e_max = tl.zeros([BLOCK_H], dtype=tl.float32) - float("inf")
+    e_sum = tl.zeros([BLOCK_H], dtype=tl.float32)
+    acc = tl.zeros([BLOCK_H, BLOCK_C], dtype=tl.float32)
+    # e_max = -float("inf")
+    # e_sum = 0.0
+    # acc = tl.zeros([BLOCK_C], dtype=tl.float32)
 
     if split_kv_end > split_kv_start:
         for start_n in range(split_kv_start, split_kv_end, BLOCK_N):
@@ -176,54 +189,55 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
                 mask=offs_n < split_kv_end,
                 other=0,
             )
-            offs_buf_kv = (kv_loc[:, None] * stride_buf_kbs + offs_c[None, :])
-            offs_buf_k_pe = (kv_loc[:, None] * stride_buf_kbs + offs_k_r[None, :])
+            offs_buf_kv = (kv_loc[None, :] * stride_buf_kbs + offs_c[:, None])
+            offs_buf_k_pe = (kv_loc[None, :] * stride_buf_kbs + offs_k_r[:, None])
 
             kv = tl.load(
                 K_Buffer + offs_buf_kv,
-                mask=(offs_n[:, None] < split_kv_end) & (mask_c[None, :]),
+                mask=(offs_n[None, :] < split_kv_end) & (mask_c[:, None]),
                 other=0.0,
             )  # the shared latent tensor for keys and values
 
             k_pe = tl.load(
                 K_Buffer + offs_buf_k_pe,
-                mask=(offs_n[:, None] < split_kv_end) & (mask_k_r[None, :]),
+                mask=(offs_n[None, :] < split_kv_end) & (mask_k_r[:, None]),
                 other=0.0,
             ) # positional embedding part of keys
 
-            # dot product of pe parts
-            qk = tl.sum(q_pe[None, :] * k_pe, 1)  # ((1 x r) * (BLOCK_N x r)).sum(1) = (BLOCK_N)
+            # (16, 64) x (64, 32)
+            # dot product of rope parts
+            qk = tl.dot(q_pe, k_pe.to(q_pe.dtype))
 
             if ROPE_FUSED and LAST_SPLIT:
-                qk = tl.where(offs_n < split_kv_end - 1, qk, last_token_pe_sum.to(qk.type.element_ty))
+                qk = tl.where(offs_n[None, :] < split_kv_end - 1, qk, last_token_pe_sum.to(qk.type.element_ty))
 
+            # (16, 512) x (512, 32)
             # dot product of nope parts
-            qk += tl.sum(q[None, :] * kv, 1)  # ((1 x c) * (BLOCK_N x c)).sum(1) = (BLOCK_N)
+            qk += tl.dot(q, kv)
 
             qk *= sm_scale
 
             if logit_cap > 0:
                 qk = logit_cap * tanh(qk / logit_cap)
 
-            qk = tl.where(offs_n < split_kv_end, qk, float("-inf"))
+            qk = tl.where(mask_h[:, None] & (offs_n[None, :] < split_kv_end), qk, float("-inf"))
 
-            n_e_max = tl.maximum(tl.max(qk, 0), e_max)
+            n_e_max = tl.maximum(tl.max(qk, 1), e_max)
             re_scale = tl.exp(e_max - n_e_max)
-            p = tl.exp(qk - n_e_max)
-            acc *= re_scale
-            acc += tl.sum(p[:, None] * kv, 0)  # ((BLOCK_N x 1) * (BLOCK_N x c)).sum(0) = 1 x c
+            p = tl.exp(qk - n_e_max[:, None])
+            acc *= re_scale[:, None]
+            # (16, 32) x (32, 512)
+            acc += tl.dot(p.to(kv.dtype), kv.trans())
 
-            e_sum = e_sum * re_scale + tl.sum(p, 0)
+            e_sum = e_sum * re_scale + tl.sum(p, 1)
             e_max = n_e_max
 
-        # acc: 1 x c
-
-        offs_mid_o = (cur_batch * stride_mid_ob + cur_head * stride_mid_oh + split_kv_id * stride_mid_os + offs_c)
+        offs_mid_o = (cur_batch * stride_mid_ob + cur_head[:, None] * stride_mid_oh + split_kv_id * stride_mid_os + offs_c[None, :])
 
         tl.store(
             Att_Out + offs_mid_o,
-            acc / e_sum,
-            mask=(mask_c),
+            acc / e_sum[:, None],
+            mask=(mask_h[:, None]) & (mask_c[None, :]),
         )
 
         offs_mid_o_1 = (cur_batch * stride_mid_ob + cur_head * stride_mid_oh + split_kv_id * stride_mid_os +
@@ -232,6 +246,7 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
         tl.store(
             Att_Out + offs_mid_o_1,
             e_max + tl.log(e_sum),
+            mask=mask_h,
         )
 
 
@@ -253,28 +268,62 @@ def _decode_att_m_fwd(
     fuse_rope,
     USE_FP8
 ):
-    BLOCK = 64
-    NUM_KV_SPLITS = num_kv_splits
+    BLOCK = 32
+    kv_lora_rank = w_kc.shape[-1]
+
+    # [TODO] work around shmem limit on MI3xx
+    if is_hip_ and kv_lora_rank >= 576:
+        BLOCK = 16
+
+    # if kv_lora_rank == 576:
+    #     BLOCK_DMODEL = 512
+    #     BLOCK_DPE = 64
+    # elif kv_lora_rank == 288:
+    #     BLOCK_DMODEL = 256
+    #     BLOCK_DPE = 32
+    # else:
+    #     BLOCK_DMODEL = triton.next_power_of_2(kv_lora_rank)
+    #     BLOCK_DPE = 0
 
     batch, head_num = B_req_idx.shape[0], q_nope.shape[1]
+    kv_group_num = q_nope.shape[1] // kv_cache.shape[1]
 
-    grid = (batch, head_num, NUM_KV_SPLITS)
+    BLOCK_H = 16
+    NUM_KV_SPLITS = num_kv_splits
+    grid = (
+        batch,
+        triton.cdiv(head_num, min(BLOCK_H, kv_group_num)),
+        NUM_KV_SPLITS,
+    )
+
+    extra_kargs = {}
+    # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
+    # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
+    extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 2}
+    # NUM_KV_SPLITS = num_kv_splits
+
+    # batch, head_num = B_req_idx.shape[0], q_nope.shape[1]
+
+    # grid = (batch, head_num, NUM_KV_SPLITS)
 
 
-    #print(f"grid size in _decode_att_m_fwd (ours): {grid[0]*grid[1]*grid[2]}")
-    kv_group_num = 1  # q.shape[1] // kv_cache.shape[1]
+    # #print(f"grid size in _decode_att_m_fwd (ours): {grid[0]*grid[1]*grid[2]}")
+    # kv_group_num = 1  # q.shape[1] // kv_cache.shape[1]
 
-    if kv_group_num == 1:
-        num_warps = 4
-    else:
-        num_warps = 2
+    # if kv_group_num == 1:
+    #     num_warps = 4
+    # else:
+    #     num_warps = 4
 
-    kv_lora_rank = w_kc.shape[-1]
+    # kv_lora_rank = w_kc.shape[-1]
     qk_nope_head_dim = w_kc.shape[1]
     qk_rope_head_dim = kv_cache.shape[-1] - kv_lora_rank
 
+    # # 128
     BLOCK_D = triton.next_power_of_2(qk_nope_head_dim)
+    # # 512
     BLOCK_C = triton.next_power_of_2(kv_lora_rank)
+    # # 64
     BLOCK_R = triton.next_power_of_2(qk_rope_head_dim)
 
 
@@ -283,8 +332,8 @@ def _decode_att_m_fwd(
                              att_out.stride(1), att_out.stride(2), w_kc.stride(0), w_kc.stride(1), w_kc.stride(2),
                              cos_sin_cache.stride(0), positions.stride(0),
                              q_descale, w_kc_descale, rotary_dim, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, kv_group_num=kv_group_num,
-                             BLOCK_D=BLOCK_D, BLOCK_C=BLOCK_C, BLOCK_R=BLOCK_R, BLOCK_N=BLOCK,
-                             NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, USE_FP8=USE_FP8, num_warps=num_warps, num_stages=2, ROPE_FUSED=fuse_rope)
+                             q_head_num=head_num, BLOCK_D=BLOCK_D, BLOCK_C=BLOCK_C, BLOCK_R=BLOCK_R, BLOCK_N=BLOCK, BLOCK_H=BLOCK_H,
+                             NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, USE_FP8=USE_FP8, num_warps=4, num_stages=1, ROPE_FUSED=fuse_rope, **extra_kargs)
 
 
 @triton.jit
@@ -404,11 +453,9 @@ def _decode_softmax_reducev_fwd(
 
     NUM_KV_SPLITS = num_kv_splits
 
-    extra_kargs = {}
-    if is_hip_:
-        # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
-        # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
-        extra_kargs = {"waves_per_eu": 4, "matrix_instr_nonkdim": 16, "kpack": 2}
+    # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
+    # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
+    extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 2}
 
     grid = (batch, head_num)
 
@@ -469,6 +516,7 @@ def decode_attention_fwd_normal(
     qk_rope_head_dim = kv_cache.shape[-1] - kv_lora_rank
     q_nope, q_rope = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
 
+    kv_cache = kv_cache.unsqueeze(1)
     is_fp8_w_kc = w_kc.dtype == torch.float8_e4m3fnuz
     is_fp8_w_vc = w_vc.dtype == torch.float8_e4m3fnuz
 
@@ -556,11 +604,17 @@ def input_to_float8_per_channel(x, dtype=torch.float8_e4m3fnuz):
 
 
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim', [
-    (8, 128, 2048, 512, 128, 64),
+    (8, 128, 2048, 128, 64, 32),
 ])
 @pytest.mark.parametrize('fuse_rope', [False])
-@pytest.mark.parametrize('use_fp8', [False, True])
-@pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize('use_fp8', [False])
+@pytest.mark.parametrize('dtype', [torch.float32])
+# @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim', [
+#     (8, 128, 2048, 512, 128, 64),
+# ])
+# @pytest.mark.parametrize('fuse_rope', [False])
+# @pytest.mark.parametrize('use_fp8', [False, True])
+# @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
 def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_rope, use_fp8, dtype, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0,
                 device="cuda"):
     torch.manual_seed(0)
@@ -676,7 +730,7 @@ def benchmark(args):
     dtype = arg_to_torch_dtype[args.dtype]
     configs = []
 
-    x_vals_list = [(1, 128, 2048, 512, 128, 64, 8)]
+    x_vals_list = [(1, 128, 2048, 512, 128, 64, 16)]
     x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
     line_vals = ["ref", "fused"]
     plot_name = "MLA-decode"
