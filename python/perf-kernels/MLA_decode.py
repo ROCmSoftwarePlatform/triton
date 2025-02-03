@@ -71,6 +71,7 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
                     qk_nope_head_dim: tl.constexpr, qk_rope_head_dim: tl.constexpr, kv_group_num: tl.constexpr,
                     BLOCK_D: tl.constexpr, BLOCK_C: tl.constexpr, BLOCK_R: tl.constexpr, BLOCK_N: tl.constexpr,
                     NUM_KV_SPLITS: tl.constexpr, logit_cap: tl.constexpr, ROPE_FUSED: tl.constexpr, USE_FP8: tl.constexpr):
+    dtype = Q_NOPE.type.element_ty
 
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
@@ -120,8 +121,7 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
     if USE_FP8:
         q *= Q_descale
         q *= W_KC_descale
-        q = q.to(K_Buffer.type.element_ty)
-
+    q = q.to(dtype)
 
     kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
     split_kv_start = kv_len_per_split * split_kv_id
@@ -343,7 +343,7 @@ def _fwd_fused_kernel_stage2(Mid_O, W_VC,  # hdc
     acc = acc / e_sum  # c = 512
 
     if USE_FP8:
-        amax = tl.max(tl.abs(acc), 0)
+        amax = tl.max(tl.abs(acc))
         amax = tl.clamp(amax, 1e-12, amax)
 
         scale = fp8_e4m3fnuz_max / amax
@@ -484,14 +484,14 @@ def decode_attention_fwd_normal(
 
 
 def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap):
-    from utils.sglang_ref import decode_attention_fwd_normal as decode_attention_fwd_normal_ref
+    from utils.sglang_ref import decode_attention_fwd_grouped as decode_attention_fwd_group_ref
     B, H = q_input.shape[0], q_input.shape[1]
     kv_lora_rank = v_input.shape[-1]
     device = q_input.device
 
     o = torch.empty((*q_input.shape[:-1], v_input.shape[-1]), dtype=q_input.dtype, device=q_input.device)
     attn_logits = torch.empty(B, H, num_kv_splits, kv_lora_rank + 1, dtype=q_input.dtype, device=device)
-    decode_attention_fwd_normal_ref(q_input, k_input, v_input, o, Req_to_tokens, B_req_idx, B_Seqlen, attn_logits,
+    decode_attention_fwd_group_ref(q_input, k_input, v_input, o, Req_to_tokens, B_req_idx, B_Seqlen, attn_logits,
                                     num_kv_splits, sm_scale, logit_cap)
     return o, attn_logits
 
@@ -515,8 +515,11 @@ def input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtyp
 
     if use_fp8:
         w, w_scale = input_to_float8(w)
-        w_kc, w_vc = torch.split(w, kv_lora_rank, dim=2)
-        w_vc = w_vc.permute([0, 2, 1])
+    else:
+        w_scale = None
+
+    w_kc, w_vc = torch.split(w, kv_lora_rank, dim=2)
+    w_vc = w_vc.permute([0, 2, 1])
 
     rotary_dim = qk_rope_head_dim
     rotary_emb = DeepseekScalingRotaryEmbedding(
@@ -541,6 +544,15 @@ def input_to_float8(x, dtype=torch.float8_e4m3fnuz):
     scale = fp8_e4m3fnuz_max / amax
     x_scl_sat = (x * scale).clamp(min=-fp8_e4m3fnuz_max, max=fp8_e4m3fnuz_max)
     return x_scl_sat.to(dtype).contiguous(), scale.float().reciprocal().item()
+
+def input_to_float8_per_channel(x, dtype=torch.float8_e4m3fnuz):
+    min_val = x.amin(dim=-1, keepdim=True)
+    max_val = x.amax(dim=-1, keepdim=True)
+    amax = torch.maximum(min_val.abs(), max_val.abs()).clamp(min=1e-12)
+    scale = fp8_e4m3fnuz_max / amax
+    x_scl_sat = (x * scale).clamp(min=-fp8_e4m3fnuz_max, max=fp8_e4m3fnuz_max)
+    x_quantized = x_scl_sat.to(dtype).contiguous()
+    return x_quantized, scale.float().reciprocal()
 
 
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim', [
@@ -587,8 +599,6 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_
     ref_output, ref_logits = ref_compute(q, k_input, v_input, w_kc, w_vc, w_scale, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
                                   logit_cap, rotary_emb, positions,  rope_fused=fuse_rope, device="cuda")
 
-    print(f"ref: {ref_logits[2, 35, 1, 488:]}") # to debug the rope, check last split
-    print(f"tri: {tri_logits[2, 35, 1, 488:]}")
 
     print("first 10 logits:")
     print(f"ref: {ref_logits[:,:,-1].flatten()[:]}") # to debug the rope, check last split
@@ -627,10 +637,10 @@ def ref_compute(q, k_input, v_input, w_kc, w_vc, w_scale, Req_to_tokens, B_req_i
         q_nope_out = torch.bmm(q_nope.transpose(0, 1).float(), w_kc.float())
         q_nope_out *= q_nope_scale
         q_nope_out *= w_scale
-        q_nope_out = q_nope_out.to(q.dtype)
     else:
         q_nope_out = torch.bmm(q_nope.transpose(0, 1), w_kc)
 
+    q_nope_out = q_nope_out.to(q.dtype)
     q_input[..., :kv_lora_rank] = q_nope_out.transpose(0, 1)
 
     if rope_fused:
@@ -647,9 +657,9 @@ def ref_compute(q, k_input, v_input, w_kc, w_vc, w_scale, Req_to_tokens, B_req_i
     attn_output = attn_output.view(-1, H, kv_lora_rank)
 
     if w_vc.dtype == torch.float8_e4m3fnuz:
-        attn_output, attn_output_scale = input_to_float8(attn_output)
+        attn_output, attn_output_scale = input_to_float8_per_channel(attn_output)
         attn_bmm_output = torch.bmm(attn_output.transpose(0, 1).float(), w_vc.float())
-        attn_bmm_output *= attn_output_scale
+        attn_bmm_output *= attn_output_scale.transpose(0, 1)
         attn_bmm_output *= w_scale
         attn_bmm_output = attn_bmm_output.to(q.dtype)
     else:
