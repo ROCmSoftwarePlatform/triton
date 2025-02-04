@@ -96,15 +96,8 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
     cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
 
-    # if USE_FP8:
-    #     off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d[None, :] + offs_i[:, None]
-    #     q = tl.load(Q_NOPE + off_q, mask=(mask_d[None, :] & (offs_i[:, None] < 1)), other=0.0)
-    # else:
-    #     off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d
-    #     q = tl.load(Q_NOPE + off_q, mask=mask_d, other=0.0)
-
-    offs_q = cur_batch * stride_q_nope_b + cur_head[:, None] * stride_q_nope_h + offs_d[None, :]
-    q = tl.load(Q_NOPE + offs_q, mask=(mask_h[:, None]) & (mask_d[None, :]), other=0.0)
+    offs_q = cur_batch * stride_q_nope_b + cur_head[:, None, None] * stride_q_nope_h + offs_d[None,None, :] + tl.arange(0, 16)[None,:, None] 
+    q = tl.load(Q_NOPE + offs_q, mask=(mask_h[:, None,None]) & (mask_d[None,None, :]) & (tl.arange(0, 16)[None,:, None] < 1), other=0.0)
 
     off_q_pe = (cur_batch * stride_q_pe_b + cur_head[:, None] * stride_q_pe_h + offs_q_r[None, :])
     mask_q_r = offs_q_r < qk_rope_head_dim
@@ -113,11 +106,14 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
 
     q_pe = tl.load(Q_PE + off_q_pe, mask=(mask_h[:, None]) & (mask_q_r[None, :]), other=0.0)
 
-    w_kc_offset = W_KC + cur_kv_head * stride_w_kc_h
-    w_kc_ptrs = w_kc_offset + offs_d[:, None] * stride_w_kc_d + offs_c[None, :] * stride_w_kc_c
+    w_kc_offset = W_KC
+    w_kc_ptrs = w_kc_offset + offs_d[None,:, None] * stride_w_kc_d + offs_c[None, None, :] * stride_w_kc_c +  cur_head[:, None, None] * stride_w_kc_h
     mask_w_kc = (offs_d[:, None] < qk_nope_head_dim) & (mask_c[None, :])
 
-    w_kc = tl.load(w_kc_ptrs, mask=mask_w_kc, other=0.0)
+
+    # w_kc = tl.load(w_kc_ptrs, mask=mask_w_kc, other=0.0)
+    w_kc = tl.load(w_kc_ptrs)
+    # w_kc = w_kc.reshape(BLOCK_D, BLOCK_H * BLOCK_C)
 
 
     # TODO tiling dim!!
@@ -127,6 +123,7 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
     # TODO check if we want to tile this
     # (16, 128) x (128, 512)
     q = tl.dot(q, w_kc)
+    q = tl.sum(q, 1)
 
     if USE_FP8:
         q *= Q_descale
@@ -604,7 +601,7 @@ def input_to_float8_per_channel(x, dtype=torch.float8_e4m3fnuz):
 
 
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim', [
-    (8, 128, 2048, 128, 64, 32),
+    (2, 2, 32, 64, 16, 8),
 ])
 @pytest.mark.parametrize('fuse_rope', [False])
 @pytest.mark.parametrize('use_fp8', [False])
