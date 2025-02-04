@@ -96,8 +96,13 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
     cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
 
-    offs_q = cur_batch * stride_q_nope_b + cur_head[:, None, None] * stride_q_nope_h + offs_d[None,None, :] + tl.arange(0, 16)[None,:, None] 
-    q = tl.load(Q_NOPE + offs_q, mask=(mask_h[:, None,None]) & (mask_d[None,None, :]) & (tl.arange(0, 16)[None,:, None] < 1), other=0.0)
+    BLOCK_K: tl.constexpr = 16
+    offs_k = tl.arange(0, BLOCK_K)
+
+    # offs_q = cur_batch * stride_q_nope_b + cur_head[:, None, None] * stride_q_nope_h + offs_d[None,None, :] + tl.arange(0, 16)[None,:, None]
+    # q = tl.load(Q_NOPE + offs_q, mask=(mask_h[:, None,None]) & (mask_d[None,None, :]) & (tl.arange(0, 16)[None,:, None] < 1), other=0.0)
+
+    offs_q = cur_batch * stride_q_nope_b + cur_head[:, None, None] * stride_q_nope_h + offs_k[None,None, :] + tl.arange(0, 16)[None,:, None]
 
     off_q_pe = (cur_batch * stride_q_pe_b + cur_head[:, None] * stride_q_pe_h + offs_q_r[None, :])
     mask_q_r = offs_q_r < qk_rope_head_dim
@@ -107,14 +112,22 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
     q_pe = tl.load(Q_PE + off_q_pe, mask=(mask_h[:, None]) & (mask_q_r[None, :]), other=0.0)
 
     w_kc_offset = W_KC
-    w_kc_ptrs = w_kc_offset + offs_d[None,:, None] * stride_w_kc_d + offs_c[None, None, :] * stride_w_kc_c +  cur_head[:, None, None] * stride_w_kc_h
-    mask_w_kc = (offs_d[:, None] < qk_nope_head_dim) & (mask_c[None, :])
+    w_kc_ptrs = w_kc_offset + offs_k[None,:, None] * stride_w_kc_d + offs_c[None, None, :] * stride_w_kc_c +  cur_head[:, None, None] * stride_w_kc_h
+    # mask_w_kc = (offs_d[:, None] < qk_nope_head_dim) & (mask_c[None, :])
 
+    # q = (16 h, 16 s_padding, 16 d)
+    # w_kc = (16, 16, 512)
+    # (16 , 16, 512) => (256, 512)
+    acc = tl.zeros([BLOCK_H, BLOCK_C], dtype = tl.float32)
+    for k in range(tl.cdiv(BLOCK_D, BLOCK_K)):
+        w_kc = tl.load(w_kc_ptrs + k * BLOCK_K * stride_w_kc_d)
+        q = tl.load(Q_NOPE + offs_q + k * BLOCK_K, mask=(mask_h[:, None,None]) & ((offs_k + (k * BLOCK_K))[None, None, :] < BLOCK_D) & (tl.arange(0, 16)[None,:, None] < 1), other=0.0)
 
+        acc += tl.sum(tl.dot(q, w_kc), 1)
+
+    q = acc
     # w_kc = tl.load(w_kc_ptrs, mask=mask_w_kc, other=0.0)
-    w_kc = tl.load(w_kc_ptrs)
     # w_kc = w_kc.reshape(BLOCK_D, BLOCK_H * BLOCK_C)
-
 
     # TODO tiling dim!!
     # BLOCK_SIZE_I = 64
@@ -122,8 +135,8 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
 
     # TODO check if we want to tile this
     # (16, 128) x (128, 512)
-    q = tl.dot(q, w_kc)
-    q = tl.sum(q, 1)
+    # q = tl.dot(q, w_kc)
+
 
     if USE_FP8:
         q *= Q_descale
@@ -601,7 +614,8 @@ def input_to_float8_per_channel(x, dtype=torch.float8_e4m3fnuz):
 
 
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim', [
-    (2, 2, 32, 64, 16, 8),
+    # (2, 2, 32, 64, 16, 8),
+    (8, 128, 2048, 512, 128, 64),
 ])
 @pytest.mark.parametrize('fuse_rope', [False])
 @pytest.mark.parametrize('use_fp8', [False])
@@ -729,7 +743,7 @@ def benchmark(args):
 
     x_vals_list = [(1, 128, 2048, 512, 128, 64, 16)]
     x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
-    line_vals = ["ref", "fused"]
+    line_vals = ["fused"]
     plot_name = "MLA-decode"
 
     configs.append(
