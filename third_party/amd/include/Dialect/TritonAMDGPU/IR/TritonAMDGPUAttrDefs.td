@@ -88,4 +88,17 @@ def TritonAMDGPU_SchedHintsEnum : TritonAMDGPU_I32Enum<
 def TritonAMDGPU_SchedHintVariantAttr :
   TritonAMDGPU_I32EnumAttr<"SchedHintVariant", TritonAMDGPU_SchedHintsEnum>;
 
+def TritonAMDGPU_DotTile : TritonAMDGPU_Attr<"DotTile"> {
+  let cppNamespace = "::mlir::triton::amdgpu";
+  let mnemonic = "DotTile";
+  let summary = "Information regarding which dot tiles this op belongs to.";
+  let description = [{
+    The attribute is a way to describe which input argument of the target
+    operation (e.g., `tt.dot`) the result of a given operation belongs to.
+  }];
+
+  let parameters = (ins "unsigned":$m, "unsigned":$n, "unsigned":$k, "unsigned":$serial );
+  let assemblyFormat = "`<` $m `,` $n `,` $k `>` $serial";
+}
+
 #endif
