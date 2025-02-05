@@ -4,6 +4,15 @@
 #include "SchedInstructions.h"
 #include "TargetInfo.h"
 #include "Utility.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/TypeUtilities.h"
+#include "mlir/IR/ValueRange.h"
+#include "mlir/Transforms/DialectConversion.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
@@ -101,6 +110,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   }
   return mask;
 }
+
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(const AMD::TargetInfo &targetInfo,
@@ -281,9 +291,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     SmallVector<Value> loadedVals;
     Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
-      // TODO: optimization when ptr is GEP with constant offset
-      size_t in_off = 0;
-
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
       const size_t width = std::min(totalWidth, maxWordWidth);
@@ -297,19 +304,13 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
       // If we need to mask the loaded value with other elements
-      if (otherElems.size() != 0) {
-        Value v = undef(vecTy);
-        for (size_t s = 0; s < vec; ++s) {
-          Value otherElem = otherElems[vecStart + s];
-          Value indexVal = createIndexAttrConstant(
-              rewriter, loc, this->getTypeConverter()->getIndexType(), s);
-          v = insert_element(vecTy, v, otherElem, indexVal);
-        }
-        falseVal = v;
-      }
+      if (otherElems.size() != 0)
+        falseVal = packElementRangeIntoVector(
+            rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
+            otherElems, vecStart);
 
       Value loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal,
-                             cacheMod);
+                             ptrAlignmentBytes, cacheMod);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
@@ -431,6 +432,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                   ConversionPatternRewriter &rewriter) const override {
     Value ptr = op.getPtr();
     Value value = op.getValue();
+    Value mask = op.getMask();
 
     Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();
@@ -451,27 +453,20 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     auto valueElems = unpackLLElements(loc, llValue, rewriter);
     assert(ptrElems.size() == valueElems.size());
 
-    // Determine the vectorization size
-    SmallVector<Value> maskElems;
-    if (llMask) {
-      Value mask = op.getMask();
-      maskElems = unpackLLElements(loc, llMask, rewriter);
-      assert(valueElems.size() == maskElems.size());
+    SmallVector<Value> maskElems =
+        getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
-      unsigned maskAlign = getMaskAlignment(mask);
-      vec = std::min(vec, maskAlign);
-    }
-
-    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
-    const size_t dtsize =
-        std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
-    const size_t valueElemNBits = dtsize * 8;
+    const size_t valueElemNBits =
+        std::max<int>(8, valueElemTy.getIntOrFloatBitWidth());
+    const size_t valueElemNBytes = valueElemNBits / 8;
+    int64_t ptrAlignmentBytes = getPtrAlignment(ptr) * valueElemNBytes;
 
     auto cacheMod = op.getCache();
     const int numVecs = elemsPerThread / vec;
+    Value rDataMask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
-      // TODO: optimization when ptr is AddPtr with constant offset
-      size_t in_off = 0;
+      Value pred = mask ? and_(maskElems[vecStart], rDataMask) : rDataMask;
+      auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
 
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
@@ -480,33 +475,16 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       const size_t wordNElems = width / valueElemNBits;
       assert(wordNElems * nWords * numVecs == elemsPerThread);
 
-      // TODO(Superjomn) Add cache policy fields to StoreOp.
-      // TODO(Superjomn) Deal with cache policy here.
-
-      Type valArgTy = IntegerType::get(ctx, width);
-      auto wordTy = vec_ty(valueElemTy, wordNElems);
-
       SmallVector<std::pair<Value, std::string>> asmArgs;
-      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-        // llWord is a width-len composition
-        Value llWord = undef(wordTy);
-        // Insert each value element to the composition
-        for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
-          const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
-          assert(elemOffset < valueElems.size());
-          Value elem = valueElems[elemOffset];
-          if (elem.getType().isInteger(1))
-            elem = sext(i8_ty, elem);
-          elem = bitcast(elem, valueElemTy);
+      Value elem = valueElems[vecStart];
+      Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
 
-          llWord = insert_element(wordTy, llWord, elem, i32_val(elemIdx));
-        }
-        llWord = bitcast(llWord, valArgTy);
-        Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
-        auto address = ptrElems[vecStart + wordIdx * wordNElems];
-        llStore(rewriter, loc, address, llWord, maskVal, cacheMod);
-      }
-    }
+      // Create the store val
+      Value storeVal = packElementRangeIntoVector(
+          rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
+          valueElems, vecStart);
+      llStore(rewriter, loc, ptr, storeVal, pred, ptrAlignmentBytes, cacheMod);
+    } // end vec
     rewriter.eraseOp(op);
     return success();
   }
