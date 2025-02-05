@@ -412,9 +412,6 @@ def _fwd_grouped_persistent_kernel_stage1(
     mask_d = offs_d < Lk
     mask_dv = offs_dv < Lv
 
-   
-
-
     cur_head = cur_head_id * VALID_BLOCK_H + tl.arange(0, BLOCK_H)
     mask_h = cur_head < (cur_head_id + 1) * VALID_BLOCK_H
     mask_h = mask_h & (cur_head < q_head_num)
@@ -471,6 +468,11 @@ def _fwd_grouped_persistent_kernel_stage1(
                     other=0,
                 )
                 offs_buf_k = (kv_loc[None, :] * stride_buf_kbs + cur_kv_head * stride_buf_kh + offs_d[:, None])
+                
+                # WG1 normally from global, WG2 would load from shared
+                # Assumption: WG1 and WG2 would reside in the same CU
+                # Most likely what happens: WG1 and WG(304+1) are residin in the same CU
+                
                 k = tl.load(
                     K_Buffer + offs_buf_k,
                     mask=(offs_n[None, :] < split_kv_end) & (mask_d[:, None]),
