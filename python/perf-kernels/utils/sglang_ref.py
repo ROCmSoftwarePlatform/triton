@@ -393,14 +393,13 @@ def _fwd_grouped_persistent_kernel_stage1(
     num_splits_per_head = NUM_KV_SPLITS // NUM_SPLITS_PER_WG # the number of programs (splits) per single head
     num_splits_per_sample = num_splits_per_head * NUM_HEAD_GROUPS  # times the number of heads
 
-    pid = tl.program_id(0)
+    # number between 0, ..., NUM_PIDS_TOTAL= batch * heads / BLOCK_H * num_kv_splits / NUM_SPLITS_PER_WG
+    pid = tl.program_id(0) 
 
     cur_batch = pid // num_splits_per_sample
-
-    cur_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS # pids 0,1,2,3...127,128,129,130,131,... take heads 0,1,2,3...127,0,1,2,3,....
+    cur_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS 
     split_kv_id = pid % num_splits_per_sample // NUM_HEAD_GROUPS * NUM_SPLITS_PER_WG
     cur_kv_head = cur_head_id // tl.cdiv(kv_group_num, BLOCK_H)
-
 
     if BLOCK_H < kv_group_num:
         VALID_BLOCK_H: tl.constexpr = BLOCK_H
@@ -419,23 +418,21 @@ def _fwd_grouped_persistent_kernel_stage1(
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
     cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
 
+    # Load the q only once per NUM_SPLITS_PER_WG. This should reduce the number of q loads by a factor of NUM_SPLITS_PER_WG.
     offs_q = cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :]
     q = tl.load(Q + offs_q, mask=(mask_h[:, None]) & (mask_d[None, :]), other=0.0)
-
 
     while pid < NUM_PIDS_TOTAL:
 
         new_batch = pid // num_splits_per_sample
+        new_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS
 
-        # only do new tl.loads when must
-        if new_batch != cur_batch:
+        # only do new q loads when must, so either head group changes or batch changes
+        if new_batch != cur_batch or new_head_id != cur_head_id:
             cur_batch = new_batch
             cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
             cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
 
-        new_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS
-
-        if new_head_id != cur_head_id:
             cur_head_id = new_head_id 
             cur_head = cur_head_id * VALID_BLOCK_H + tl.arange(0, BLOCK_H)
             mask_h = cur_head < (cur_head_id + 1) * VALID_BLOCK_H
@@ -443,7 +440,6 @@ def _fwd_grouped_persistent_kernel_stage1(
 
             offs_q = cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :]
             q = tl.load(Q + offs_q, mask=(mask_h[:, None]) & (mask_d[None, :]), other=0.0)
-
         
         if BLOCK_DPE > 0:
             offs_dpe = BLOCK_DMODEL + tl.arange(0, BLOCK_DPE)
