@@ -21,6 +21,7 @@ It supports page size = 1.
 # https://github.com/ModelTC/lightllm/blob/96353e868a840db4d103138caf15ed9dbea8c186/lightllm/models/deepseek2/triton_kernel/gqa_flash_decoding_stage2.py
 
 import logging
+import time
 
 import triton
 import triton.language as tl
@@ -233,6 +234,296 @@ def _fwd_fused_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r
             Att_Out + offs_mid_o_1,
             e_max + tl.log(e_sum),
         )
+
+
+
+@triton.jit
+def _fwd_persistent_kernel_stage1(Q_NOPE, Q_PE,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
+                    K_Buffer,  # Holds [KV; K_PE], b*s x (c+r)
+                    W_KC,  # c x h x d
+                    cos_sin_cache, # max_seq_len x (rotary_dim * 2)
+                    positions, # sequence positions
+                    sm_scale, Req_to_tokens, B_req_idx, B_Seqlen,
+                    Att_Out, # b x h x NUM_KV_SPLITS x (kv_lora_rank + 1)
+                    stride_req_to_tokens_b,
+                    stride_q_nope_b, stride_q_nope_h, stride_q_pe_b, stride_q_pe_h, stride_buf_kbs, stride_mid_ob, stride_mid_oh,
+                    stride_mid_os, stride_w_kc_h, stride_w_kc_d, stride_w_kc_c,
+                    stride_cos_sin_cache_s,
+                    stride_positions_b,
+                    Q_descale, W_KC_descale,
+                    rotary_dim: tl.constexpr,
+                    kv_lora_rank: tl.constexpr,
+                    qk_nope_head_dim: tl.constexpr, qk_rope_head_dim: tl.constexpr, kv_group_num: tl.constexpr,
+                    BLOCK_D: tl.constexpr, BLOCK_C: tl.constexpr, BLOCK_R: tl.constexpr, BLOCK_N: tl.constexpr,
+                    NUM_KV_SPLITS: tl.constexpr, logit_cap: tl.constexpr, ROPE_FUSED: tl.constexpr, USE_FP8: tl.constexpr,
+                    NUM_CU: tl.constexpr, GRID_CU_MULTIP: tl.constexpr, NUM_HEADS: tl.constexpr, NUM_SPLITS_PER_WG: tl.constexpr,
+                    NUM_PIDS_TOTAL: tl.constexpr):
+
+
+    
+    offs_d = tl.arange(0, BLOCK_D)
+    offs_c = tl.arange(0, BLOCK_C)
+    offs_q_r = tl.arange(0, BLOCK_R)  # to get the q_pe
+    offs_k_r = tl.arange(kv_lora_rank, kv_lora_rank + BLOCK_R)  # to get the k_pe
+    # For tl.dot to meet dim requirement
+    offs_i = tl.arange(0, 16)
+
+    mask_q_r = offs_q_r < qk_rope_head_dim
+    mask_c = offs_c < kv_lora_rank
+    mask_k_r = offs_k_r < kv_lora_rank + qk_rope_head_dim
+    mask_d = offs_d < qk_nope_head_dim
+
+    NUM_WG = NUM_CU * GRID_CU_MULTIP  # number of workgroups launched
+    num_splits_per_head = NUM_KV_SPLITS # the number of work units (tiles) of a single head
+    num_splits_per_sample = num_splits_per_head * NUM_HEADS  # times the number of heads
+    # num_splits_total = num_splits_per_sample * B  # times the number of samples
+
+    pid = tl.program_id(0) # batch * heads * splits
+
+    # previously
+
+    # cur_batch = tl.program_id(0)
+    # cur_head = tl.program_id(1)
+    # split_kv_id = tl.program_id(2)
+
+    # What do we want: single pid handles #num_splits (out of num_kv_splits) of a single head (out of total num heads)
+    
+    # what we want is that consecutive pids (like 0,1,2,3....) would process the same batch sample
+    # be at the consecutive heads
+    # But one pid should stay on the same head for NUM_SPLITS_PER_WG number of loops to benefit of w_kc loading
+    
+    cur_head = pid % NUM_HEADS # pids 0,1,2,3...127,128,129,130,131,... take heads 0,1,2,3...127,0,1,2,3,....
+    split_kv_id = pid // NUM_HEADS * NUM_SPLITS_PER_WG
+
+    w_kc_offset = W_KC + cur_head * stride_w_kc_h
+    w_kc_ptrs = w_kc_offset + offs_d[:, None] * stride_w_kc_d + offs_c[None, :] * stride_w_kc_c
+    mask_w_kc = (offs_d[:, None] < qk_nope_head_dim) & (mask_c[None, :])
+
+    w_kc = tl.load(w_kc_ptrs, mask=mask_w_kc, other=0.0)
+
+    while pid < NUM_PIDS_TOTAL:
+
+        cur_batch = pid // num_splits_per_sample
+        new_head = pid % NUM_HEADS
+
+        # load new set of weights only if moving to new head
+        if cur_head != new_head:
+            cur_head = new_head
+            w_kc_offset = W_KC + cur_head * stride_w_kc_h
+            w_kc_ptrs = w_kc_offset + offs_d[:, None] * stride_w_kc_d + offs_c[None, :] * stride_w_kc_c
+            mask_w_kc = (offs_d[:, None] < qk_nope_head_dim) & (mask_c[None, :])
+            w_kc = tl.load(w_kc_ptrs, mask=mask_w_kc, other=0.0)
+
+        cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
+        cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
+
+        if USE_FP8:
+            off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d[None, :] + offs_i[:, None]
+            q = tl.load(Q_NOPE + off_q, mask=(mask_d[None, :] & (offs_i[:, None] < 1)), other=0.0)
+        else:
+            off_q = cur_batch * stride_q_nope_b + cur_head * stride_q_nope_h + offs_d
+            q = tl.load(Q_NOPE + off_q, mask=mask_d, other=0.0)
+
+        off_q_pe = cur_batch * stride_q_pe_b + cur_head * stride_q_pe_h + offs_q_r
+    
+
+        q_pe = tl.load(Q_PE + off_q_pe, mask=mask_q_r, other=0.0)
+
+        if USE_FP8:
+            q = tl.dot(q, w_kc)
+            # tl.where(offs_i[:, None] < 1, q, 0.0)
+            q = tl.sum(q, 0)
+        else:
+            # this doesn't work with fp8
+            q = tl.sum(q[:, None] * w_kc, 0)  # 1 x c
+
+        if USE_FP8:
+            q *= Q_descale
+            q *= W_KC_descale
+            q = q.to(K_Buffer.type.element_ty)
+
+        kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
+        split_kv_start = kv_len_per_split * split_kv_id
+        split_kv_end = tl.minimum(split_kv_start + kv_len_per_split, cur_batch_seq_len)
+
+        # apply rotary embedding for q_pe, and k_pe (last token per batch of K_PE)
+        LAST_SPLIT = split_kv_end == cur_batch_seq_len
+        last_token_pe_sum = tl.zeros([1], dtype=q_pe.dtype)
+
+        if ROPE_FUSED:
+            offs_rotary = tl.arange(0, rotary_dim//2)
+            pos = tl.load(positions + cur_batch * stride_positions_b)
+
+            cos = tl.load(cos_sin_cache + pos * stride_cos_sin_cache_s + offs_rotary)
+            sin = tl.load(cos_sin_cache + pos * stride_cos_sin_cache_s + offs_rotary + rotary_dim)
+            # neox style
+            cos = tl.join(cos, cos).reshape(qk_rope_head_dim)
+            sin = tl.join(sin, sin).reshape(qk_rope_head_dim)
+
+            q_pe_1, q_pe_2 = q_pe.reshape(qk_rope_head_dim//2, 2).split()
+            q_pe_rot = tl.join(-q_pe_2, q_pe_1).reshape(qk_rope_head_dim)
+            q_pe = q_pe * cos + q_pe_rot * sin
+
+            # we only apply to the last token in the K_PE
+            if LAST_SPLIT:
+                # debug assert
+                if (cur_batch==0 and cur_head==0) and split_kv_id < NUM_KV_SPLITS - 1:
+                        tl.device_assert(False, "Only last split should compute k_pe")
+
+                kv_loc = tl.load(
+                    Req_to_tokens + stride_req_to_tokens_b * cur_batch_req_idx + cur_batch_seq_len - 1
+                )
+                offs_buf_k_pe = kv_loc * stride_buf_kbs + offs_k_r[None, :]
+                k_pe = tl.load(K_Buffer + offs_buf_k_pe)
+                k_pe_1, k_pe_2 = k_pe.reshape(qk_rope_head_dim//2, 2).split()
+                k_pe_rot = tl.join(-k_pe_2, k_pe_1).reshape(qk_rope_head_dim)
+                k_pe = k_pe * cos + k_pe_rot * sin
+                # TODO: we need to save in the cache the rope'd k_pe token
+                # tl.store(K_Buffer + offs_buf_k_pe, k_pe)
+                last_token_pe_sum = tl.sum(q_pe[None, :] * k_pe, 1)
+
+
+        e_max = -float("inf")
+        e_sum = 0.0
+        acc = tl.zeros([BLOCK_C], dtype=tl.float32)
+
+        if split_kv_end > split_kv_start:
+            for start_n in range(split_kv_start, split_kv_end, BLOCK_N):
+                offs_n = start_n + tl.arange(0, BLOCK_N)
+                kv_loc = tl.load(
+                    Req_to_tokens + stride_req_to_tokens_b * cur_batch_req_idx + offs_n,
+                    mask=offs_n < split_kv_end,
+                    other=0,
+                )
+                offs_buf_kv = (kv_loc[:, None] * stride_buf_kbs + offs_c[None, :])
+                offs_buf_k_pe = (kv_loc[:, None] * stride_buf_kbs + offs_k_r[None, :])
+
+                # The hope is that different workgroups would arrive here approximately the same time and theyd all be processing the same kv
+                # and could hence load it once to shared memory per CU and other workgroups concurrently running could load it from the CU's shared memory
+                
+                kv = tl.load(
+                    K_Buffer + offs_buf_kv,
+                    mask=(offs_n[:, None] < split_kv_end) & (mask_c[None, :]),
+                    other=0.0,
+                )  # the shared latent tensor for keys and values
+
+                k_pe = tl.load(
+                    K_Buffer + offs_buf_k_pe,
+                    mask=(offs_n[:, None] < split_kv_end) & (mask_k_r[None, :]),
+                    other=0.0,
+                ) # positional embedding part of keys
+
+                # dot product of pe parts
+                qk = tl.sum(q_pe[None, :] * k_pe, 1)  # ((1 x r) * (BLOCK_N x r)).sum(1) = (BLOCK_N)
+
+                if ROPE_FUSED and LAST_SPLIT:
+                    qk = tl.where(offs_n < split_kv_end - 1, qk, last_token_pe_sum.to(qk.type.element_ty))
+
+                # dot product of nope parts
+                qk += tl.sum(q[None, :] * kv, 1)  # ((1 x c) * (BLOCK_N x c)).sum(1) = (BLOCK_N)
+
+                qk *= sm_scale
+
+                if logit_cap > 0:
+                    qk = logit_cap * tanh(qk / logit_cap)
+
+                qk = tl.where(offs_n < split_kv_end, qk, float("-inf"))
+
+                n_e_max = tl.maximum(tl.max(qk, 0), e_max)
+                re_scale = tl.exp(e_max - n_e_max)
+                p = tl.exp(qk - n_e_max)
+                acc *= re_scale
+                acc += tl.sum(p[:, None] * kv, 0)  # ((BLOCK_N x 1) * (BLOCK_N x c)).sum(0) = 1 x c
+
+                e_sum = e_sum * re_scale + tl.sum(p, 0)
+                e_max = n_e_max
+
+            # acc: 1 x c
+
+            offs_mid_o = (cur_batch * stride_mid_ob + cur_head * stride_mid_oh + split_kv_id * stride_mid_os + offs_c)
+
+            tl.store(
+                Att_Out + offs_mid_o,
+                acc / e_sum,
+                mask=(mask_c),
+            )
+
+            offs_mid_o_1 = (cur_batch * stride_mid_ob + cur_head * stride_mid_oh + split_kv_id * stride_mid_os +
+                            kv_lora_rank)
+
+            tl.store(
+                Att_Out + offs_mid_o_1,
+                e_max + tl.log(e_sum),
+            )
+
+        split_kv_id += 1
+        
+        if (split_kv_id % NUM_KV_SPLITS) == 0:
+            pid += NUM_WG
+            split_kv_id = pid // NUM_HEADS * NUM_SPLITS_PER_WG
+
+
+def _decode_att_m_fwd_persistent(
+    q_nope,
+    q_rope,
+    kv_cache,
+    att_out,
+    w_kc,
+    cos_sin_cache, positions, rotary_dim,
+    q_descale, # scalar value
+    w_kc_descale, # scalar value
+    Req_to_tokens,
+    B_req_idx,
+    B_Seqlen,
+    num_kv_splits,
+    sm_scale,
+    logit_cap,
+    fuse_rope,
+    USE_FP8
+):
+    BLOCK = 16
+    NUM_KV_SPLITS = num_kv_splits
+
+    batch, head_num = B_req_idx.shape[0], q_nope.shape[1]
+
+    # grid = (batch * head_num * NUM_KV_SPLITS)
+
+    NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count
+    GRID_CU_MULTIP = 4
+
+    # NUM_WGs = NUM_CU * GRID_CU_MULTIP
+
+    NUM_SPLITS_PER_WG = 4
+
+    NUM_PIDS_TOTAL = batch * head_num * NUM_KV_SPLITS // NUM_SPLITS_PER_WG
+
+    # if metadata.persistent is not None:
+    grid = (min(NUM_CU * GRID_CU_MULTIP,
+                                NUM_PIDS_TOTAL), )
+
+    kv_group_num = 1
+
+    num_warps = 8
+
+    kv_lora_rank = w_kc.shape[-1]
+    qk_nope_head_dim = w_kc.shape[1]
+    qk_rope_head_dim = kv_cache.shape[-1] - kv_lora_rank
+
+    num_heads = q_nope.shape[1]
+
+    BLOCK_D = triton.next_power_of_2(qk_nope_head_dim)
+    BLOCK_C = triton.next_power_of_2(kv_lora_rank)
+    BLOCK_R = triton.next_power_of_2(qk_rope_head_dim)
+
+
+    _fwd_persistent_kernel_stage1[grid](q_nope, q_rope, kv_cache, w_kc, cos_sin_cache, positions, sm_scale, Req_to_tokens, B_req_idx, B_Seqlen, att_out,
+                             Req_to_tokens.stride(0), q_nope.stride(0), q_nope.stride(1), q_rope.stride(0), q_rope.stride(1), kv_cache.stride(0), att_out.stride(0),
+                             att_out.stride(1), att_out.stride(2), w_kc.stride(0), w_kc.stride(1), w_kc.stride(2),
+                             cos_sin_cache.stride(0), positions.stride(0),
+                             q_descale, w_kc_descale, rotary_dim, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, kv_group_num=kv_group_num,
+                             BLOCK_D=BLOCK_D, BLOCK_C=BLOCK_C, BLOCK_R=BLOCK_R, BLOCK_N=BLOCK,
+                             NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, USE_FP8=USE_FP8, num_warps=num_warps, num_stages=1, waves_per_eu=1, ROPE_FUSED=fuse_rope,
+                             NUM_CU=NUM_CU, GRID_CU_MULTIP=GRID_CU_MULTIP, NUM_HEADS=num_heads, NUM_SPLITS_PER_WG=NUM_SPLITS_PER_WG, NUM_PIDS_TOTAL=NUM_PIDS_TOTAL)
 
 
 def _decode_att_m_fwd(
@@ -472,21 +763,27 @@ def decode_attention_fwd_normal(
     q_nope, q_nope_descale, w_kc, w_kc_descale, w_vc, w_vc_descale = quantize_input_fp8(q_nope, w_kc, w_vc, use_fp8)
 
 
-    _decode_att_m_fwd(q_nope, q_rope, kv_cache, attn_logits, w_kc, cos_sin_cache, positions, rotary_dim, q_nope_descale, w_kc_descale, req_to_token, b_req_idx, b_seq_len, num_kv_splits, sm_scale,
+    _decode_att_m_fwd_persistent(q_nope, q_rope, kv_cache, attn_logits, w_kc, cos_sin_cache, positions, rotary_dim, q_nope_descale, w_kc_descale, req_to_token, b_req_idx, b_seq_len, num_kv_splits, sm_scale,
                       logit_cap, fuse_rope, use_fp8)
 
     _decode_softmax_reducev_fwd(attn_logits, w_vc, q, o, w_vc_descale, v_head_dim, b_seq_len, num_kv_splits, use_fp8)
 
 
-def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap):
-    from utils.sglang_ref import decode_attention_fwd_normal as decode_attention_fwd_normal_ref
+def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, persistent=False):
+    
+    if persistent:
+        from utils.sglang_ref import decode_attention_fwd_grouped_persistent as decode_attention_fwd_ref
+    else:
+        from utils.sglang_ref import decode_attention_fwd_grouped as decode_attention_fwd_ref
+
+    
     B, H = q_input.shape[0], q_input.shape[1]
     kv_lora_rank = v_input.shape[-1]
     device = q_input.device
 
     o = torch.empty((*q_input.shape[:-1], v_input.shape[-1]), dtype=q_input.dtype, device=q_input.device)
     attn_logits = torch.empty(B, H, num_kv_splits, kv_lora_rank + 1, dtype=q_input.dtype, device=device)
-    decode_attention_fwd_normal_ref(q_input, k_input, v_input, o, Req_to_tokens, B_req_idx, B_Seqlen, attn_logits,
+    decode_attention_fwd_ref(q_input, k_input, v_input, o, Req_to_tokens, B_req_idx, B_Seqlen, attn_logits,
                                     num_kv_splits, sm_scale, logit_cap)
     return o, attn_logits
 
@@ -543,12 +840,12 @@ def quantize_input_fp8(q, w_kc, w_vc, use_fp8):
     return q, q_descale, w_kc, w_kc_descale, w_vc, w_vc_descale
 
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim', [
-    (8, 128, 2048, 512, 128, 64),
+    (2, 128, 2048, 512, 128, 64),
 ])
 @pytest.mark.parametrize('fuse_rope', [False])
-@pytest.mark.parametrize('use_fp8', [False, True])
-@pytest.mark.parametrize('dtype', [torch.float16, torch.float32])
-def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_rope, use_fp8, dtype, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0,
+@pytest.mark.parametrize('use_fp8', [False])
+@pytest.mark.parametrize('dtype', [torch.float32])
+def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_rope, use_fp8, dtype, num_kv_splits=32, sm_scale=1.0, logit_cap=0.0,
                 device="cuda"):
     torch.manual_seed(0)
 
@@ -556,33 +853,36 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_
     Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc, rotary_dim, rotary_emb, positions = input_helper(
         B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device)
 
-    # Initialize additional parameters
 
-    decode_attention_fwd_normal(
-                    q,
-                    kv_cache,
-                    w_kc,
-                    w_vc,
-                    rotary_emb.cos_sin_cache,
-                    positions,
-                    rotary_dim,
-                    D,
-                    att_out,
-                    Req_to_tokens,
-                    B_req_idx,
-                    B_Seqlen,
-                    attn_logits,
-                    num_kv_splits,
-                    sm_scale,
-                    logit_cap=0.0,
-                    fuse_rope=fuse_rope,
-                    use_fp8=use_fp8
-                )
+    # decode_attention_fwd_normal(
+    #                 q,
+    #                 kv_cache,
+    #                 w_kc,
+    #                 w_vc,
+    #                 rotary_emb.cos_sin_cache,
+    #                 positions,
+    #                 rotary_dim,
+    #                 D,
+    #                 att_out,
+    #                 Req_to_tokens,
+    #                 B_req_idx,
+    #                 B_Seqlen,
+    #                 attn_logits,
+    #                 num_kv_splits,
+    #                 sm_scale,
+    #                 logit_cap=0.0,
+    #                 fuse_rope=fuse_rope,
+    #                 use_fp8=use_fp8
+    #             )
 
-    tri_output, tri_logits = att_out, attn_logits  # .flatten(1,2)
+
+    k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
+
+    tri_output, tri_logits = ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+                                  logit_cap, rotary_emb, positions,  rope_fused=fuse_rope, use_fp8=use_fp8, device="cuda", persistent=True)
 
     # reference
-    k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
+    
     ref_output, ref_logits = ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
                                   logit_cap, rotary_emb, positions,  rope_fused=fuse_rope, use_fp8=use_fp8, device="cuda")
 
@@ -607,7 +907,7 @@ def ref_preprocess(kv_cache, kv_lora_rank):
     return k_input, v_input
 
 def ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, rotary_emb, positions, rope_fused=False, use_fp8=False,
-             device="cuda"):
+             device="cuda", persistent=False):
 
     B, H = q.shape[0], q.shape[1]
     S = B_Seqlen[0].item()
@@ -618,6 +918,9 @@ def ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seq
     q_input = torch.empty(B, H, kv_lora_rank + qk_rope_head_dim, dtype=q.dtype).to(device)
     q_nope, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
     q_nope, q_nope_descale, w_kc, w_kc_descale, w_vc, w_vc_descale = quantize_input_fp8(q_nope, w_kc, w_vc, use_fp8)
+    
+    # torch.cuda.synchronize()
+    # start_t = time.time()
 
     if use_fp8:
         q_nope_out = torch.bmm(q_nope.transpose(0, 1).float(), w_kc.float())
@@ -638,7 +941,7 @@ def ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seq
     q_input[..., kv_lora_rank:] = q_pe
 
     attn_output, attn_logits_ref = attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen,
-                                            num_kv_splits, sm_scale, logit_cap)
+                                            num_kv_splits, sm_scale, logit_cap, persistent=persistent)
 
     attn_output = attn_output.view(-1, H, kv_lora_rank)
 
@@ -652,6 +955,11 @@ def ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seq
     else:
         attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
 
+    
+    # torch.cuda.synchronize()
+    # print(f"time for ref {time.time() - start_t}")
+
+
     ref_output = attn_bmm_output.transpose(0, 1)  #  # .flatten(1, 2)
 
     return ref_output, attn_logits_ref
@@ -664,9 +972,9 @@ def benchmark(args):
     configs = []
 
 
-    x_vals_list = [(1, 128, 2048, 512, 128, 64, 8)]
+    x_vals_list = [(1, 128, 8192, 512, 128, 64, 32)]
     x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
-    line_vals = ["ref", "fused"]
+    line_vals = ["ref", "persistent"]
     plot_name = "MLA-decode"
 
     configs.append(
@@ -685,29 +993,34 @@ def benchmark(args):
         Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc, rotary_dim, rotary_emb, positions = input_helper(
             B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device)
 
-        if "fused" in provider:
-            fn = lambda: {
-                decode_attention_fwd_normal(
-                    q,
-                    kv_cache,
-                    w_kc,
-                    w_vc,
-                    rotary_emb.cos_sin_cache,
-                    positions,
-                    rotary_dim,
-                    D,
-                    att_out,
-                    Req_to_tokens,
-                    B_req_idx,
-                    B_Seqlen,
-                    attn_logits,
-                    num_kv_splits,
-                    sm_scale,
-                    logit_cap=0.0,
-                    fuse_rope=fuse_rope,
-                    use_fp8=fp8_gemm
-                )
-            }
+        # if "fused" in provider:
+        #     fn = lambda: {
+        #         decode_attention_fwd_normal(
+        #             q,
+        #             kv_cache,
+        #             w_kc,
+        #             w_vc,
+        #             rotary_emb.cos_sin_cache,
+        #             positions,
+        #             rotary_dim,
+        #             D,
+        #             att_out,
+        #             Req_to_tokens,
+        #             B_req_idx,
+        #             B_Seqlen,
+        #             attn_logits,
+        #             num_kv_splits,
+        #             sm_scale,
+        #             logit_cap=0.0,
+        #             fuse_rope=fuse_rope,
+        #             use_fp8=fp8_gemm
+        #         )
+        #     }
+
+        if "persistent" in provider:
+            k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
+            fn = lambda: ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+                                  logit_cap, rotary_emb, positions, rope_fused=fuse_rope, use_fp8=fp8_gemm, device="cuda", persistent=True)
 
         if "ref" in provider:
             k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)

@@ -1,0 +1,2 @@
+B,H,S,kv_lora_rank,qk_nope_head_dim,qk_rope_head_dim,num_kv_splits,ref,fused
+1.000000,128.000000,2048.000000,512.000000,128.000000,64.000000,16.000000,0.526770,0.256926
