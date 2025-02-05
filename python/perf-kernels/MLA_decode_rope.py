@@ -87,18 +87,17 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
     offs_c = tl.arange(0, BLOCK_C)
     offs_qk_r = tl.arange(kv_lora_rank, kv_lora_rank + BLOCK_R)  # to get the k_pe
 
-    # q_pe = tl.zeros([BLOCK_H, BLOCK_R], dtype=tl.float32)
-    # # [BLOCK_R // 2]
-    # offs_r = tl.arange(0, BLOCK_R) - (BLOCK_R // 2) % BLOCK_R
-    # offs_q_r1 =  kv_lora_rank + tl.arange(0, BLOCK_R // 2)
-    # offs_q_r2 =  kv_lora_rank + tl.arange(BLOCK_R // 2, BLOCK_R)
+    # # [BLOCK_R // 2, BLOCK_R // 2 + 1, BLOCK_R // 2 + 2, ..., 0, 1, 2, ..., BLOCK_R // 2 - 1]
+    offs_qk_rot_r = kv_lora_rank + ((tl.arange(0, BLOCK_R) - (BLOCK_R // 2)) % BLOCK_R)
 
     # mask = [-1, 1]
     # q_pe = q_pe * mask
 
+    off_q_pe_rot = (cur_batch * stride_qb + cur_head[:, None] * stride_qh + offs_qk_rot_r[None, :])
     off_q_pe = (cur_batch * stride_qb + cur_head[:, None] * stride_qh + offs_qk_r[None, :])
     mask_c = offs_c < kv_lora_rank
     mask_qk_r = offs_qk_r < kv_lora_rank + qk_rope_head_dim
+    mask_qk_rot_r = offs_qk_rot_r < kv_lora_rank + qk_rope_head_dim
 
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
     cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
@@ -108,6 +107,8 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
 
     # 0, 2, 4,.... 1, 3, 5...
     q_pe = tl.load(Q + off_q_pe, mask=(mask_h[:, None]) & (mask_qk_r[None, :]), other=0.0)
+    q_pe_rot = tl.load(Q + off_q_pe_rot, mask=(mask_h[:, None]) & (mask_qk_rot_r[None, :]), other=0.0)
+    q_pe_rot = tl.where((offs_qk_r < (kv_lora_rank + BLOCK_R // 2))[None, :], -q_pe_rot, q_pe_rot)
 
     kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
     split_kv_start = kv_len_per_split * split_kv_id
@@ -115,38 +116,39 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
 
     # apply rotary embedding for q_pe, and k_pe (last token per batch of K_PE)
     LAST_SPLIT = split_kv_end == cur_batch_seq_len
-    last_token_pe_sum = tl.zeros([BLOCK_H, 1], dtype=q_pe.dtype)
+    last_token_pe_sum = tl.zeros([BLOCK_H], dtype=q_pe.dtype)
 
-    offs_rotary = tl.arange(0, rotary_dim//2)
+    # [0 , 1, 2, ..., rotary_dim // 2, 0 , 1, 2, ..., rotary_dim // 2]
+    offs_rotary = tl.arange(0, rotary_dim) % (rotary_dim // 2)
     pos = tl.load(positions + cur_batch * stride_positions_b)
 
     cos = tl.load(cos_sin_cache + pos * stride_cos_sin_cache_s + offs_rotary)
-    sin = tl.load(cos_sin_cache + pos * stride_cos_sin_cache_s + offs_rotary + rotary_dim)
-    # neox style
-    cos = tl.join(cos, cos).reshape(qk_rope_head_dim)
-    sin = tl.join(sin, sin).reshape(qk_rope_head_dim)
+    sin = tl.load(cos_sin_cache + pos * stride_cos_sin_cache_s + offs_rotary + rotary_dim // 2)
 
-    q_pe_1, q_pe_2 = q_pe.reshape(qk_rope_head_dim//2, 2).split()
-    q_pe_rot = tl.join(-q_pe_2, q_pe_1).reshape(qk_rope_head_dim)
     q_pe = q_pe * cos + q_pe_rot * sin
 
     # we only apply to the last token in the K_PE
-    # if LAST_SPLIT:
-    #     # debug assert
-    #     if (cur_batch==0 and cur_head==0) and split_kv_id < NUM_KV_SPLITS - 1:
-    #             tl.device_assert(False, "Only last split should compute k_pe")
+    if LAST_SPLIT:
+        # debug assert
+        if (cur_batch==0 and cur_head==0) and split_kv_id < NUM_KV_SPLITS - 1:
+                tl.device_assert(False, "Only last split should compute k_pe")
 
-    #     kv_loc = tl.load(
-    #         Req_to_tokens + stride_req_to_tokens_b * cur_batch_req_idx + cur_batch_seq_len - 1
-    #     )
-    #     offs_buf_k_pe = kv_loc * stride_buf_kbs + offs_k_r[None, :]
-    #     k_pe = tl.load(K_Buffer + offs_buf_k_pe)
-    #     k_pe_1, k_pe_2 = k_pe.reshape(qk_rope_head_dim//2, 2).split()
-    #     k_pe_rot = tl.join(-k_pe_2, k_pe_1).reshape(qk_rope_head_dim)
-    #     k_pe = k_pe * cos + k_pe_rot * sin
-    #     # TODO: we need to save in the cache the rope'd k_pe token
-    #     # tl.store(K_Buffer + offs_buf_k_pe, k_pe)
-    #     last_token_pe_sum = tl.sum(q_pe[None, :] * k_pe, 1)
+        kv_loc = tl.load(
+            Req_to_tokens + stride_req_to_tokens_b * cur_batch_req_idx + cur_batch_seq_len - 1
+        )
+        offs_buf_k_pe = kv_loc * stride_buf_kbs + offs_qk_r[None, :]
+        offs_buf_k_pe_rot = kv_loc * stride_buf_kbs + offs_qk_rot_r[None, :]
+        k_pe = tl.load(K_Buffer + offs_buf_k_pe)
+
+        k_pe_rot = tl.load(K_Buffer + offs_buf_k_pe_rot)
+        k_pe_rot = tl.where((offs_qk_r < (kv_lora_rank + BLOCK_R // 2))[None, :], -k_pe_rot, k_pe_rot)
+
+        k_pe = k_pe * cos + k_pe_rot * sin
+        # TODO: we need to save in the cache the rope'd k_pe token
+        # tl.store(K_Buffer + offs_buf_k_pe, k_pe)
+        # tl.static_print("", q_pe)
+        # tl.static_print("", k_pe)
+        last_token_pe_sum = tl.sum(q_pe * k_pe, 1).to(q_pe.dtype)
 
 
     e_max = tl.zeros([BLOCK_H], dtype=tl.float32) - float("inf")
@@ -180,8 +182,8 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
             # dot product of rope parts
             qk = tl.dot(q_pe, k_pe.to(q_pe.dtype))
 
-            # if LAST_SPLIT:
-            #     qk = tl.where(offs_n[None, :] < split_kv_end - 1, qk, last_token_pe_sum.to(qk.type.element_ty))
+            if LAST_SPLIT:
+                qk = tl.where(offs_n[None, :] < split_kv_end - 1, qk, last_token_pe_sum.to(qk.type.element_ty))
 
             # (16, 512) x (512, 32)
             # dot product of nope parts

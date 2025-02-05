@@ -284,6 +284,7 @@ class DeepseekScalingRotaryEmbedding(RotaryEmbedding):
         cos_sin = self.cos_sin_cache[
             torch.add(positions, offsets) if offsets is not None else positions
         ]
+        # (max_seq, 64). 32 sin, 32 cos
         cos, sin = cos_sin.chunk(2, dim=-1)
         if self.is_neox_style:
             # NOTE(woosuk): Here we assume that the positions tensor has the
