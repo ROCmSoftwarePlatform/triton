@@ -86,18 +86,15 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
 
     offs_c = tl.arange(0, BLOCK_C)
     offs_qk_r = tl.arange(kv_lora_rank, kv_lora_rank + BLOCK_R)  # to get the k_pe
-
     # # [BLOCK_R // 2, BLOCK_R // 2 + 1, BLOCK_R // 2 + 2, ..., 0, 1, 2, ..., BLOCK_R // 2 - 1]
     offs_qk_rot_r = kv_lora_rank + ((tl.arange(0, BLOCK_R) - (BLOCK_R // 2)) % BLOCK_R)
-
-    # mask = [-1, 1]
-    # q_pe = q_pe * mask
 
     off_q_pe_rot = (cur_batch * stride_qb + cur_head[:, None] * stride_qh + offs_qk_rot_r[None, :])
     off_q_pe = (cur_batch * stride_qb + cur_head[:, None] * stride_qh + offs_qk_r[None, :])
     mask_c = offs_c < kv_lora_rank
-    mask_qk_r = offs_qk_r < kv_lora_rank + qk_rope_head_dim
-    mask_qk_rot_r = offs_qk_rot_r < kv_lora_rank + qk_rope_head_dim
+    mask_qk_r = offs_qk_r < (kv_lora_rank + qk_rope_head_dim)
+    # TODO check if qk_rope_head_dim != BLOCK_R
+    mask_qk_rot_r = offs_qk_rot_r < (kv_lora_rank + qk_rope_head_dim)
 
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
     cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
@@ -108,14 +105,14 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
     # 0, 2, 4,.... 1, 3, 5...
     q_pe = tl.load(Q + off_q_pe, mask=(mask_h[:, None]) & (mask_qk_r[None, :]), other=0.0)
     q_pe_rot = tl.load(Q + off_q_pe_rot, mask=(mask_h[:, None]) & (mask_qk_rot_r[None, :]), other=0.0)
-    q_pe_rot = tl.where((offs_qk_r < (kv_lora_rank + BLOCK_R // 2))[None, :], -q_pe_rot, q_pe_rot)
+    q_pe_rot = tl.where((offs_qk_r < (kv_lora_rank + (BLOCK_R // 2)))[None, :], -q_pe_rot, q_pe_rot)
 
     kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
     split_kv_start = kv_len_per_split * split_kv_id
     split_kv_end = tl.minimum(split_kv_start + kv_len_per_split, cur_batch_seq_len)
 
     # apply rotary embedding for q_pe, and k_pe (last token per batch of K_PE)
-    LAST_SPLIT = split_kv_end == cur_batch_seq_len
+    LAST_SPLIT = (split_kv_end == cur_batch_seq_len)
     last_token_pe_sum = tl.zeros([BLOCK_H], dtype=q_pe.dtype)
 
     # [0 , 1, 2, ..., rotary_dim // 2, 0 , 1, 2, ..., rotary_dim // 2]
@@ -146,8 +143,6 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
         k_pe = k_pe * cos + k_pe_rot * sin
         # TODO: we need to save in the cache the rope'd k_pe token
         # tl.store(K_Buffer + offs_buf_k_pe, k_pe)
-        # tl.static_print("", q_pe)
-        # tl.static_print("", k_pe)
         last_token_pe_sum = tl.sum(q_pe * k_pe, 1).to(q_pe.dtype)
 
 
@@ -183,7 +178,7 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
             qk = tl.dot(q_pe, k_pe.to(q_pe.dtype))
 
             if LAST_SPLIT:
-                qk = tl.where(offs_n[None, :] < split_kv_end - 1, qk, last_token_pe_sum.to(qk.type.element_ty))
+                qk = tl.where(offs_n[None, :] < (split_kv_end - 1), qk, last_token_pe_sum.to(qk.type.element_ty))
 
             # (16, 512) x (512, 32)
             # dot product of nope parts
@@ -249,7 +244,7 @@ def _decode_att_m_fwd(
     BLOCK_R = triton.next_power_of_2(qk_rope_head_dim)
 
     # [TODO] work around shmem limit on MI3xx
-    if is_hip_ and kv_lora_rank + qk_rope_head_dim >= 576:
+    if is_hip_ and (kv_lora_rank + qk_rope_head_dim) >= 576:
         BLOCK = 16
 
     BLOCK_H = 16
@@ -414,11 +409,23 @@ def ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_S
     q_input = torch.empty(B, H, kv_lora_rank + qk_rope_head_dim, dtype=q.dtype).to(device)
     q_nope_out, q_pe = q.split([kv_lora_rank, qk_rope_head_dim], dim=-1)
 
+    # start = torch.cuda.Event(enable_timing=True)
+    # end = torch.cuda.Event(enable_timing=True)
+
+    # torch.cuda.synchronize()
+
+    # start.record()
     # ROPE
     k_pe_t = k_input.view(B,1,S,-1)[:,:,-1:,kv_lora_rank:]
     q_pe, k_pe_t = rotary_emb(positions, q_pe.unsqueeze(2), k_pe_t)
     q_pe = q_pe.squeeze()
     k_input.view(B,1,S,-1)[:,:,-1:,kv_lora_rank:] = k_pe_t
+    # end.record()
+
+    # torch.cuda.synchronize()
+
+    # print("rope time")
+    # print(start.elapsed_time(end))
 
     q_input[..., :kv_lora_rank] = q_nope_out
     q_input[..., kv_lora_rank:] = q_pe
@@ -435,7 +442,7 @@ def benchmark(args):
     dtype = arg_to_torch_dtype[args.dtype]
     configs = []
 
-    x_vals_list = [(1, 128, 2048, 512, 128, 64, 16)]
+    x_vals_list = [(1, 128, 2048, 512, 128, 64, 32)]
     x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
     line_vals = ["ref", "fused"]
     plot_name = "MLA-decode"
@@ -453,8 +460,8 @@ def benchmark(args):
 
         D = qk_nope_head_dim
 
-        Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc, rotary_dim, rotary_emb, positions = input_helper(
-            B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device)
+        Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, rotary_dim, rotary_emb, positions = input_helper(
+            B, H, S, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device)
 
         if "fused" in provider:
             fn = lambda: {
@@ -478,8 +485,9 @@ def benchmark(args):
 
         if "ref" in provider:
             k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
-            ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
-                                        logit_cap, rotary_emb, positions, device="cuda")
+            fn = lambda: { ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+                                  logit_cap, rotary_emb, positions, device="cuda")
+                                  }
 
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
