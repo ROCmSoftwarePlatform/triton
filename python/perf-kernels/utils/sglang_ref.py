@@ -531,6 +531,24 @@ def _fwd_grouped_persistent_kernel_stage1(
             split_kv_id = pid % num_splits_per_sample // NUM_HEAD_GROUPS * NUM_SPLITS_PER_WG
 
 
+"""
+I dont know if the persistent makes sense afterall.
+
+Like we do NUM_SPLITS_PER_WG splits per workgroup. This is in order to reduce the times we need to load the q by a factor of NUM_SPLITS_PER_WG.
+
+But what we could instead do is just reduce NUM_SPLITS_KV to NUM_SPLITS_KV // NUM_SPLITS_PER_WG, and do the normal kernel, and achieve the same thing. The q loading happens outside the split.
+
+So why dont we just do that in the normal kernel then? Well it obviously decreases the parallelism. The same thing happens with persistent kernel. 
+And actually we don't even get the benefits of reduced num of splits in stage 2 with the persistent.
+
+
+
+"""
+
+
+
+
+
 def _decode_grouped_persistent_att_m_fwd(
     q,
     k_buffer,
