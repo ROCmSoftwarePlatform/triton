@@ -14,6 +14,7 @@ import torch.nn as nn
 def _rotate_neox(x: torch.Tensor) -> torch.Tensor:
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
+
     return torch.cat((-x2, x1), dim=-1)
 
 
@@ -286,6 +287,7 @@ class DeepseekScalingRotaryEmbedding(RotaryEmbedding):
         ]
         # (max_seq, 64). 32 sin, 32 cos
         cos, sin = cos_sin.chunk(2, dim=-1)
+
         if self.is_neox_style:
             # NOTE(woosuk): Here we assume that the positions tensor has the
             # shape [batch_size, seq_len].

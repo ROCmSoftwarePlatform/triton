@@ -314,18 +314,18 @@ def _fwd_grouped_kernel_stage1(
 
             qk = tl.where(mask_h[:, None] & (offs_n[None, :] < split_kv_end), qk, float("-inf"))
 
-            # offs_buf_v = (kv_loc[:, None] * stride_buf_vbs + cur_kv_head * stride_buf_vh + offs_dv[None, :])
-            # v = tl.load(
-            #     V_Buffer + offs_buf_v,
-            #     mask=(offs_n[:, None] < split_kv_end) & (mask_dv[None, :]),
-            #     other=0.0,
-            # )
+            offs_buf_v = (kv_loc[:, None] * stride_buf_vbs + cur_kv_head * stride_buf_vh + offs_dv[None, :])
+            v = tl.load(
+                V_Buffer + offs_buf_v,
+                mask=(offs_n[:, None] < split_kv_end) & (mask_dv[None, :]),
+                other=0.0,
+            )
 
             n_e_max = tl.maximum(tl.max(qk, 1), e_max)
             re_scale = tl.exp(e_max - n_e_max)
             p = tl.exp(qk - n_e_max[:, None])
             acc *= re_scale[:, None]
-            acc += tl.dot(p.to(k.dtype), k.trans())
+            acc += tl.dot(p.to(v.dtype), v)
 
             e_sum = e_sum * re_scale + tl.sum(p, 1)
             e_max = n_e_max
