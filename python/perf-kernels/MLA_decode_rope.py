@@ -341,6 +341,8 @@ def ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_S
     return attn_logits
 
 
+# TODO Can we always assume kv_lora_rank and qk_rope_head_dim are power of 2?
+# TODO What is rotery_dim != qk_rope_head_dim
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_rope_head_dim', [
     # (8, 128, 2048, 512, 1),
     (8, 128, 2048, 512, 64),
@@ -376,10 +378,11 @@ def benchmark(args):
     dtype = arg_to_torch_dtype[args.dtype]
     configs = []
 
-    x_vals_list = [(1, 128, 2048, 512, 128, 64, 32)]
-    x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
+    x_vals_list = [(1, 128, 2048, 512, 64, 32)]
+    x_names = ["B", "H", "S", "kv_lora_rank", "qk_rope_head_dim", "num_kv_splits"]
     line_vals = ["ref", "fused"]
     plot_name = "MLA-decode"
+
 
     configs.append(
         triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
@@ -387,7 +390,7 @@ def benchmark(args):
                                  plot_name=plot_name, args={'sm_scale': 1.0, 'logit_cap': 0.0, 'device': args.device}))
 
     @triton.testing.perf_report(configs)
-    def bench_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits, sm_scale, logit_cap, device,
+    def bench_MLA(B, H, S, kv_lora_rank, qk_rope_head_dim, num_kv_splits, sm_scale, logit_cap, device,
                   provider):
         warmup = 2
         rep = 2
