@@ -433,6 +433,8 @@ struct InstructionSchedHintsRewriter
     switch (schedVariant) {
     case mlir::triton::amdgpu::SchedHint::llvm_iglp_0:
     case mlir::triton::amdgpu::SchedHint::llvm_iglp_1:
+    case mlir::triton::amdgpu::SchedHint::llvm_iglp_2:
+    case mlir::triton::amdgpu::SchedHint::llvm_iglp_3:
       createIglpOpt(rewriter, loc, static_cast<int>(schedVariant) - 1);
       break;
     case mlir::triton::amdgpu::SchedHint::local_prefetch:
@@ -518,7 +520,14 @@ struct TritonAMDGPUInsertInstructionSchedHints
         // Note, instruction schedule barriers are inserted only in the case of
         // a single `tt.dot` op in a `scf::ForOp` scope in the current
         // implementation.
-        if (auto dotOp = getSingleDotOpIfExists(forOp)) {
+        triton::DotOp dotOp;
+        if (schedHint == mlir::triton::amdgpu::SchedHint::llvm_iglp_2 ||
+            schedHint == mlir::triton::amdgpu::SchedHint::llvm_iglp_3) {
+          forOp->walk([&dotOp](triton::DotOp op) { dotOp = op; });
+        } else {
+          dotOp = getSingleDotOpIfExists(forOp);
+        }
+        if (dotOp) {
           OpBuilder rewriter(ctx);
           rewriter.setInsertionPointAfter(dotOp);
           rewriter.create<triton::amdgpu::InstructionSchedHint>(dotOp->getLoc(),
