@@ -112,7 +112,7 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
 
     # apply rotary embedding for q_pe, and k_pe (last token per batch of K_PE)
     LAST_SPLIT = (split_kv_end == cur_batch_seq_len)
-    last_token_pe_sum = tl.zeros([BLOCK_H], dtype=q_pe.dtype)
+    k_pe_last_token = tl.zeros([BLOCK_R], dtype=q_pe.dtype)
 
     if USE_ROPE:
         # [0 , 1, 2, ..., rotary_dim // 2 - 1, 0 , 1, 2, ..., rotary_dim // 2 - 1]
@@ -133,17 +133,14 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
             kv_loc = tl.load(
                 Req_to_tokens + stride_req_to_tokens_b * cur_batch_req_idx + cur_batch_seq_len - 1
             )
-            offs_buf_k_pe = kv_loc * stride_buf_kbs + offs_qk_r[None, :]
-            offs_buf_k_pe_rot = kv_loc * stride_buf_kbs + offs_qk_rot_r[None, :]
-            k_pe = tl.load(K_Buffer + offs_buf_k_pe)
+            offs_buf_k_pe_last_token = kv_loc * stride_buf_kbs + offs_qk_r
+            offs_buf_k_pe_rot_last_token = kv_loc * stride_buf_kbs + offs_qk_rot_r
+            k_pe_last_token = tl.load(K_Buffer + offs_buf_k_pe_last_token)
 
-            k_pe_rot = tl.load(K_Buffer + offs_buf_k_pe_rot)
-            k_pe_rot = tl.where((offs_qk_r < (kv_lora_rank + BLOCK_R // 2))[None, :], -k_pe_rot, k_pe_rot)
+            k_pe_rot_last_token = tl.load(K_Buffer + offs_buf_k_pe_rot_last_token)
+            k_pe_rot_last_token = tl.where((offs_qk_r < (kv_lora_rank + BLOCK_R // 2)), -k_pe_rot_last_token, k_pe_rot_last_token)
 
-            k_pe = k_pe * cos + k_pe_rot * sin
-            # TODO: we need to save in the cache the rope'd k_pe token
-            # tl.store(K_Buffer + offs_buf_k_pe, k_pe)
-            last_token_pe_sum = tl.sum(q_pe * k_pe, 1).to(q_pe.dtype)
+            k_pe_last_token = k_pe_last_token * cos + k_pe_rot_last_token * sin
 
     e_max = tl.zeros([BLOCK_H], dtype=tl.float32) - float("inf")
     e_sum = tl.zeros([BLOCK_H], dtype=tl.float32)
@@ -172,13 +169,12 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
                 other=0.0,
             ) # positional embedding part of keys
 
+            if USE_ROPE and start_n == cur_batch_seq_len - BLOCK_N:
+                k_pe = tl.where(offs_n[None, :] < (split_kv_end - 1), k_pe, k_pe_last_token[:, None])
+
             # (16, 64) x (64, 32)
             # dot product of rope parts
             qk = tl.dot(q_pe, k_pe.to(q_pe.dtype))
-
-            if USE_ROPE and LAST_SPLIT:
-                qk = tl.where(offs_n[None, :] < (split_kv_end - 1), qk, last_token_pe_sum.to(qk.type.element_ty)[:, None])
-
             # (16, 512) x (512, 32)
             # dot product of nope parts
             qk += tl.dot(q, kv)
