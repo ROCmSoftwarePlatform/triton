@@ -436,10 +436,7 @@ void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
     if (maxDepth != 0 && computeDepth > maxDepth)
       continue;
 
-    if (isa<tt::LoadOp>(opp))
-      continue;
-
-    if (!op.hasTrait<OpTrait::DotLike>())
+    if (!isa<tt::DotOp>(opp))
       continue;
 
     seen.clear();
