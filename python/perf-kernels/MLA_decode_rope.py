@@ -71,7 +71,7 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
                     kv_lora_rank: tl.constexpr,
                     qk_rope_head_dim: tl.constexpr, kv_group_num: tl.constexpr,
                     q_head_num: tl.constexpr, BLOCK_C: tl.constexpr, BLOCK_R: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_H: tl.constexpr,
-                    NUM_KV_SPLITS: tl.constexpr, logit_cap: tl.constexpr, USE_ROPE: tl.constexpr):
+                    NUM_KV_SPLITS: tl.constexpr, logit_cap: tl.constexpr, USE_ROPE: tl.constexpr, IS_NEOX_STYLE: tl.constexpr):
 
     cur_batch = tl.program_id(0)
     cur_head_id = tl.program_id(1)
@@ -87,11 +87,19 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
 
     offs_c = tl.arange(0, BLOCK_C)
     offs_qk_r = tl.arange(kv_lora_rank, kv_lora_rank + BLOCK_R)  # to get the k_pe
-    # [BLOCK_R // 2, BLOCK_R // 2 + 1, BLOCK_R // 2 + 2, ..., 0, 1, 2, ..., BLOCK_R // 2 - 1]
-    offs_qk_rot_r = kv_lora_rank + ((tl.arange(0, BLOCK_R) + (BLOCK_R // 2)) % BLOCK_R)
+    if IS_NEOX_STYLE:
+        # [BLOCK_R // 2, BLOCK_R // 2 + 1, BLOCK_R // 2 + 2, ..., 0, 1, 2, ..., BLOCK_R // 2 - 1]
+        offs_qk_rot_r = kv_lora_rank + ((tl.arange(0, BLOCK_R) + (BLOCK_R // 2)) % BLOCK_R)
+        mask_rotate = tl.arange(0, BLOCK_R) < (BLOCK_R // 2)
+    else:
+        # [1, 0, 3, 2, 5, 4, ..., BLOCK_R, BLOCK_R - 1]
+        offs_qk_rot_r = kv_lora_rank + (((tl.arange(0, BLOCK_R) + 1) % 2) * 2) - 1 + tl.arange(0, BLOCK_R)
+        mask_rotate = tl.arange(0, BLOCK_R) % 2 < 1
 
     off_q_pe = (cur_batch * stride_qb + cur_head[:, None] * stride_qh + offs_qk_r[None, :])
     off_q_pe_rot = (cur_batch * stride_qb + cur_head[:, None] * stride_qh + offs_qk_rot_r[None, :])
+    offs_q = cur_batch * stride_qb + cur_head[:, None] * stride_qh + offs_c[None, :]
+
     mask_c = offs_c < kv_lora_rank
     mask_qk_r = offs_qk_r < (kv_lora_rank + qk_rope_head_dim)
     # TODO check if qk_rope_head_dim != BLOCK_R
@@ -100,13 +108,8 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
     cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
     cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
 
-    offs_q = cur_batch * stride_qb + cur_head[:, None] * stride_qh + offs_c[None, :]
     q = tl.load(Q + offs_q, mask=(mask_h[:, None]) & (mask_c[None, :]), other=0.0)
-
-    # 0, 2, 4,.... 1, 3, 5...
     q_pe = tl.load(Q + off_q_pe, mask=(mask_h[:, None]) & (mask_qk_r[None, :]), other=0.0)
-    q_pe_rot = tl.load(Q + off_q_pe_rot, mask=(mask_h[:, None]) & (mask_qk_rot_r[None, :]), other=0.0)
-    q_pe_rot = tl.where((offs_qk_r < (kv_lora_rank + (BLOCK_R // 2)))[None, :], -q_pe_rot, q_pe_rot)
 
     kv_len_per_split = tl.cdiv(cur_batch_seq_len, NUM_KV_SPLITS)
     split_kv_start = kv_len_per_split * split_kv_id
@@ -114,13 +117,22 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
 
     # apply rotary embedding for q_pe, and k_pe (last token per batch of K_PE)
     LAST_SPLIT = (split_kv_end == cur_batch_seq_len)
-    k_pe_last_token = tl.zeros([BLOCK_R], dtype=q_pe.dtype)
+    k_pe_last_token = tl.zeros([BLOCK_R], dtype=q.dtype)
 
     k_pe_last_token_ptr = k_pe_t_out + cur_batch * stride_kpe_tokens_out_b + tl.arange(0, BLOCK_R)
-    
+
     if USE_ROPE:
-        # [0 , 1, 2, ..., rotary_dim // 2 - 1, 0 , 1, 2, ..., rotary_dim // 2 - 1]
-        offs_rotary = tl.arange(0, rotary_dim) % (rotary_dim // 2)
+        # 0, 2, 4,.... 1, 3, 5...
+        q_pe_rot = tl.load(Q + off_q_pe_rot, mask=(mask_h[:, None]) & (mask_qk_rot_r[None, :]), other=0.0)
+        q_pe_rot = tl.where(mask_rotate[None, :], -q_pe_rot, q_pe_rot)
+
+        if IS_NEOX_STYLE:
+            # [0 , 1, 2, ..., rotary_dim // 2 - 1, 0 , 1, 2, ..., rotary_dim // 2 - 1]
+            offs_rotary = tl.arange(0, rotary_dim) % (rotary_dim // 2)
+        else:
+            # [0, 0, 1, 1, ..., rotary_dim // 2 - 1, rotary_dim // 2 - 1]
+            offs_rotary = tl.arange(0, rotary_dim) // 2
+
         pos = tl.load(positions + cur_batch * stride_positions_b)
 
         cos = tl.load(cos_sin_cache + pos * stride_cos_sin_cache_s + offs_rotary)
@@ -142,7 +154,7 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
             k_pe_last_token = tl.load(K_Buffer + offs_buf_k_pe_last_token)
 
             k_pe_rot_last_token = tl.load(K_Buffer + offs_buf_k_pe_rot_last_token)
-            k_pe_rot_last_token = tl.where((offs_qk_r < (kv_lora_rank + BLOCK_R // 2)), -k_pe_rot_last_token, k_pe_rot_last_token)
+            k_pe_rot_last_token = tl.where(mask_rotate, -k_pe_rot_last_token, k_pe_rot_last_token)
 
             k_pe_last_token = k_pe_last_token * cos + k_pe_rot_last_token * sin
 
@@ -167,14 +179,9 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
                 other=0.0,
             )  # the shared latent tensor for keys and values
 
-            
-            kv_end = split_kv_end
-            if USE_ROPE and LAST_SPLIT:
-                kv_end = split_kv_end - 1
-            
             k_pe = tl.load(
                 K_Buffer + offs_buf_k_pe,
-                mask=(offs_n[None, :] < kv_end) & (mask_qk_r[:, None]),
+                mask=(offs_n[None, :] < split_kv_end) & (mask_qk_r[:, None]),
                 other=0.0,
             ) # positional embedding part of keys
 
@@ -209,7 +216,7 @@ def _fwd_grouped_kernel_stage1_rope(Q,  # Holds [Q_NOPE; Q_PE], b x h x (d+r)
 
         if USE_ROPE and LAST_SPLIT:
             tl.store(k_pe_last_token_ptr, k_pe_last_token)
-        
+
         tl.store(
             Att_Out + offs_mid_o,
             acc / e_sum[:, None],
@@ -242,6 +249,7 @@ def _decode_att_m_fwd(
     sm_scale,
     logit_cap,
     use_rope,
+    is_neox_style=True
 ):
     BLOCK = 32
     qk_rope_head_dim = kv_cache.shape[-1] - kv_lora_rank
@@ -274,10 +282,10 @@ def _decode_att_m_fwd(
                              cos_sin_cache.stride(0), positions.stride(0),
                              rotary_dim, kv_lora_rank, qk_rope_head_dim, kv_group_num=kv_group_num,
                              q_head_num=head_num, BLOCK_C=BLOCK_C, BLOCK_R=BLOCK_R, BLOCK_N=BLOCK, BLOCK_H=BLOCK_H,
-                             NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, USE_ROPE=use_rope, num_warps=4, num_stages=1, **extra_kargs)
+                             NUM_KV_SPLITS=NUM_KV_SPLITS, logit_cap=logit_cap, USE_ROPE=use_rope, IS_NEOX_STYLE=is_neox_style, num_warps=4, num_stages=1, **extra_kargs)
 
 
-def input_helper(B, H, S, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device, rope_base=10, rope_max_seq_len=16324, rope_scaling=1.0):
+def input_helper(B, H, S, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device, rope_base=10, rope_max_seq_len=16324, rope_scaling=1.0, is_neox_style=True):
     Req_to_tokens = torch.arange(B * S, device=device).reshape(B, S)
     B_req_idx = torch.arange(B, device=device)
     B_Seqlen = torch.full((B, ), S, device=device)
@@ -293,7 +301,7 @@ def input_helper(B, H, S, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, 
             rotary_dim,
             rope_max_seq_len,
             rope_base,
-            True,
+            is_neox_style,
             rope_scaling,
             q.dtype,
             device=device,
@@ -324,11 +332,11 @@ def ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_S
     q_nope_out, q_pe = q.split([kv_lora_rank, qk_rope_head_dim], dim=-1)
 
     k_pe_t = k_input.view(B,1,S,-1)[:,:,-1:,kv_lora_rank:]
-    
+
     if use_rope:
         q_pe, k_pe_t = rotary_emb(positions, q_pe.unsqueeze(2), k_pe_t)
         q_pe = q_pe.squeeze()
-    
+
     k_input.view(B,1,S,-1)[:,:,-1:,kv_lora_rank:] = k_pe_t
 
     q_input[..., :kv_lora_rank] = q_nope_out
@@ -367,8 +375,8 @@ def ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_S
     # (8, 128, 2047, 511, 64),
 ])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
-@pytest.mark.parametrize('use_rope', [True])
-def test_op_fwd(B, H, S, kv_lora_rank, qk_rope_head_dim, dtype, use_rope, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0,
+@pytest.mark.parametrize('use_rope', [True, False])
+def test_op_fwd_rope(B, H, S, kv_lora_rank, qk_rope_head_dim, dtype, use_rope, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0,
                 device="cuda"):
     torch.manual_seed(0)
 
@@ -377,7 +385,7 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_rope_head_dim, dtype, use_rope, num_kv
 
     # we need to return the rope'd k_pe_tokens to be saved in cache
     k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device)
-    
+
     _decode_att_m_fwd(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache, positions, rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
                     logit_cap, use_rope)
 
@@ -388,16 +396,54 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_rope_head_dim, dtype, use_rope, num_kv
     ref_logits, ref_k_pe_tokens = ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
                                   logit_cap, rotary_emb, positions, use_rope, device="cuda")
 
-    
-    torch.testing.assert_close(ref_k_pe_tokens, k_pe_tokens.squeeze(), atol=1e-2, rtol=1e-2)
-    
+
+    if use_rope:
+        torch.testing.assert_close(ref_k_pe_tokens, k_pe_tokens.squeeze(), atol=1e-2, rtol=1e-2)
+
     torch.testing.assert_close(ref_logits, tri_logits, atol=1e-2, rtol=1e-2)
 
-    
+# TODO Can we always assume kv_lora_rank and qk_rope_head_dim are power of 2?
+# TODO What is rotery_dim != qk_rope_head_dim
+@pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_rope_head_dim', [
+    # (8, 128, 2048, 512, 1),
+    (1, 128, 2048, 512, 64),
+    # (1, 128, 2048, 512, 32),
+    # (8, 128, 2048, 512, 62),
+    # (8, 128, 2048, 511, 64),
+    # (8, 128, 2047, 511, 64),
+])
+@pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize('use_rope', [True])
+@pytest.mark.parametrize('is_neox_style', [True, False])
+def test_op_fwd_rope_neox(B, H, S, kv_lora_rank, qk_rope_head_dim, dtype, use_rope, is_neox_style, num_kv_splits=2, sm_scale=1.0, logit_cap=0.0,
+                device="cuda"):
+    torch.manual_seed(0)
+
+    Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, attn_logits, rotary_dim, rotary_emb, positions = input_helper(
+        B, H, S, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device, is_neox_style=is_neox_style)
+
+    # we need to return the rope'd k_pe_tokens to be saved in cache
+    k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device)
+
+    _decode_att_m_fwd(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache, positions, rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+                    logit_cap, use_rope, is_neox_style=is_neox_style)
+
+    tri_logits = attn_logits
+
+    # reference
+    k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
+    ref_logits, ref_k_pe_tokens = ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+                                  logit_cap, rotary_emb, positions, use_rope, device="cuda")
+
+    if use_rope:
+        torch.testing.assert_close(ref_k_pe_tokens, k_pe_tokens.squeeze(), atol=1e-2, rtol=1e-2)
+
+    torch.testing.assert_close(ref_logits, tri_logits, atol=1e-2, rtol=1e-2)
 
 
 def benchmark(args):
     use_rope = args.use_rope
+    is_neox_style = args.is_neox_style
     dtype = arg_to_torch_dtype[args.dtype]
     configs = []
 
@@ -419,7 +465,7 @@ def benchmark(args):
         rep = 2
 
         Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, attn_logits, rotary_dim, rotary_emb, positions = input_helper(
-            B, H, S, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device)
+            B, H, S, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device, is_neox_style=is_neox_style)
 
         if "fused" in provider:
             fn = lambda: {
@@ -437,7 +483,8 @@ def benchmark(args):
                     num_kv_splits,
                     sm_scale,
                     logit_cap,
-                    use_rope
+                    use_rope,
+                    is_neox_style
                 )
             }
 
@@ -461,6 +508,7 @@ def parse_args():
     )
 
     parser.add_argument("-use_rope", action='store_true', default=False, help="use rope")
+    parser.add_argument("-is_neox_style", action='store_true', default=True, help="use rope is neox style")
     parser.add_argument("-dtype", default='bf16', help="data type")
     parser.add_argument("-device", default='cuda')
     return parser.parse_args()
