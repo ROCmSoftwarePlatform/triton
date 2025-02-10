@@ -514,8 +514,6 @@ def _decode_softmax_reducev_fwd(
 
     #print(f"grid size in _decode_softmax_reducev_fwd (ref): {grid[0]*grid[1]}")
 
-
-
     _fwd_kernel_stage2[grid](
         logits,
         o,
