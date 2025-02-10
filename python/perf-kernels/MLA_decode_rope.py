@@ -32,7 +32,7 @@ import pytest
 import argparse
 
 from utils.rotary_embedding import DeepseekScalingRotaryEmbedding
-from utils.sglang_ref import _decode_grouped_att_m_fwd
+from utils.sglang_ref import _decode_grouped_att_m_fwd, decode_attention_fwd_grouped, _decode_softmax_reducev_fwd
 
 
 def is_hip():
@@ -230,8 +230,8 @@ def _fwd_grouped_kernel_stage1_rope(
             mask=mask_h,
         )
 
-
-def _decode_att_m_fwd(q, kv_cache, att_out, k_pe_tokens_out, kv_lora_rank,  # c
+# TODO rope offset
+def _decode_att_m_fwd_rope(q, kv_cache, att_out, k_pe_tokens_out, kv_lora_rank,  # c
                       cos_sin_cache, positions, rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
                       logit_cap, use_rope, is_neox_style=True):
     BLOCK = 32
@@ -268,6 +268,46 @@ def _decode_att_m_fwd(q, kv_cache, att_out, k_pe_tokens_out, kv_lora_rank,  # c
                                           BLOCK_R=BLOCK_R, BLOCK_N=BLOCK, BLOCK_H=BLOCK_H, NUM_KV_SPLITS=NUM_KV_SPLITS,
                                           logit_cap=logit_cap, USE_ROPE=use_rope, IS_NEOX_STYLE=is_neox_style,
                                           num_warps=4, num_stages=1, **extra_kargs)
+
+
+def decode_attention_fwd_grouped_rope(
+    q,
+    k_buffer,
+    v_buffer,
+    o,
+    req_to_token,
+    b_req_idx,
+    b_seq_len,
+    k_pe_tokens,
+    kv_lora_rank,
+    rotary_dim,
+    cos_sin_cache,
+    positions,
+    attn_logits,
+    num_kv_splits,
+    sm_scale,
+    logit_cap=0.0,
+    use_rope=False,
+    is_neox_style=False
+):
+    _decode_att_m_fwd_rope(
+        q,
+        k_buffer,
+        attn_logits,
+        k_pe_tokens,
+        kv_lora_rank,
+        cos_sin_cache,
+        positions,
+        rotary_dim,
+        req_to_token,
+        b_req_idx,
+        b_seq_len,
+        num_kv_splits,
+        sm_scale,
+        logit_cap,
+        use_rope,
+        is_neox_style)
+    _decode_softmax_reducev_fwd(attn_logits, q, o, v_buffer, b_seq_len, num_kv_splits)
 
 
 def input_helper(B, H, S, kv_lora_rank, rotary_dim, qk_rope_head_dim, num_kv_splits, dtype, device, rope_base=10,
@@ -349,6 +389,50 @@ def ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_S
 
     return attn_logits, k_pe_t.squeeze()
 
+def ref_compute_full_fwd(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+                logit_cap, rotary_emb, positions, use_rope, device="cuda"):
+
+    B, H = q.shape[0], q.shape[1]
+    S = B_Seqlen[0].item()
+
+    qk_rope_head_dim = k_input.shape[-1] - kv_lora_rank
+
+    q_input = torch.empty(B, H, kv_lora_rank + qk_rope_head_dim, dtype=q.dtype).to(device)
+    q_nope_out, q_pe = q.split([kv_lora_rank, qk_rope_head_dim], dim=-1)
+
+    k_pe_t = k_input.view(B, 1, S, -1)[:, :, -1:, kv_lora_rank:]
+
+    if use_rope:
+        q_pe, k_pe_t = rotary_emb(positions, q_pe.unsqueeze(2), k_pe_t)
+        q_pe = q_pe.squeeze()
+
+    k_input.view(B, 1, S, -1)[:, :, -1:, kv_lora_rank:] = k_pe_t
+
+    q_input[..., :kv_lora_rank] = q_nope_out
+    q_input[..., kv_lora_rank:] = q_pe
+
+    B, H = q_input.shape[0], q_input.shape[1]
+    kv_lora_rank = v_input.shape[-1]
+    device = q_input.device
+
+    attn_logits = torch.empty(B, H, num_kv_splits, kv_lora_rank + 1, dtype=q_input.dtype, device=device)
+    o = torch.empty(B, H, kv_lora_rank, dtype=q_input.dtype, device=device)
+
+    decode_attention_fwd_grouped(
+        q_input,
+        k_input,
+        v_input,
+        o,
+        Req_to_tokens,
+        B_req_idx,
+        B_Seqlen,
+        attn_logits,
+        num_kv_splits,
+        sm_scale,
+        logit_cap
+    )
+
+    return attn_logits, o, k_pe_t.squeeze()
 
 # We assume rotary_dim is always of power of 2 and rotary_dim <= qk_rope_head_dim
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim', [
@@ -368,7 +452,7 @@ def test_op_fwd_rope(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, dtype,
     # we need to return the rope'd k_pe_tokens to be saved in cache
     k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device)
 
-    _decode_att_m_fwd(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache, positions,
+    _decode_att_m_fwd_rope(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache, positions,
                       rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, use_rope)
 
     tri_logits = attn_logits
@@ -404,7 +488,7 @@ def test_op_fwd_rope_neox(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, d
     # we need to return the rope'd k_pe_tokens to be saved in cache
     k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device)
 
-    _decode_att_m_fwd(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache, positions,
+    _decode_att_m_fwd_rope(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache, positions,
                       rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, use_rope,
                       is_neox_style=is_neox_style)
 
@@ -421,6 +505,59 @@ def test_op_fwd_rope_neox(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, d
 
     torch.testing.assert_close(ref_logits, tri_logits, atol=1e-2, rtol=1e-2)
 
+@pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim', [
+    (1, 128, 2048, 512, 64, 64),
+    (1, 128, 2048, 512, 128, 64),
+    (1, 128, 2048, 512, 127, 64),
+])
+@pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize('use_rope', [True, False])
+@pytest.mark.parametrize('is_neox_style', [True, False])
+def test_op_fwd_rope_integration(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, dtype, use_rope, is_neox_style,
+                          num_kv_splits=2, sm_scale=1.0, logit_cap=0.0, device="cuda"):
+    torch.manual_seed(0)
+
+    Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, attn_logits, rotary_emb, positions = input_helper(
+        B, H, S, kv_lora_rank, rotary_dim, qk_rope_head_dim, num_kv_splits, dtype, device, is_neox_style=is_neox_style)
+
+    # we need to return the rope'd k_pe_tokens to be saved in cache
+    k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device)
+    tri_o = torch.empty(B, H, kv_lora_rank, dtype=kv_cache.dtype, device=device)
+
+    decode_attention_fwd_grouped_rope(
+        q,
+        kv_cache,
+        kv_cache[..., :kv_lora_rank],
+        tri_o,
+        Req_to_tokens,
+        B_req_idx,
+        B_Seqlen,
+        k_pe_tokens,
+        kv_lora_rank,
+        rotary_dim,
+        rotary_emb.cos_sin_cache,
+        positions,
+        attn_logits,
+        num_kv_splits,
+        sm_scale,
+        logit_cap,
+        use_rope,
+        is_neox_style
+    )
+
+    tri_logits = attn_logits
+
+    # reference
+    k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
+    ref_logits, ref_o, ref_k_pe_tokens = ref_compute_full_fwd(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_Seqlen,
+                                              num_kv_splits, sm_scale, logit_cap, rotary_emb, positions, use_rope,
+                                              device="cuda")
+
+    if use_rope:
+        torch.testing.assert_close(ref_k_pe_tokens, k_pe_tokens.squeeze(), atol=1e-2, rtol=1e-2)
+
+    torch.testing.assert_close(ref_logits, tri_logits, atol=1e-2, rtol=1e-2)
+    torch.testing.assert_close(ref_o, tri_o, atol=1e-2, rtol=1e-2)
 
 def benchmark(args):
     use_rope = args.use_rope
@@ -452,7 +589,7 @@ def benchmark(args):
 
         if "fused" in provider:
             fn = lambda: {
-                _decode_att_m_fwd(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache,
+                _decode_att_m_fwd_rope(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache,
                                   positions, rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
                                   logit_cap, use_rope, is_neox_style=is_neox_style)
             }
