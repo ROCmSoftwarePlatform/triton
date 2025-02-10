@@ -34,10 +34,6 @@ def is_hip():
 
 is_hip_ = is_hip()
 
-logger = logging.getLogger(__name__)
-
-# TODO: Remove this when triton>=3.2.0. This issue will not affect performance and accuracy.
-logger.warning("The following error message 'operation scheduled before its operands' can be ignored.")
 
 
 @triton.jit
@@ -389,12 +385,25 @@ def _fwd_grouped_persistent_kernel_stage1(
     # cur_head_id = tl.program_id(1)
     # split_kv_id = tl.program_id(2)
 
-    NUM_WG = NUM_CU * GRID_CU_MULTIP  # number of persistent workgroups launched
-    num_splits_per_head = NUM_KV_SPLITS // NUM_SPLITS_PER_WG # the number of programs (splits) per single head
-    num_splits_per_sample = num_splits_per_head * NUM_HEAD_GROUPS  # times the number of heads
+    NUM_WG: tl.constexpr = NUM_CU * GRID_CU_MULTIP  # number of persistent workgroups launched
+    num_splits_per_head: tl.constexpr = NUM_KV_SPLITS // NUM_SPLITS_PER_WG # the number of programs (splits) per single head
+    num_splits_per_sample: tl.constexpr = num_splits_per_head * NUM_HEAD_GROUPS  # times the number of heads
 
-    # number between 0, ..., NUM_PIDS_TOTAL= batch * heads / BLOCK_H * num_kv_splits / NUM_SPLITS_PER_WG
-    pid = tl.program_id(0) 
+    # number between 0, ..., 304 - 1
+    raw_pid = tl.program_id(0) 
+
+    # so this is 0,1,2,3.... for different workgroups
+    # I assumed that pids 0,1 are at the same die.
+    # 
+    # But I think its rather like:
+    # We have 8 dies. 0 and 8 pids are at the same die.
+    # So they are served to dies in roundtable manner.
+    # We have in total of 304 workgroups. 304 / 8 = 38.
+    # TODO: mapping that has the following effect
+    #  0, 8, 16 -> 0,1,2
+    #  1, 9, 17 -> 38, 39, 40
+
+    pid=raw_pid # (raw_pid//8)+(raw_pid%8)*38
 
     cur_batch = pid // num_splits_per_sample
     cur_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS 
@@ -411,35 +420,34 @@ def _fwd_grouped_persistent_kernel_stage1(
     mask_d = offs_d < Lk
     mask_dv = offs_dv < Lv
 
-    cur_head = cur_head_id * VALID_BLOCK_H + tl.arange(0, BLOCK_H)
-    mask_h = cur_head < (cur_head_id + 1) * VALID_BLOCK_H
-    mask_h = mask_h & (cur_head < q_head_num)
+    # cur_head = cur_head_id * VALID_BLOCK_H + tl.arange(0, BLOCK_H)
+    # mask_h = cur_head < (cur_head_id + 1) * VALID_BLOCK_H
+    # mask_h = mask_h & (cur_head < q_head_num)
 
-    cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
-    cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
+    # cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
+    # cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
 
-    # Load the q only once per NUM_SPLITS_PER_WG. This should reduce the number of q loads by a factor of NUM_SPLITS_PER_WG.
-    offs_q = cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :]
-    q = tl.load(Q + offs_q, mask=(mask_h[:, None]) & (mask_d[None, :]), other=0.0)
+    # # Load the q only once per NUM_SPLITS_PER_WG. This should reduce the number of q loads by a factor of NUM_SPLITS_PER_WG.
+    # offs_q = cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :]
+    # q = tl.load(Q + offs_q, mask=(mask_h[:, None]) & (mask_d[None, :]), other=0.0)
 
     while pid < NUM_PIDS_TOTAL:
-
-        new_batch = pid // num_splits_per_sample
-        new_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS
-
+        cur_batch = pid // num_splits_per_sample
+        cur_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS
+        
         # only do new q loads when must, so either head group changes or batch changes
-        if new_batch != cur_batch or new_head_id != cur_head_id:
-            cur_batch = new_batch
-            cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
-            cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
+        # if new_batch != cur_batch or new_head_id != cur_head_id:
+        # cur_batch = new_batch
+        cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
+        cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
 
-            cur_head_id = new_head_id 
-            cur_head = cur_head_id * VALID_BLOCK_H + tl.arange(0, BLOCK_H)
-            mask_h = cur_head < (cur_head_id + 1) * VALID_BLOCK_H
-            mask_h = mask_h & (cur_head < q_head_num)
+        # cur_head_id = new_head_id 
+        cur_head = cur_head_id * VALID_BLOCK_H + tl.arange(0, BLOCK_H)
+        mask_h = cur_head < (cur_head_id + 1) * VALID_BLOCK_H
+        mask_h = mask_h & (cur_head < q_head_num)
 
-            offs_q = cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :]
-            q = tl.load(Q + offs_q, mask=(mask_h[:, None]) & (mask_d[None, :]), other=0.0)
+        offs_q = cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :]
+        q = tl.load(Q + offs_q, mask=(mask_h[:, None]) & (mask_d[None, :]), other=0.0)
         
         if BLOCK_DPE > 0:
             offs_dpe = BLOCK_DMODEL + tl.arange(0, BLOCK_DPE)
@@ -501,6 +509,7 @@ def _fwd_grouped_persistent_kernel_stage1(
                 re_scale = tl.exp(e_max - n_e_max)
                 p = tl.exp(qk - n_e_max[:, None])
                 acc *= re_scale[:, None]
+                
                 acc += tl.dot(p.to(v.dtype), v)
 
                 e_sum = e_sum * re_scale + tl.sum(p, 1)
@@ -527,7 +536,9 @@ def _fwd_grouped_persistent_kernel_stage1(
         
         # if done already the NUM_SPLITS_PER_WG
         if (split_kv_id % NUM_SPLITS_PER_WG) == 0: # move to next program
-            pid += NUM_WG
+            # tl.debug_barrier()
+            raw_pid += NUM_WG
+            pid=raw_pid # (raw_pid//8)+(raw_pid%8)*38
             split_kv_id = pid % num_splits_per_sample // NUM_HEAD_GROUPS * NUM_SPLITS_PER_WG
 
 
@@ -542,12 +553,24 @@ So why dont we just do that in the normal kernel then? Well it obviously decreas
 And actually we don't even get the benefits of reduced num of splits in stage 2 with the persistent.
 
 
+New goal: L2 cache usage optimization. Vinayak said something along the lines that we cant fit kv_cache of two batches into L2 memory (4 MB for a group of 38 CUs, 32 MB in total for all the 304 CUs).
+
+Maybe it would be best that a single CU handles H consecutive head groups and S consecutive splits in those. S defined so that it would fit into L2 S * split_size * 576 * 2 (for fp16) < (4 000 000 / 38 ?)
+
+Lets set H=1.
+
+Optimal would be if those 38 CUs could share that S consecutive splits of kv cache. But we have only 128/16=8 head groups. So 8 can reuse the same L2 cache. So the limit is 4 MB / 38 * 8 = 0.8 MB
+
+That would be enough for (0.8MB / (576*2B*64) = 11 so lets say) 8 consecutive splits for a CU.
+
+
+
+Buuuuuuuutt, we will be running these models rather in tensor parallel mode, e.g. tp8, which means that we divide the heads to different gpus, 128/8=16. And then we group that 16 heads to one head group. So we basically have just one head group
+apparent on device. And something like 32 splits, so just 32 workgroups if batch=1. But with batch=32, its already 32*32=1024, which is too much. Hmm, persistence could make sense in this case
+
+
 
 """
-
-
-
-
 
 def _decode_grouped_persistent_att_m_fwd(
     q,
@@ -561,47 +584,55 @@ def _decode_grouped_persistent_att_m_fwd(
     sm_scale,
     logit_cap,
 ):
+    # Tunable configs
     BLOCK = 16
-    Lk = k_buffer.shape[-1]
-    Lv = v_buffer.shape[-1]
+    Lk = k_buffer.shape[-1] # kv_lora_rank + qk_rope_head_dim = 512 + 64 = 576
+    Lv = v_buffer.shape[-1] # kv_lora_rank
 
-    # [TODO] work around shmem limit on MI3xx
-    if is_hip_ and Lk >= 576:
-        BLOCK = 16
-
-    if Lk == 576:
-        BLOCK_DMODEL = 512
-        BLOCK_DPE = 64
-    elif Lk == 288:
-        BLOCK_DMODEL = 256
-        BLOCK_DPE = 32
-    else:
-        BLOCK_DMODEL = triton.next_power_of_2(Lk)
-        BLOCK_DPE = 0
+    BLOCK_DMODEL = 512
+    BLOCK_DPE = 64
     BLOCK_DV = triton.next_power_of_2(Lv)
-
-    batch, head_num = B_req_idx.shape[0], q.shape[1]
-    kv_group_num = q.shape[1] // k_buffer.shape[1]
+    
+    # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
+    # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
+    extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 1}
+    num_stages = 1
+    num_warps = 4
 
     BLOCK_H = 16
     NUM_KV_SPLITS = num_kv_splits
 
     # We will launch NUM_CU * GRID_CU_MULTIP persistent workgroups
     NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count
-    GRID_CU_MULTIP = 2
+    GRID_CU_MULTIP = 1
 
+    NUM_SPLITS_PER_WG = 1
+
+    # BLOCK = 32
+    # # [TODO] work around shmem limit on MI3xx
+    # if is_hip_ and Lk >= 576:
+    #     BLOCK = 16
+
+    # if Lk == 576:
+    #     BLOCK_DMODEL = 512
+    #     BLOCK_DPE = 64
+    # elif Lk == 288:
+    #     BLOCK_DMODEL = 256
+    #     BLOCK_DPE = 32
+    # else:
+    #     BLOCK_DMODEL = triton.next_power_of_2(Lk)
+    #     BLOCK_DPE = 0
+    
+    # Init grid
+
+    batch, head_num = B_req_idx.shape[0], q.shape[1]
+    kv_group_num = q.shape[1] // k_buffer.shape[1]
     num_head_groups = triton.cdiv(head_num, min(BLOCK_H, kv_group_num))
-
-    NUM_SPLITS_PER_WG = 2
 
     # number of programs to be computed in total. A single persistent workgroup computes multiple programs
     NUM_PIDS_TOTAL = batch * num_head_groups * NUM_KV_SPLITS // NUM_SPLITS_PER_WG
 
     grid = (min(NUM_CU * GRID_CU_MULTIP, NUM_PIDS_TOTAL), )
-
-    # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
-    # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
-    extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 2}
 
     _fwd_grouped_persistent_kernel_stage1[grid](
         q,
@@ -631,8 +662,8 @@ def _decode_grouped_persistent_att_m_fwd(
         BLOCK_H=BLOCK_H,
         NUM_KV_SPLITS=NUM_KV_SPLITS,
         logit_cap=logit_cap,
-        num_warps=4,
-        num_stages=1,
+        num_warps=num_warps,
+        num_stages=num_stages,
         Lk=Lk,
         Lv=Lv,
         NUM_CU=NUM_CU, GRID_CU_MULTIP=GRID_CU_MULTIP, NUM_HEAD_GROUPS=num_head_groups, NUM_SPLITS_PER_WG=NUM_SPLITS_PER_WG, NUM_PIDS_TOTAL=NUM_PIDS_TOTAL,
@@ -690,7 +721,7 @@ def _decode_grouped_att_m_fwd(
 
     # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
     # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
-    extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 2}
+    extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 1}
 
     _fwd_grouped_kernel_stage1[grid](
         q,
