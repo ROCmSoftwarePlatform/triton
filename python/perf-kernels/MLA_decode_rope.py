@@ -231,7 +231,7 @@ def _fwd_grouped_kernel_stage1_rope(
         )
 
 # TODO rope offset
-def _decode_att_m_fwd_rope(q, kv_cache, att_out, k_pe_tokens_out, kv_lora_rank,  # c
+def _decode_grouped_att_m_fwd_rope(q, kv_cache, att_out, k_pe_tokens_out, kv_lora_rank,  # c
                       cos_sin_cache, positions, rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
                       logit_cap, use_rope, is_neox_style=True):
     BLOCK = 32
@@ -290,7 +290,7 @@ def decode_attention_fwd_grouped_rope(
     use_rope=False,
     is_neox_style=False
 ):
-    _decode_att_m_fwd_rope(
+    _decode_grouped_att_m_fwd_rope(
         q,
         k_buffer,
         attn_logits,
@@ -453,7 +453,7 @@ def test_op_fwd_rope(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, dtype,
     # we need to return the rope'd k_pe_tokens to be saved in cache
     k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device)
 
-    _decode_att_m_fwd_rope(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache, positions,
+    _decode_grouped_att_m_fwd_rope(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache, positions,
                       rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, use_rope)
 
     tri_logits = attn_logits
@@ -490,7 +490,7 @@ def test_op_fwd_rope_neox(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, d
     # we need to return the rope'd k_pe_tokens to be saved in cache
     k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device)
 
-    _decode_att_m_fwd_rope(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache, positions,
+    _decode_grouped_att_m_fwd_rope(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache, positions,
                       rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, use_rope,
                       is_neox_style=is_neox_style)
 
@@ -592,7 +592,7 @@ def benchmark(args):
 
         if "fused" in provider:
             fn = lambda: {
-                _decode_att_m_fwd_rope(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache,
+                _decode_grouped_att_m_fwd_rope(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache,
                                   positions, rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
                                   logit_cap, use_rope, is_neox_style=is_neox_style)
             }
