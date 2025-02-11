@@ -44,6 +44,50 @@ int getWmmaVersion(StringRef archGen) {
   return 0;
 }
 
+// Check if the result of current tl.dot is used as the operand(0)
+// of another tl.dot
+bool isChainDotHead(tt::DotOp &dotOp) {
+  auto filter = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  ForwardSliceOptions fwdOpt;
+  fwdOpt.filter = filter;
+  SetVector<mlir::Operation *> fwdSlices;
+  getForwardSlice(dotOp.getResult(), &fwdSlices, fwdOpt);
+  for (Operation *op : fwdSlices) {
+    // ensure output of the first dot is the operand 0 of the second dot
+    if (isa<tt::DotOp>(op) && (op != dotOp)) {
+      auto dOp = dyn_cast<tt::DotOp>(op);
+      auto op0 = dOp.getOperand(0).getDefiningOp();
+      if (op0 && std::find(fwdSlices.begin(), fwdSlices.end(), op0) !=
+                     fwdSlices.end()) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Check if the operand(0) of current tl.dot is the result of
+// another tl.dot
+bool isChainDotTail(tt::DotOp &dotOp) {
+  auto filter = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  BackwardSliceOptions bwdOpt;
+  bwdOpt.omitBlockArguments = true;
+  bwdOpt.filter = filter;
+  SetVector<Operation *> slices;
+  Operation *op0 = dotOp.getOperand(0).getDefiningOp();
+  if (!op0)
+    return false;
+  getBackwardSlice(op0, &slices, bwdOpt);
+  if (llvm::find_if(slices, [](Operation *op) { return isa<tt::DotOp>(op); }) !=
+      slices.end())
+    return true;
+  return false;
+}
+
 SmallVector<unsigned, 3>
 warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
              std::pair<int64_t, int64_t> shapePerWarp) {
@@ -52,20 +96,21 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
   if (rank == 3)
     return {(unsigned)numWarps, 1, 1};
 
-  auto filter = [dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
-  };
-  ForwardSliceOptions fwdOpt;
-  fwdOpt.filter = filter;
-  BackwardSliceOptions bwdOpt;
-  bwdOpt.omitBlockArguments = true;
-  bwdOpt.filter = filter;
-  auto slices = getSlice(dotOp, bwdOpt, fwdOpt);
-  for (Operation *op : slices) {
-    if (isa<mlir::triton::DotOpInterface>(op) && (op != dotOp))
+  // For FA-like pattern, i.e. result of 1st tl.dot is used as the
+  // operand(0) of the 2nd dot.
+  // We use {numWaprs, 1} for both tl.dots
+  // However, if shape[0] is small to hold one warp size, all other
+  // warps are holding redundant values. In this case, we use
+  // {1, numWarps} for the 2nd tl.dot to save registers
+  auto ttDotOp = dyn_cast<tt::DotOp>(dotOp);
+  if (isChainDotHead(ttDotOp) || isChainDotTail(ttDotOp)) {
+    if ((shape[0] == shapePerWarp.first) && isChainDotTail(ttDotOp))
+      return {1, (unsigned)numWarps};
+    else
       return {(unsigned)numWarps, 1};
   }
 
+  // Regular cases
   SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
   SmallVector<unsigned, 3> ret = {1, 1};
   do {
@@ -363,39 +408,6 @@ public:
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
         nonKDim(nonKDim), kPack(kPack) {}
 
-  bool isChainDot(tt::DotOp &dotOp) const {
-    auto filter = [&dotOp](Operation *op) {
-      return op->getParentRegion() == dotOp->getParentRegion();
-    };
-    ForwardSliceOptions fwdOpt;
-    fwdOpt.filter = filter;
-    BackwardSliceOptions bwdOpt;
-    bwdOpt.omitBlockArguments = true;
-    bwdOpt.filter = filter;
-    auto slices = getSlice(dotOp, bwdOpt, fwdOpt);
-    for (Operation *op : slices) {
-      if (isa<tt::DotOp>(op) && (op != dotOp))
-        return true;
-    }
-    return false;
-  }
-
-  bool isSecondDot(tt::DotOp &dotOp) const {
-    auto filter = [&dotOp](Operation *op) {
-      return op->getParentRegion() == dotOp->getParentRegion();
-    };
-    BackwardSliceOptions bwdOpt;
-    bwdOpt.omitBlockArguments = true;
-    bwdOpt.filter = filter;
-    SetVector<Operation *> slices;
-    getBackwardSlice(dotOp.getResult(), &slices, bwdOpt);
-    if (llvm::find_if(slices, [](Operation *op) {
-          return isa<tt::DotOp>(op);
-        }) != slices.end())
-      return true;
-    return false;
-  }
-
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
     RankedTensorType oldRetType = dotOp.getType();
@@ -439,7 +451,8 @@ public:
     // TODO (lixun): investigate the regression and enable this feature again
     auto aElemTy = mfmaInstr.getElementTypeA();
     bool isFP8 = llvm::isa<Float8E5M2FNUZType, Float8E4M3FNUZType>(aElemTy);
-    bool isTransposed = isChainDot(dotOp) || !isFP8;
+    bool isTransposed =
+        isChainDotHead(dotOp) || isChainDotTail(dotOp) || !isFP8;
     mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
         /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
@@ -492,7 +505,7 @@ public:
     // to increase ds_read vector size
     // However, in FA, the second dot can only use kWidth = kBase since it's
     // limited by the result of the first dot, which is of mfmaLayout.
-    if (!isSecondDot(dotOp))
+    if (!isChainDotTail(dotOp))
       kWidth *= kPack;
 
     auto newAEncoding =
