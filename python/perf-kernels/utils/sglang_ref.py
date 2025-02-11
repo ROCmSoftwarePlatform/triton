@@ -377,24 +377,16 @@ def _fwd_grouped_persistent_kernel_stage1(
     logit_cap: tl.constexpr,
     Lk: tl.constexpr,
     Lv: tl.constexpr,
-    NUM_CU: tl.constexpr, GRID_CU_MULTIP: tl.constexpr, NUM_HEAD_GROUPS: tl.constexpr, NUM_SPLITS_PER_WG: tl.constexpr,
+    NUM_CU: tl.constexpr, GRID_CU_MULTIP: tl.constexpr, NUM_HEAD_GROUPS: tl.constexpr,
     NUM_PIDS_TOTAL: tl.constexpr,
 ):
 
     NUM_WG: tl.constexpr = NUM_CU * GRID_CU_MULTIP  # number of persistent workgroups launched
-    num_splits_per_head: tl.constexpr = NUM_KV_SPLITS // NUM_SPLITS_PER_WG # the number of programs (splits) per single head
-    num_splits_per_sample: tl.constexpr = num_splits_per_head * NUM_HEAD_GROUPS  # times the number of heads
+    num_splits_per_head: tl.constexpr = NUM_KV_SPLITS # the number of programs (splits) per single head
+    num_splits_per_sample: tl.constexpr = num_splits_per_head * NUM_HEAD_GROUPS  # times the number of heads in a sample
 
-    raw_pid = tl.program_id(0) 
+    start_pid = tl.program_id(0) 
     
-    # TODO: mapping that has the workgroups that share the same q load or kv load at the same die for L2 reuse.
-    pid=raw_pid # (raw_pid//8)+(raw_pid%8)*38
-
-    cur_batch = pid // num_splits_per_sample
-    cur_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS 
-    split_kv_id = pid % num_splits_per_sample // NUM_HEAD_GROUPS * NUM_SPLITS_PER_WG
-    cur_kv_head = cur_head_id // tl.cdiv(kv_group_num, BLOCK_H)
-
     if BLOCK_H < kv_group_num:
         VALID_BLOCK_H: tl.constexpr = BLOCK_H
     else:
@@ -405,37 +397,24 @@ def _fwd_grouped_persistent_kernel_stage1(
     mask_d = offs_d < Lk
     mask_dv = offs_dv < Lv
 
-    # cur_head = cur_head_id * VALID_BLOCK_H + tl.arange(0, BLOCK_H)
-    # mask_h = cur_head < (cur_head_id + 1) * VALID_BLOCK_H
-    # mask_h = mask_h & (cur_head < q_head_num)
-
-    # cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
-    # cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
-
-    # # Load the q only once per NUM_SPLITS_PER_WG. This should reduce the number of q loads by a factor of NUM_SPLITS_PER_WG.
-    # offs_q = cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :]
-    # q = tl.load(Q + offs_q, mask=(mask_h[:, None]) & (mask_d[None, :]), other=0.0)
-
     num_pids_per_wg = NUM_PIDS_TOTAL // NUM_WG
 
-    if pid < NUM_PIDS_TOTAL % NUM_WG:
+    if start_pid < NUM_PIDS_TOTAL % NUM_WG:
         num_pids_per_wg += 1
 
-    num_pids_per_wg *= NUM_SPLITS_PER_WG
-
-    num_splits_done = 0 # we might want to consider NUM_SPLITS_PER_WG as a single program, and only then move to next pid.
+    # TODO: mapping that has the workgroups that share the same q load or kv load at the same die for L2 reuse.
+    pid = start_pid - NUM_WG # actual_pid = (pid//8)+(pid%8)*38
 
     for _ in range(num_pids_per_wg):
+        pid += NUM_WG
         cur_batch = pid // num_splits_per_sample
-        cur_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS
+        cur_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS 
+        split_kv_id = pid % num_splits_per_sample // NUM_HEAD_GROUPS
+        cur_kv_head = cur_head_id // tl.cdiv(kv_group_num, BLOCK_H)
         
-        # only do new q loads when must, so either head group changes or batch changes
-        # if new_batch != cur_batch or new_head_id != cur_head_id:
-        # cur_batch = new_batch
         cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
         cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
 
-        # cur_head_id = new_head_id 
         cur_head = cur_head_id * VALID_BLOCK_H + tl.arange(0, BLOCK_H)
         mask_h = cur_head < (cur_head_id + 1) * VALID_BLOCK_H
         mask_h = mask_h & (cur_head < q_head_num)
@@ -521,47 +500,10 @@ def _fwd_grouped_persistent_kernel_stage1(
                 e_max + tl.log(e_sum),
                 mask=mask_h,
             )
-
-        num_splits_done += 1
-
-        split_kv_id += 1 
         
-        # if done already the NUM_SPLITS_PER_WG
-        if (num_splits_done % NUM_SPLITS_PER_WG) == 0: # move to next program
-            tl.debug_barrier()
-            num_splits_done = 0
-            raw_pid += NUM_WG
-            pid=raw_pid # (raw_pid//8)+(raw_pid%8)*38
-            split_kv_id = pid % num_splits_per_sample // NUM_HEAD_GROUPS * NUM_SPLITS_PER_WG
+        # move to next program
+        tl.debug_barrier()
 
-
-"""
-I dont know if the persistent makes sense afterall.
-
-Like we do NUM_SPLITS_PER_WG splits per workgroup. This is in order to reduce the times we need to load the q by a factor of NUM_SPLITS_PER_WG.
-
-But what we could instead do is just reduce NUM_SPLITS_KV to NUM_SPLITS_KV // NUM_SPLITS_PER_WG, and do the normal kernel, and achieve the same thing. The q loading happens outside the split.
-
-So why dont we just do that in the normal kernel then? Well it obviously decreases the parallelism. The same thing happens with persistent kernel. 
-And actually we don't even get the benefits of reduced num of splits in stage 2 with the persistent.
-
-
-New goal: L2 cache usage optimization. Vinayak said something along the lines that we cant fit kv_cache of two batches into L2 memory (4 MB for a group of 38 CUs, 32 MB in total for all the 304 CUs).
-
-Maybe it would be best that a single CU handles H consecutive head groups and S consecutive splits in those. S defined so that it would fit into L2 S * split_size * 576 * 2 (for fp16) < (4 000 000 / 38 ?)
-
-Lets set H=1.
-
-Optimal would be if those 38 CUs could share that S consecutive splits of kv cache. But we have only 128/16=8 head groups. So 8 can reuse the same L2 cache. So the limit is 4 MB / 38 * 8 = 0.8 MB
-
-That would be enough for (0.8MB / (576*2B*64) = 11 so lets say) 8 consecutive splits for a CU.
-
-Buuuuuuuutt, we will be running these models rather in tensor parallel mode, e.g. tp8, which means that we divide the heads to different gpus, 128/8=16. And then we group that 16 heads to one head group. So we basically have just one head group
-apparent on device. And something like 32 splits, so just 32 workgroups if batch=1. But with batch=32, its already 32*32=1024, which is too much. Hmm, persistence could make sense in this case
-
-
-
-"""
 
 def _decode_grouped_persistent_att_m_fwd(
     q,
@@ -596,23 +538,6 @@ def _decode_grouped_persistent_att_m_fwd(
     # We will launch NUM_CU * GRID_CU_MULTIP persistent workgroups
     NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count
     GRID_CU_MULTIP = 1
-
-    NUM_SPLITS_PER_WG = 1
-
-    # BLOCK = 32
-    # # [TODO] work around shmem limit on MI3xx
-    # if is_hip_ and Lk >= 576:
-    #     BLOCK = 16
-
-    # if Lk == 576:
-    #     BLOCK_DMODEL = 512
-    #     BLOCK_DPE = 64
-    # elif Lk == 288:
-    #     BLOCK_DMODEL = 256
-    #     BLOCK_DPE = 32
-    # else:
-    #     BLOCK_DMODEL = triton.next_power_of_2(Lk)
-    #     BLOCK_DPE = 0
     
     # Init grid
     batch, head_num = B_req_idx.shape[0], q.shape[1]
@@ -620,7 +545,7 @@ def _decode_grouped_persistent_att_m_fwd(
     num_head_groups = triton.cdiv(head_num, min(BLOCK_H, kv_group_num))
 
     # number of programs to be computed in total. A single persistent workgroup computes multiple programs
-    NUM_PIDS_TOTAL = batch * num_head_groups * NUM_KV_SPLITS // NUM_SPLITS_PER_WG
+    NUM_PIDS_TOTAL = batch * num_head_groups * NUM_KV_SPLITS
 
     grid = (min(NUM_CU * GRID_CU_MULTIP, NUM_PIDS_TOTAL), )
 
@@ -656,7 +581,7 @@ def _decode_grouped_persistent_att_m_fwd(
         num_stages=num_stages,
         Lk=Lk,
         Lv=Lv,
-        NUM_CU=NUM_CU, GRID_CU_MULTIP=GRID_CU_MULTIP, NUM_HEAD_GROUPS=num_head_groups, NUM_SPLITS_PER_WG=NUM_SPLITS_PER_WG, NUM_PIDS_TOTAL=NUM_PIDS_TOTAL,
+        NUM_CU=NUM_CU, GRID_CU_MULTIP=GRID_CU_MULTIP, NUM_HEAD_GROUPS=num_head_groups, NUM_PIDS_TOTAL=NUM_PIDS_TOTAL,
         **extra_kargs,
     )
 
