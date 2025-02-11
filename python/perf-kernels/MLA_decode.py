@@ -172,8 +172,8 @@ def benchmark(args):
     @triton.testing.perf_report(configs)
     def bench_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits, sm_scale, logit_cap, device,
                   provider):
-        warmup = 25
-        rep = 100
+        warmup = 1
+        rep = 1
 
         D = qk_nope_head_dim
 

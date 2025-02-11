@@ -416,7 +416,16 @@ def _fwd_grouped_persistent_kernel_stage1(
     # offs_q = cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :]
     # q = tl.load(Q + offs_q, mask=(mask_h[:, None]) & (mask_d[None, :]), other=0.0)
 
-    while pid < NUM_PIDS_TOTAL:
+    num_pids_per_wg = NUM_PIDS_TOTAL // NUM_WG
+
+    if pid < NUM_PIDS_TOTAL % NUM_WG:
+        num_pids_per_wg += 1
+
+    num_pids_per_wg *= NUM_SPLITS_PER_WG
+
+    num_splits_done = 0 # we might want to consider NUM_SPLITS_PER_WG as a single program, and only then move to next pid.
+
+    for _ in range(num_pids_per_wg):
         cur_batch = pid // num_splits_per_sample
         cur_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS
         
@@ -513,11 +522,14 @@ def _fwd_grouped_persistent_kernel_stage1(
                 mask=mask_h,
             )
 
-        split_kv_id += 1
+        num_splits_done += 1
+
+        split_kv_id += 1 
         
         # if done already the NUM_SPLITS_PER_WG
-        if (split_kv_id % NUM_SPLITS_PER_WG) == 0: # move to next program
-            # tl.debug_barrier()
+        if (num_splits_done % NUM_SPLITS_PER_WG) == 0: # move to next program
+            tl.debug_barrier()
+            num_splits_done = 0
             raw_pid += NUM_WG
             pid=raw_pid # (raw_pid//8)+(raw_pid%8)*38
             split_kv_id = pid % num_splits_per_sample // NUM_HEAD_GROUPS * NUM_SPLITS_PER_WG
@@ -543,8 +555,6 @@ Lets set H=1.
 Optimal would be if those 38 CUs could share that S consecutive splits of kv cache. But we have only 128/16=8 head groups. So 8 can reuse the same L2 cache. So the limit is 4 MB / 38 * 8 = 0.8 MB
 
 That would be enough for (0.8MB / (576*2B*64) = 11 so lets say) 8 consecutive splits for a CU.
-
-
 
 Buuuuuuuutt, we will be running these models rather in tensor parallel mode, e.g. tp8, which means that we divide the heads to different gpus, 128/8=16. And then we group that 16 heads to one head group. So we basically have just one head group
 apparent on device. And something like 32 splits, so just 32 workgroups if batch=1. But with batch=32, its already 32*32=1024, which is too much. Hmm, persistence could make sense in this case
@@ -576,7 +586,7 @@ def _decode_grouped_persistent_att_m_fwd(
     
     # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
     # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
-    extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 1}
+    extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 2}
     num_stages = 1
     num_warps = 4
 
@@ -695,9 +705,10 @@ def _decode_grouped_att_m_fwd(
         NUM_KV_SPLITS,
     )
 
-    # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
-    # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
-    extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 1}
+    if is_hip_:
+        # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
+        # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
+        extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 2}
 
     _fwd_grouped_kernel_stage1[grid](
         q,
