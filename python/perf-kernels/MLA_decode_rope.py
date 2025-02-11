@@ -182,8 +182,8 @@ def _fwd_grouped_kernel_stage1_rope(
                 other=0.0,
             )  # positional embedding part of keys
 
-            if USE_ROPE and start_n == cur_batch_seq_len - BLOCK_N:
-                k_pe = tl.where(offs_n[None, :] < (split_kv_end - 1), k_pe, k_pe_last_token[:, None])
+            if USE_ROPE and start_n >= cur_batch_seq_len - BLOCK_N:
+                k_pe = tl.where(offs_n[None, :] != (split_kv_end - 1), k_pe, k_pe_last_token[:, None])
 
             # (16, 64) x (64, 32)
             # dot product of rope parts
@@ -439,6 +439,7 @@ def ref_compute_full_fwd(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req
     (1, 128, 2048, 512, 64, 64),
     (1, 128, 2048, 512, 128, 64),
     (1, 128, 2048, 512, 127, 64),
+    (1, 128, 2050, 512, 127, 64),
 ])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize('use_rope', [True, False])
@@ -474,6 +475,7 @@ def test_op_fwd_rope(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, dtype,
     (1, 128, 2048, 512, 64, 64),
     (1, 128, 2048, 512, 128, 64),
     (1, 128, 2048, 512, 127, 64),
+    (1, 128, 2050, 512, 127, 64),
 ])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize('use_rope', [True])
@@ -509,6 +511,7 @@ def test_op_fwd_rope_neox(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, d
     (1, 128, 2048, 512, 64, 64),
     (1, 128, 2048, 512, 128, 64),
     (1, 128, 2048, 512, 127, 64),
+    (1, 128, 2050, 512, 127, 64),
 ])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize('use_rope', [True, False])
