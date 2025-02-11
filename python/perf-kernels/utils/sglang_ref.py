@@ -380,29 +380,14 @@ def _fwd_grouped_persistent_kernel_stage1(
     NUM_CU: tl.constexpr, GRID_CU_MULTIP: tl.constexpr, NUM_HEAD_GROUPS: tl.constexpr, NUM_SPLITS_PER_WG: tl.constexpr,
     NUM_PIDS_TOTAL: tl.constexpr,
 ):
-    # in a non persistent kernel
-    # cur_batch = tl.program_id(0)
-    # cur_head_id = tl.program_id(1)
-    # split_kv_id = tl.program_id(2)
 
     NUM_WG: tl.constexpr = NUM_CU * GRID_CU_MULTIP  # number of persistent workgroups launched
     num_splits_per_head: tl.constexpr = NUM_KV_SPLITS // NUM_SPLITS_PER_WG # the number of programs (splits) per single head
     num_splits_per_sample: tl.constexpr = num_splits_per_head * NUM_HEAD_GROUPS  # times the number of heads
 
-    # number between 0, ..., 304 - 1
     raw_pid = tl.program_id(0) 
-
-    # so this is 0,1,2,3.... for different workgroups
-    # I assumed that pids 0,1 are at the same die.
-    # 
-    # But I think its rather like:
-    # We have 8 dies. 0 and 8 pids are at the same die.
-    # So they are served to dies in roundtable manner.
-    # We have in total of 304 workgroups. 304 / 8 = 38.
-    # TODO: mapping that has the following effect
-    #  0, 8, 16 -> 0,1,2
-    #  1, 9, 17 -> 38, 39, 40
-
+    
+    # TODO: mapping that has the workgroups that share the same q load or kv load at the same die for L2 reuse.
     pid=raw_pid # (raw_pid//8)+(raw_pid%8)*38
 
     cur_batch = pid // num_splits_per_sample
@@ -473,10 +458,6 @@ def _fwd_grouped_persistent_kernel_stage1(
                 )
                 offs_buf_k = (kv_loc[None, :] * stride_buf_kbs + cur_kv_head * stride_buf_kh + offs_d[:, None])
                 
-                # WG1 normally from global, WG2 would load from shared
-                # Assumption: WG1 and WG2 would reside in the same CU
-                # Most likely what happens: WG1 and WG(304+1) are residin in the same CU
-                
                 k = tl.load(
                     K_Buffer + offs_buf_k,
                     mask=(offs_n[None, :] < split_kv_end) & (mask_d[:, None]),
@@ -536,7 +517,7 @@ def _fwd_grouped_persistent_kernel_stage1(
         
         # if done already the NUM_SPLITS_PER_WG
         if (split_kv_id % NUM_SPLITS_PER_WG) == 0: # move to next program
-            tl.debug_barrier()
+            # tl.debug_barrier()
             raw_pid += NUM_WG
             pid=raw_pid # (raw_pid//8)+(raw_pid%8)*38
             split_kv_id = pid % num_splits_per_sample // NUM_HEAD_GROUPS * NUM_SPLITS_PER_WG
