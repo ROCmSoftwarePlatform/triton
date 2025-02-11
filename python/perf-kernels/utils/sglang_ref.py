@@ -536,7 +536,7 @@ def _fwd_grouped_persistent_kernel_stage1(
         
         # if done already the NUM_SPLITS_PER_WG
         if (split_kv_id % NUM_SPLITS_PER_WG) == 0: # move to next program
-            # tl.debug_barrier()
+            tl.debug_barrier()
             raw_pid += NUM_WG
             pid=raw_pid # (raw_pid//8)+(raw_pid%8)*38
             split_kv_id = pid % num_splits_per_sample // NUM_HEAD_GROUPS * NUM_SPLITS_PER_WG
@@ -624,7 +624,6 @@ def _decode_grouped_persistent_att_m_fwd(
     #     BLOCK_DPE = 0
     
     # Init grid
-
     batch, head_num = B_req_idx.shape[0], q.shape[1]
     kv_group_num = q.shape[1] // k_buffer.shape[1]
     num_head_groups = triton.cdiv(head_num, min(BLOCK_H, kv_group_num))
@@ -714,10 +713,6 @@ def _decode_grouped_att_m_fwd(
         triton.cdiv(head_num, min(BLOCK_H, kv_group_num)),
         NUM_KV_SPLITS,
     )
-
-
-    
-
 
     # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
     # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py

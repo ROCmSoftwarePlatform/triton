@@ -45,22 +45,20 @@ fp8_e4m3fnuz_max = torch.finfo(torch.float8_e4m3fnuz).max
 
 
 def attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, persistent=False):
-    
     if persistent:
-        from utils.sglang_ref import decode_attention_fwd_grouped_persistent as decode_attention_fwd_ref
+        from utils.sglang_ref import _decode_grouped_persistent_att_m_fwd as decode_attention_fwd
     else:
-        from utils.sglang_ref import decode_attention_fwd_grouped as decode_attention_fwd_ref
+        from utils.sglang_ref import _decode_grouped_att_m_fwd as decode_attention_fwd
 
-    
     B, H = q_input.shape[0], q_input.shape[1]
     kv_lora_rank = v_input.shape[-1]
     device = q_input.device
 
-    o = torch.empty((*q_input.shape[:-1], v_input.shape[-1]), dtype=q_input.dtype, device=q_input.device)
     attn_logits = torch.empty(B, H, num_kv_splits, kv_lora_rank + 1, dtype=q_input.dtype, device=device)
-    decode_attention_fwd_ref(q_input, k_input, v_input, o, Req_to_tokens, B_req_idx, B_Seqlen, attn_logits,
+    decode_attention_fwd(q_input, k_input, v_input, attn_logits, Req_to_tokens, B_req_idx, B_Seqlen,
                                     num_kv_splits, sm_scale, logit_cap)
-    return o, attn_logits
+    
+    return attn_logits
 
 
 def input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device, rope_base=10, rope_max_seq_len=16324, rope_scaling=1.0):
@@ -68,16 +66,14 @@ def input_helper(B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtyp
     B_req_idx = torch.arange(B, device=device)
     B_Seqlen = torch.full((B, ), S, device=device)
 
-    q = torch.randn(B, H, D + qk_rope_head_dim, dtype=dtype, device=device)
+    q = torch.randn(B, H, kv_lora_rank + qk_rope_head_dim, dtype=dtype, device=device) # w_kc fused
     kv_cache = torch.randn(B * S, kv_lora_rank + qk_rope_head_dim, dtype=dtype, device=device)
-    # v = k[:,:kv_lora_rank]
 
     att_out = torch.empty(B, H, D, dtype=dtype, device=device)
     attn_logits = torch.empty(B, H, num_kv_splits, kv_lora_rank + 1, dtype=dtype, device=device)
 
     w_kc = torch.randn(H, D, kv_lora_rank, dtype=dtype, device=device)
     w_vc = torch.randn(H, kv_lora_rank, D, dtype=dtype, device=device)
-
 
     rotary_dim = qk_rope_head_dim
     rotary_emb = DeepseekScalingRotaryEmbedding(
@@ -117,10 +113,8 @@ def quantize_input_fp8(q, w_kc, w_vc, use_fp8):
 @pytest.mark.parametrize('B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim', [
     (32, 16, 2048, 512, 128, 64),
 ])
-@pytest.mark.parametrize('fuse_rope', [False])
-@pytest.mark.parametrize('use_fp8', [False])
 @pytest.mark.parametrize('dtype', [torch.bfloat16])
-def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_rope, use_fp8, dtype, num_kv_splits=32, sm_scale=1.0, logit_cap=0.0,
+def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, dtype, num_kv_splits=32, sm_scale=1.0, logit_cap=0.0,
                 device="cuda"):
     torch.manual_seed(0)
 
@@ -128,28 +122,21 @@ def test_op_fwd(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, fuse_
     Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc, rotary_dim, rotary_emb, positions = input_helper(
         B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device)
 
-
     k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
 
-    tri_output, tri_logits = ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
-                                  logit_cap, rotary_emb, positions,  rope_fused=fuse_rope, use_fp8=use_fp8, device="cuda", persistent=True)
+    tri_logits = ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+                                  logit_cap, rotary_emb, positions, device="cuda", persistent=True)
 
     # reference
-    
-    ref_output, ref_logits = ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
-                                  logit_cap, rotary_emb, positions,  rope_fused=fuse_rope, use_fp8=use_fp8, device="cuda")
+    ref_logits = ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+                                  logit_cap, rotary_emb, positions, device="cuda")
 
     print("first 10 logits:")
     print(f"ref: {ref_logits[:,:,-1].flatten()[:]}") # to debug the rope, check last split
     print(f"tri: {tri_logits[:,:,-1].flatten()[:]}")
     torch.testing.assert_close(ref_logits, tri_logits, atol=1e-2, rtol=1e-2)
     print("attn_logits from stage 1 matches with ref")
-
-    print("first 10 outputs:")
-    print(f"ref: {ref_output.flatten()[:10]}")
-    print(f"tri: {tri_output.flatten()[:10]}")
-    torch.testing.assert_close(ref_output, tri_output, atol=1e-2, rtol=1e-2)
-    print("attn_output from stage 2 matches with ref")
+    # stage 2 is shared
 
 def ref_preprocess(kv_cache, kv_lora_rank):
     latent_cache = kv_cache
@@ -159,71 +146,18 @@ def ref_preprocess(kv_cache, kv_lora_rank):
     k_input[..., :kv_lora_rank] = v_input
     return k_input, v_input
 
-def ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, rotary_emb, positions, rope_fused=False, use_fp8=False,
-             device="cuda", persistent=False):
-
-    B, H = q.shape[0], q.shape[1]
-    S = B_Seqlen[0].item()
-    kv_lora_rank = w_kc.shape[-1]
-    qk_nope_head_dim = w_kc.shape[1]
-    qk_rope_head_dim = k_input.shape[-1] - kv_lora_rank
-
-    q_input = torch.empty(B, H, kv_lora_rank + qk_rope_head_dim, dtype=q.dtype).to(device)
-    q_nope, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
-    q_nope, q_nope_descale, w_kc, w_kc_descale, w_vc, w_vc_descale = quantize_input_fp8(q_nope, w_kc, w_vc, use_fp8)
-    
-    # torch.cuda.synchronize()
-    # start_t = time.time()
-
-    if use_fp8:
-        q_nope_out = torch.bmm(q_nope.transpose(0, 1).float(), w_kc.float())
-        q_nope_out *= q_nope_descale
-        q_nope_out *= w_kc_descale
-        q_nope_out = q_nope_out.to(q.dtype)
-    else:
-        q_nope_out = torch.bmm(q_nope.transpose(0, 1), w_kc)
-
-    q_input[..., :kv_lora_rank] = q_nope_out.transpose(0, 1)
-
-    if rope_fused:
-        k_pe_t = k_input.view(B,1,S,-1)[:,:,-1:,kv_lora_rank:]
-        q_pe, k_pe_t = rotary_emb(positions, q_pe.unsqueeze(2), k_pe_t)
-        q_pe = q_pe.squeeze()
-        k_input.view(B,1,S,-1)[:,:,-1:,kv_lora_rank:] = k_pe_t
-
-    q_input[..., kv_lora_rank:] = q_pe
-
-    attn_output, attn_logits_ref = attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen,
+def ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, rotary_emb, positions, device="cuda", persistent=False):
+    q_input = q
+    attn_logits = attn_mqa(q_input, k_input, v_input, Req_to_tokens, B_req_idx, B_Seqlen,
                                             num_kv_splits, sm_scale, logit_cap, persistent=persistent)
-
-    attn_output = attn_output.view(-1, H, kv_lora_rank)
-
-    if use_fp8:
-        attn_output, attn_output_descale = input_to_float8(attn_output)
-
-        attn_bmm_output = torch.bmm(attn_output.transpose(0, 1).float(), w_vc.float())
-        attn_bmm_output *= attn_output_descale
-        attn_bmm_output *= w_vc_descale
-        attn_bmm_output = attn_bmm_output.to(q.dtype)
-    else:
-        attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
-
-    
-    # torch.cuda.synchronize()
-    # print(f"time for ref {time.time() - start_t}")
-
-
-    ref_output = attn_bmm_output.transpose(0, 1)  #  # .flatten(1, 2)
-
-    return ref_output, attn_logits_ref
+    return attn_logits
 
 
 def benchmark(args):
-    fuse_rope = args.fuse_rope
-    fp8_gemm = args.fp8_gemm
     dtype = arg_to_torch_dtype[args.dtype]
-    configs = []
+    torch.set_default_dtype(dtype)
 
+    configs = []
 
     x_vals_list = [(32, 16, 2048, 512, 128, 64, 32)]
     x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
@@ -238,24 +172,23 @@ def benchmark(args):
     @triton.testing.perf_report(configs)
     def bench_MLA(B, H, S, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, num_kv_splits, sm_scale, logit_cap, device,
                   provider):
-        warmup = 2
-        rep = 2
+        warmup = 25
+        rep = 100
 
         D = qk_nope_head_dim
 
         Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, att_out, attn_logits, w_kc, w_vc, rotary_dim, rotary_emb, positions = input_helper(
             B, H, S, D, kv_lora_rank, qk_rope_head_dim, num_kv_splits, dtype, device)
 
-
         if "persistent" in provider:
             k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
             fn = lambda: ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
-                                  logit_cap, rotary_emb, positions, rope_fused=fuse_rope, use_fp8=fp8_gemm, device="cuda", persistent=True)
+                                  logit_cap, rotary_emb, positions, device="cuda", persistent=True)
 
         if "ref" in provider:
             k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
             fn = lambda: ref_compute(q, k_input, v_input, w_kc, w_vc, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
-                                  logit_cap, rotary_emb, positions, rope_fused=fuse_rope, use_fp8=fp8_gemm, device="cuda")
+                                  logit_cap, rotary_emb, positions, device="cuda")
 
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
@@ -270,9 +203,7 @@ def parse_args():
         allow_abbrev=False,
     )
 
-    parser.add_argument("-fuse_rope", action='store_true', default=False, help="Test fusing rope inside kernel.")
-    parser.add_argument("-fp8_gemm", action='store_true', default=False, help="Enable the fp8 gemm")
-    parser.add_argument("-dtype", default='fp16')
+    parser.add_argument("-dtype", default='bf16')
     parser.add_argument("-device", default='cuda')
     return parser.parse_args()
 
