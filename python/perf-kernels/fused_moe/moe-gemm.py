@@ -20,11 +20,154 @@ M_THRESHOLD_SMALL = 256
 M_THRESHOLD_MEDIUM = 1024
 
 
+class MetaData():
+    use_fp8_w8a8 = False
+    use_int8_w8a16 = False
+    use_silu_activation = False
+
+    def __init__(self, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config):
+        self.topk_weights = topk_weights
+        self.topk_ids = topk_ids
+        self.sorted_token_ids = sorted_token_ids
+        self.expert_ids = expert_ids
+        self.num_tokens_post_padded = num_tokens_post_padded
+        self.config = config
+
+    def set_use_fp8_w8a8(self, a_descale, b_descale, fp8_type):
+        self.use_fp8_w8a8 = True
+        self.a_descale = a_descale
+        self.b_descale = b_descale
+        self.fp8_type = fp8_type
+
+    def set_use_int8_w8a16(self, b_descale):
+        self.use_int8_w8a16 = True
+        self.b_descale = b_descale
+        self.a_descale = None
+
+    def set_use_silu_activation(self):
+        self.use_silu_activation = True
+
+    def check_args(self, a, b, o):
+        if self.use_silu_activation:
+            assert b.shape[1] % 2 == 0
+            assert a.shape[-1] == b.shape[-1] and b.shape[1] == (o.shape[-1] * 2)
+        else:
+            a.shape[-1] == b.shape[-1] and b.shape[1] == o.shape[-1]
+        assert not (self.use_fp8_w8a8 and self.use_int8_w8a16)
+
+
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0}, num_warps=8,
+                      num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2}, num_warps=4,
+                      num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2}, num_warps=8,
+                      num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2}, num_warps=8,
+                      num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2}, num_warps=8,
+                      num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'GROUP_SIZE_M': 32, 'waves_per_eu': 2}, num_warps=4,
+                      num_stages=2),
+    ],
+    key=['EM', 'N'],
+    use_cuda_graph=True,
+)
+@triton.jit
+def silu_and_mul_kernel(A, Out, stride_am, stride_an, stride_cm, stride_cn, EM: tl.constexpr, N: tl.constexpr,
+                        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
+    """
+        Performs the silu and multiply. The first [:N // 2] half will perform silu and be multiplied with the second [N // 2:] half
+
+        Key Parameters:
+
+        - A: Shape (M * top_k, N)
+        - Out: Shape (M * top_k, N // 2)
+    """
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(EM, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    off_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)).to(tl.int64) % EM
+    off_an = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)).to(tl.int64) % N
+
+    a_ptrs = A + (off_am[:, None] * stride_am + off_an[None, :] * stride_an)
+    mul_a_ptrs = A + (off_am[:, None] * stride_am + (off_an + N)[None, :] * stride_an)
+
+    acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+    a = tl.load(a_ptrs)
+    mul_a = tl.load(mul_a_ptrs)
+
+    scaled_a = (a * 1.44269504089).to(tl.float32)
+    acc = ((a / (1.0 + tl.exp2(-scaled_a))) * mul_a).to(acc.dtype)
+
+    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    out_ptrs = Out + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = (offs_cm[:, None] < EM) & (offs_cn[None, :] < N)
+    tl.store(out_ptrs, acc.to(Out.dtype.element_ty), mask=c_mask)
+
+
+@triton.jit
+def moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn, topk_weights_ptr,
+              off_experts, offs_bn, token_mask, offs_k, offs_token, K: tl.constexpr, EVEN_K: tl.constexpr,
+              MUL_ROUTED_WEIGHT: tl.constexpr, use_fp8_w8a8: tl.constexpr, use_int8_w8a16: tl.constexpr,
+              BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+    if use_int8_w8a16:
+        b_scale_ptrs = B_scale + off_experts * stride_bse + offs_bn[None, :] * stride_bsn
+        b_scale = tl.load(b_scale_ptrs)
+
+    if use_fp8_w8a8:
+        a_scale = tl.load(A_scale)
+        b_scale = tl.load(B_scale + off_experts)
+
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+        # Masking ensures we don't load from invalid tokens or indices
+        if EVEN_K:
+            a = tl.load(a_ptrs, mask=(token_mask[:, None]), other=0.0)
+            b = tl.load(b_ptrs)
+        else:
+            a = tl.load(a_ptrs, mask=(token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K)), other=0.0)
+            b = tl.load(b_ptrs, mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K), other=0.0)
+
+        if use_int8_w8a16:
+            accumulator = tl.dot(a, b.to(a.type), acc=accumulator)
+        elif use_fp8_w8a8:
+            accumulator += tl.dot(a, b)
+        else:
+            accumulator = tl.dot(a, b, acc=accumulator)
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
+
+    if MUL_ROUTED_WEIGHT:
+        moe_weight = tl.load(topk_weights_ptr + offs_token, mask=token_mask, other=0)
+        accumulator = accumulator * moe_weight[:, None]
+
+    if use_int8_w8a16:
+        accumulator = (accumulator * b_scale)
+    elif use_fp8_w8a8:
+        accumulator = (accumulator * a_scale * b_scale)
+
+    return accumulator
+
+
 @triton.jit
 def moe_gemm_kernel(
     A,
     B,
     Out,
+    A_scale,
+    B_scale,
     stride_am,
     stride_ak,
     stride_be,
@@ -32,6 +175,8 @@ def moe_gemm_kernel(
     stride_bk,
     stride_cm,
     stride_cn,
+    stride_bse,
+    stride_bsn,
     top_k: tl.constexpr,
     topk_weights_ptr,
     sorted_token_ids_ptr,
@@ -41,6 +186,9 @@ def moe_gemm_kernel(
     K: tl.constexpr,
     EVEN_K: tl.constexpr,
     MUL_ROUTED_WEIGHT: tl.constexpr,
+    use_fp8_w8a8: tl.constexpr,
+    use_int8_w8a16: tl.constexpr,
+    use_silu_activation: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
@@ -82,6 +230,8 @@ def moe_gemm_kernel(
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
+    dtype = Out.dtype.element_ty
+
     offs_token_id = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_token = tl.load(sorted_token_ids_ptr + offs_token_id)
 
@@ -89,34 +239,44 @@ def moe_gemm_kernel(
     token_mask = (offs_token >= 0) & (offs_token < EM)
 
     off_experts = tl.load(expert_ids_ptr + pid_m)
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
     offs_k = tl.arange(0, BLOCK_SIZE_K)
+    if use_silu_activation:
+        BLOCK_SIZE_HALF: tl.constexpr = BLOCK_SIZE_N // 2
+        i = tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
+        # [0, 0, 1, 1, ..., BLOCK_SIZE_HALF - 1, BLOCK_SIZE_HALF - 1]
+        i_floor = i // 2
+        offs_half = (pid_n * (BLOCK_SIZE_N // 2) + i_floor) % (N // 2)
+        # (i % 2): [0, 1, 0, 1,...] (alternating)
+        # (i % 2) * (N // 2) : [0, (N // 2), 0, (N // 2),...]
+        # So offs_bn now takes element from the first BLOCK_SIZE_HALF half and the second BLOCK_SIZE_HALF half in an alternating way (This allows us to do reshape without permute)
+        offs_bn = (offs_half + (i % 2) * (N // 2)) % N
+    else:
+        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
     a_ptrs = A + (offs_token[:, None] // top_k * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = B + off_experts * stride_be + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    if use_silu_activation:
+        merged_acc = moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn,
+                               topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K, EVEN_K,
+                               MUL_ROUTED_WEIGHT, use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N,
+                               BLOCK_SIZE_K)
 
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        # Masking ensures we don't load from invalid tokens or indices
-        if EVEN_K:
-            a = tl.load(a_ptrs, mask=(token_mask[:, None]), other=0.0)
-            b = tl.load(b_ptrs)
-        else:
-            a = tl.load(a_ptrs, mask=(token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K)), other=0.0)
-            b = tl.load(b_ptrs, mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K), other=0.0)
+        silu_acc, mul_acc = merged_acc.reshape(BLOCK_SIZE_M, BLOCK_SIZE_HALF, 2).split()
+        silu_acc = (silu_acc / (1.0 + tl.exp2(-(silu_acc * 1.44269504089))))
+        acc = (silu_acc * mul_acc).to(tl.float32)
+    else:
+        acc = moe_inner(a_ptrs, b_ptrs, A_scale, B_scale, stride_ak, stride_bk, stride_bse, stride_bsn,
+                        topk_weights_ptr, off_experts, offs_bn, token_mask, offs_k, offs_token, K, EVEN_K,
+                        MUL_ROUTED_WEIGHT, use_fp8_w8a8, use_int8_w8a16, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K)
 
-        accumulator = tl.dot(a, b, acc=accumulator)
-        a_ptrs += BLOCK_SIZE_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * stride_bk
-
-    if MUL_ROUTED_WEIGHT:
-        moe_weight = tl.load(topk_weights_ptr + offs_token, mask=token_mask, other=0)
-        accumulator = accumulator * moe_weight[:, None]
-
-    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    if use_silu_activation:
+        offs_cn = pid_n * BLOCK_SIZE_HALF + tl.arange(0, BLOCK_SIZE_HALF)
+        c_mask = token_mask[:, None] & (offs_cn[None, :] < N // 2)
+    else:
+        offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+        c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
     out_ptrs = Out + stride_cm * offs_token[:, None] + stride_cn * offs_cn[None, :]
-    c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
-    tl.store(out_ptrs, accumulator.to(Out.dtype.element_ty), mask=c_mask)
+    tl.store(out_ptrs, acc.to(dtype), mask=c_mask)
 
 
 def _moe_align_block_size(topk_ids: torch.Tensor, num_experts: int, top_k: int, block_size: int,
@@ -287,35 +447,116 @@ def try_get_optimal_moe_config(
     return config
 
 
-def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
-             sorted_token_ids: torch.Tensor, expert_ids: torch.Tensor, num_tokens_post_padded: torch.Tensor,
-             config) -> None:
+def silu_and_mul(a: torch.Tensor, out: torch.Tensor):
+    """
+        a: (M * top_k, N)
+        out: (M * top_k, N // 2)
+    """
+    # This will actually be N // 2 with the silu fusion
+    EM, N = out.shape
+    grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
+    silu_and_mul_kernel[grid](a, out, a.stride(0), a.stride(1), out.stride(0), out.stride(1), EM, N)
+    return out
+
+
+def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, metadata: MetaData) -> torch.Tensor:
     # TODO shard M dim
+    metadata.check_args(a, b, c)
+
+    topk_ids, num_tokens_post_padded, topk_weights, sorted_token_ids, expert_ids, config = metadata.topk_ids, metadata.num_tokens_post_padded, metadata.topk_weights, metadata.sorted_token_ids, metadata.expert_ids, metadata.config
+
+    use_fp8_w8a8, use_int8_w8a16 = metadata.use_fp8_w8a8, metadata.use_int8_w8a16
+    a_descale, b_descale = None, None
+    stride_bse = None
+    stride_bsn = None
+    if use_fp8_w8a8 or use_int8_w8a16:
+        a_descale, b_descale = metadata.a_descale, metadata.b_descale
+        if use_int8_w8a16:
+            stride_bse = b_descale.stride(0)
+            stride_bsn = b_descale.stride(1)
+
     _, top_k = topk_ids.shape
 
     EM = num_tokens_post_padded.item()
     _, N, K = b.shape
-    grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
 
     EVEN_K = K % config["BLOCK_SIZE_K"] == 0
+    grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
 
-    moe_gemm_kernel[grid](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2), c.stride(1),
-                          c.stride(2), top_k, topk_weights, sorted_token_ids, expert_ids, EM, N, K, EVEN_K,
-                          MUL_ROUTED_WEIGHT=topk_weights is not None, **config)
+    if metadata.use_silu_activation:
+        stride_cm = c.stride(0)
+        stride_cn = c.stride(1)
+    else:
+        stride_cm = c.stride(1)
+        stride_cn = c.stride(2)
+
+    moe_gemm_kernel[grid](a, b, c, a_descale, b_descale, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
+                          b.stride(2), stride_cm, stride_cn, stride_bse, stride_bsn, top_k, topk_weights,
+                          sorted_token_ids, expert_ids, EM, N, K, EVEN_K, MUL_ROUTED_WEIGHT=topk_weights is not None,
+                          use_fp8_w8a8=use_fp8_w8a8, use_int8_w8a16=use_int8_w8a16,
+                          use_silu_activation=metadata.use_silu_activation, **config)
     return c
 
 
-def input_helper(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool, dtype):
+quantization_max_repr_val = {
+    torch.int8: 127, torch.float8_e4m3fnuz: 240.0, torch.float8_e4m3fn: 448.0, torch.float8_e5m2fnuz: 57344.0,
+    torch.float8_e5m2: 57344.0
+}
+
+
+def quantize_tensor(tensor: torch.Tensor, dtype, dim=()) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    quantize_dim = [i for i in range(tensor.dim()) if i not in dim]
+    max_vals = tensor.abs().amax(dim=quantize_dim, keepdim=True)
+    max_repr_val = quantization_max_repr_val[dtype]
+    # Avoid division by zero
+    max_vals[max_vals == 0] = 1e-8
+
+    # Compute scale factors for each channel
+    scale: torch.Tensor = max_repr_val / max_vals.to(torch.float32)
+
+    # Quantize the tensor
+    tensor = tensor * scale
+    tensor = tensor.round_()
+    tensor.clamp_(-max_repr_val, max_repr_val)
+    tensor_quantized = tensor.to(torch.int8)
+
+    scale = scale.squeeze(dim=quantize_dim)
+
+    return tensor_quantized, scale, 1 / scale
+
+
+def quantize_input(a, b, use_fp8_w8a8: tl.constexpr, use_int8_w8a16: tl.constexpr, metatdata: MetaData, fp8_type=None):
+    assert not (use_fp8_w8a8 and use_int8_w8a16)
+    assert not (use_fp8_w8a8 and fp8_type is None)
+
+    if use_fp8_w8a8:
+        a_quantized, _, a_descale = quantize_tensor(a, dtype=fp8_type)
+        b_quantized, _, b_descale = quantize_tensor(b, dim=(0, ), dtype=fp8_type)
+        metatdata.set_use_fp8_w8a8(a_descale, b_descale, fp8_type)
+        return a_quantized, b_quantized
+
+    if use_int8_w8a16:
+        b_quantized, _, b_descale = quantize_tensor(b, dim=(0, 1), dtype=torch.int8)
+        metatdata.set_use_int8_w8a16(b_descale)
+        return a, b_quantized
+
+
+def input_helper(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool, use_fp8_w8a8: bool,
+                 use_int8_w8a16: bool, fp8_type, use_silu_activation: bool, dtype):
     a = torch.randn((M, K), dtype=dtype, device='cuda')
     b = torch.randn((E, N, K), dtype=dtype, device='cuda')
-    c = torch.zeros((M, top_k, N), dtype=dtype, device='cuda')
+
+    if use_silu_activation:
+        c = torch.zeros((M * top_k, N // 2), dtype=dtype, device='cuda')
+    else:
+        c = torch.zeros((M, top_k, N), dtype=dtype, device='cuda')
 
     values = torch.randn(M, E, device='cuda')
 
     softmax_vals = torch.softmax(values, dim=1)
     topk_weights, topk_ids = torch.topk(softmax_vals, k=top_k, dim=1)
 
-    config_dtype = None
+    config_dtype = get_config_dtype_str(use_fp8_w8a8=use_fp8_w8a8, use_int8_w8a16=use_int8_w8a16, dtype=dtype)
     get_config_func = functools.partial(
         try_get_optimal_moe_config,
         E,
@@ -324,32 +565,68 @@ def input_helper(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool
     config = get_config_func(M)
     sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size(topk_ids, config['BLOCK_SIZE_M'], E)
 
-    if not routed_weight:
-        return a, b, c, None, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config
+    metadata = MetaData(topk_weights if routed_weight else None, topk_ids, sorted_token_ids, expert_ids,
+                        num_tokens_post_padded, config)
 
-    return a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config
+    if use_fp8_w8a8 or use_int8_w8a16:
+        a, b = quantize_input(a, b, use_fp8_w8a8, use_int8_w8a16, metadata, fp8_type)
+
+    if use_silu_activation:
+        metadata.set_use_silu_activation()
+
+    return a, b, c, metadata
+
+
+def silu_and_mul_torch(input):
+    """
+    Performs the SiLU activation on the first half of the input tensor and
+    multiplies it element-wise with the second half.
+
+    Args:
+        input (torch.Tensor): Input tensor of shape [..., 2 * d].
+        param (float): Parameter for the SiLU activation function.
+
+    Returns:
+        torch.Tensor: Output tensor of shape [..., d].
+    """
+    d = input.size(-1) // 2
+    A, B = input[:, :d], input[:, d:]
+
+    silu_A = A / (1.0 + torch.exp(-A.float()))
+
+    output = silu_A * B
+
+    return output
 
 
 @pytest.mark.parametrize("M, N, K, top_k, E", [
     (64, 14336, 4096, 2, 8),
     (16, 14336, 1, 2, 4),
+    (256, 14336, 1, 2, 4),
+    (2048, 14336, 1, 2, 4),
     (1, 14336, 128, 2, 4),
-    (3, 14336, 128, 2, 4),
     (16, 14336, 128, 1, 4),
     (16, 14336, 128, 1, 1),
+    (64, 70, 128, 2, 8),
+    (64, 30, 128, 2, 8),
     (64, 7186, 128, 2, 8),
     (64, 3584, 128, 2, 8),
     (64, 1792, 128, 2, 8),
     (64, 64, 128, 2, 8),
 ])
 @pytest.mark.parametrize('routed_weight', [True, False])
-def test_correctness(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool, dtype=torch.float16):
+@pytest.mark.parametrize('use_silu_activation', [True, False])
+def test_correctness(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool, use_silu_activation: bool,
+                     dtype=torch.float16):
     torch.manual_seed(20)
-    a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
-        M, N, K, top_k, E, routed_weight=routed_weight, dtype=dtype)
+    a, b, c, metadata = input_helper(M, N, K, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=False,
+                                     use_int8_w8a16=False, fp8_type=None, use_silu_activation=use_silu_activation,
+                                     dtype=dtype)
 
-    tri_out = moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config)
+    tri_out = moe_gemm(a, b, c, metadata)
 
+    topk_ids = metadata.topk_ids
+    topk_weights = metadata.topk_weights
     ref_out = torch.empty_like(c)
     # Repeat a -> (M, top_k, K)
     a_expanded = a.unsqueeze(1).repeat(1, top_k, 1)
@@ -359,7 +636,124 @@ def test_correctness(M: int, N: int, K: int, top_k: int, E: int, routed_weight: 
     if routed_weight:
         ref_out *= topk_weights.unsqueeze(-1)
 
+    if use_silu_activation:
+        ref_out = silu_and_mul_torch(ref_out.reshape(M * top_k, N)).to(dtype)
+
+    # TODO why is the result so big??
     # Validate correctness
+    torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize("M, N, K, top_k, E", [
+    (64, 14336, 4096, 2, 8),
+    (16, 14336, 1, 2, 4),
+    (1, 14336, 128, 2, 4),
+    (16, 14336, 128, 1, 4),
+    (16, 14336, 128, 1, 1),
+    (64, 7186, 128, 2, 8),
+    (64, 3584, 128, 2, 8),
+    (64, 1792, 128, 2, 8),
+    (64, 64, 128, 2, 8),
+])
+@pytest.mark.parametrize('routed_weight', [True, False])
+@pytest.mark.parametrize('use_fp8_w8a8', [True])
+# triton does not support torch.float8_e4m3fn
+@pytest.mark.parametrize('use_silu_activation', [True, False])
+@pytest.mark.parametrize('fp8_type', [torch.float8_e5m2, torch.float8_e5m2fnuz])
+def test_correctness_fp8(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool, use_silu_activation: bool,
+                         use_fp8_w8a8, fp8_type, dtype=torch.float16):
+    torch.manual_seed(20)
+    a, b, c, metadata = input_helper(M, N, K, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=use_fp8_w8a8,
+                                     use_int8_w8a16=False, fp8_type=fp8_type, use_silu_activation=use_silu_activation,
+                                     dtype=dtype)
+
+    tri_out = moe_gemm(a, b, c, metadata)
+
+    topk_ids = metadata.topk_ids
+    topk_weights = metadata.topk_weights
+    ref_out = torch.empty_like(c)
+    # Repeat a -> (M, top_k, K)
+    a_expanded = a.unsqueeze(1).repeat(1, top_k, 1)
+    # (M, top_k, N, K)
+    b_indexed = b.half()[topk_ids]
+    ref_out = torch.einsum("mek,menk->men", a_expanded.float(), b_indexed.float())
+
+    if routed_weight:
+        ref_out *= topk_weights.unsqueeze(-1)
+
+    ref_out = ref_out * metadata.b_descale[topk_ids].unsqueeze(-1)
+    ref_out = ref_out * metadata.a_descale
+    ref_out = ref_out.to(dtype)
+
+    if use_silu_activation:
+        ref_out = silu_and_mul_torch(ref_out.reshape(M * top_k, N)).to(dtype)
+    # Validate correctness
+    torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize("M, N, K, top_k, E", [
+    (64, 14336, 4096, 2, 8),
+    (16, 14336, 1, 2, 4),
+    (1, 14336, 128, 2, 4),
+    (16, 14336, 128, 1, 4),
+    (16, 14336, 128, 1, 1),
+    (64, 7186, 128, 2, 8),
+    (64, 3584, 128, 2, 8),
+    (64, 1792, 128, 2, 8),
+    (64, 64, 128, 2, 8),
+])
+@pytest.mark.parametrize('routed_weight', [True, False])
+@pytest.mark.parametrize('use_int8_w8a16', [True])
+@pytest.mark.parametrize('use_silu_activation', [True, False])
+def test_correctness_int8(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool, use_silu_activation: bool,
+                          use_int8_w8a16, dtype=torch.float16):
+    torch.manual_seed(20)
+    a, b, c, metadata = input_helper(M, N, K, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=False,
+                                     use_int8_w8a16=use_int8_w8a16, fp8_type=None,
+                                     use_silu_activation=use_silu_activation, dtype=dtype)
+
+    tri_out = moe_gemm(a, b, c, metadata)
+
+    topk_ids = metadata.topk_ids
+    topk_weights = metadata.topk_weights
+    ref_out = torch.empty_like(c)
+    # Repeat a -> (M, top_k, K)
+    a_expanded = a.unsqueeze(1).repeat(1, top_k, 1)
+    # (M, top_k, N, K)
+    b_indexed = b[topk_ids]
+    ref_out = torch.einsum("mek,menk->men", a_expanded.to(torch.float32), b_indexed.to(torch.float32))
+    if routed_weight:
+        ref_out *= topk_weights.unsqueeze(-1)
+
+    ref_out = ref_out * metadata.b_descale[topk_ids, :]
+    ref_out = ref_out.to(dtype)
+
+    if use_silu_activation:
+        ref_out = silu_and_mul_torch(ref_out.reshape(M * top_k, N)).to(dtype)
+    # Validate correctness
+    torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize("M, N, top_k", [
+    (64, 14336, 2),
+    (16, 14336, 2),
+    (1, 14336, 2),
+    (16, 14336, 1),
+    (64, 7186, 2),
+    (64, 3584, 2),
+    (64, 1792, 2),
+    (64, 64, 2),
+])
+def test_silu_correctness(M: int, N: int, top_k: int, dtype=torch.float16):
+    torch.manual_seed(20)
+    a = torch.randn((M * top_k, N), dtype=dtype, device='cuda')
+    out = torch.zeros((M * top_k, N // 2), dtype=dtype, device='cuda')
+
+    tri_out = silu_and_mul(a, out)
+    ref_out = silu_and_mul_torch(a).to(dtype)
+
+    print(tri_out)
+    print(ref_out)
     torch.testing.assert_close(tri_out, ref_out, atol=1e-2, rtol=1e-2)
 
 
@@ -398,16 +792,27 @@ def model_benchmark_configs(args):
 
         E = 8
         top_k = 2
+
         moe_configs.append((model_name, M, N1, K1, E, top_k))
-        moe_configs.append((model_name, M, N2, K2, E, top_k))
+        if not (args.use_silu_activation or args.use_silu_activation_non_fused):
+            moe_configs.append((model_name, M, N2, K2, E, top_k))
 
     return moe_configs
 
 
 def run_benchmark(custom, args):
     routed_weight = args.routed_weight
+    use_int8_w8a16 = args.int8_w8a16
+    use_fp8_w8a8 = args.fp8_w8a8
+    use_silu_fused = args.use_silu_activation
+    use_silu_non_fused = args.use_silu_activation_non_fused
     dtype = arg_to_torch_dtype[args.dtype]
+    fp8_type = arg_to_torch_dtype[args.fp8_type]
+    use_silu = use_silu_fused or use_silu_non_fused
+
     x_names = ['M', 'N', 'K', 'E', 'top_k']
+
+    assert not (use_silu_fused and use_silu_non_fused), "please provide valid silu method."
     if custom:
         assert args.M and args.N and args.K and args.E and args.top_k, \
             "Please provide M, N, K, E, top_k for custom runs."
@@ -423,31 +828,55 @@ def run_benchmark(custom, args):
     line_names = ['Time (ms)', 'TFLOPS', 'Bandwidth (GB/s)']
     line_vals = ['time', 'tflops', 'bandwidth']
 
-    benchmark = triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='metric', line_vals=line_vals,
-                                         line_names=line_names, styles=[('red', '-'), ('blue', '-'), ('yellow', '-')],
-                                         ylabel='ms / TFLOPS / GB/s', plot_name='moe-gemm-benchmark',
-                                         args={'dtype': dtype, 'routed_weight': routed_weight})
+    benchmark = triton.testing.Benchmark(
+        x_names=x_names, x_vals=x_vals_list, line_arg='metric', line_vals=line_vals, line_names=line_names,
+        styles=[('red', '-'), ('blue', '-'),
+                ('yellow', '-')], ylabel='ms / TFLOPS / GB/s', plot_name='moe-gemm-benchmark', args={
+                    'dtype': dtype, 'routed_weight': routed_weight, 'use_fp8_w8a8': use_fp8_w8a8, 'use_int8_w8a16':
+                    use_int8_w8a16, 'fp8_type': fp8_type, "use_silu_fused": use_silu_fused, "use_silu_non_fused":
+                    use_silu_non_fused
+                })
 
     @triton.testing.perf_report([benchmark])
-    def bench_moe_gemm(M, N, K, E, top_k, dtype, routed_weight, metric, model=None):
-        # metric will be either 'time'/'tflops' or 'bandwidth'
-        a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded, config = input_helper(
-            M, N, K, top_k, E, routed_weight=routed_weight, dtype=dtype)
+    def bench_moe_gemm(M, N, K, E, top_k, dtype, routed_weight, metric, use_fp8_w8a8, use_int8_w8a16, fp8_type,
+                       use_silu_fused, use_silu_non_fused, model=None):
+        a, b, c, metadata = input_helper(M, N, K, top_k, E, routed_weight=routed_weight, use_fp8_w8a8=use_fp8_w8a8,
+                                         use_int8_w8a16=use_int8_w8a16, fp8_type=fp8_type,
+                                         use_silu_activation=use_silu_fused, dtype=dtype)
+
+        if use_silu_fused:
+            metadata.set_use_silu_activation()
 
         # (M, K) * (top_k, N, K) -> (M, top_k, N). 2 for multiplication and accumulation
         flops = 2.0 * M * top_k * K * N
         # The weight is applied on the gemm product which has the shape of (M, top_k, N)
         if routed_weight:
             flops += M * top_k * N
+        if use_silu:
+            flops += M * top_k * (N // 2) * 4.0  # 3.0 is the estimate flops of the silu 1.0 another for multiplication
 
-        bytes_ = torch.tensor([], dtype=dtype).element_size()
+        if use_fp8_w8a8:
+            a_bytes = b_bytes = torch.tensor([], dtype=fp8_type).element_size()
+            c_bytes = torch.tensor([], dtype=dtype).element_size()
+        elif use_int8_w8a16:
+            b_bytes = torch.tensor([], dtype=torch.int8).element_size()
+            a_bytes = c_bytes = torch.tensor([], dtype=dtype).element_size()
+        else:
+            a_bytes = b_bytes = c_bytes = torch.tensor([], dtype=dtype).element_size()
+
         # (M, K) memory load for A (E,  N,  K) for B not (top_k,  N,  K) because we are in total bringing in all expert matrices into the chip from memory. It's just that not all multiply the same A.
-        mem_read = (M * K + E * N * K) * bytes_
-        # Memory write for the gemm product
-        mem_write = (M * top_k * N) * bytes_
+        mem_read = (M * K) * a_bytes + (E * N * K) * b_bytes
+        if use_silu:
+            mem_write = (M * top_k * (N // 2)) * c_bytes
+        else:
+            mem_write = (M * top_k * N) * c_bytes
         mem = mem_read + mem_write
-        fn = lambda: moe_gemm(a, b, c, topk_weights, topk_ids, sorted_token_ids, expert_ids, num_tokens_post_padded,
-                              config)
+        if use_silu_non_fused:
+            out = torch.zeros((M * top_k, N // 2), dtype=dtype, device='cuda')
+            fn = lambda: silu_and_mul(moe_gemm(a, b, c, metadata).reshape(M * top_k, N), out)
+        else:
+            fn = lambda: moe_gemm(a, b, c, metadata)
+
         ms = triton.testing.do_bench(fn)
 
         bandwidth = mem / (ms * 1e-3) * 1e-9  # GB/s
@@ -482,12 +911,20 @@ def parse_args():
     parser.add_argument("-E", type=int, default=0, help="Number of experts")
     parser.add_argument("-top_k", type=int, default=0, help="top_k experts per token")
     parser.add_argument("-routed_weight", action='store_true', default=False)
+    parser.add_argument("-int8_w8a16", action='store_true', default=False)
+    parser.add_argument("-fp8_w8a8", action='store_true', default=False)
     parser.add_argument("-dtype", default='fp16')
+    parser.add_argument("-fp8_type", default='e5m2')
+    parser.add_argument("-use_silu_activation", action='store_true', default=False)
+    parser.add_argument("-use_silu_activation_non_fused", action='store_true', default=False)
     args = parser.parse_args()
     return args
 
 
-arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
+arg_to_torch_dtype = {
+    'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32, "e5m2": torch.float8_e5m2, "e5m2fnuz":
+    torch.float8_e5m2fnuz, "e4m3fn": torch.float8_e4m3fn, "e4m3fnuz": torch.float8_e4m3fnuz
+}
 
 
 def main():
