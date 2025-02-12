@@ -216,7 +216,7 @@ void StreamPipeliner::initSchedule(int maxIndirectionLevel) {
     config[SCHED_GLOBAL_LOAD] = {0, cluster1};
     config[SCHED_COMPUTE] = {lastStage, cluster1};
     config[SCHED_LOCAL_LOAD] = {lastStage - 1, schedule.clusters.newAtBack()};
-    config[SCHED_TAIL] = {lastStage, schedule.clusters.newAtBack()};
+    config[SCHED_TAIL] = config[SCHED_COMPUTE];
   } else if (isMultibuf) {
     // Streaming Schema cluster order and staging for multi-buffer.
     // for i in (...):
@@ -230,7 +230,7 @@ void StreamPipeliner::initSchedule(int maxIndirectionLevel) {
     config[SCHED_GLOBAL_LOAD] = {0, cluster1};
     config[SCHED_LOCAL_LOAD] = {lastStage, cluster1};
     config[SCHED_COMPUTE] = {lastStage, cluster1};
-    config[SCHED_TAIL] = {lastStage, schedule.clusters.newAtBack()};
+    config[SCHED_TAIL] = config[SCHED_COMPUTE];
   } else {
     // Streaming Schema cluster order and staging for single-buffer.
     // for i in (...):
@@ -244,7 +244,7 @@ void StreamPipeliner::initSchedule(int maxIndirectionLevel) {
     config[SCHED_LOCAL_LOAD] = {lastStage, schedule.clusters.newAtBack()};
     config[SCHED_COMPUTE] = {lastStage, cluster0};
     config[SCHED_LOCAL_STORE] = {lastStage - 1, schedule.clusters.newAtBack()};
-    config[SCHED_TAIL] = {lastStage, schedule.clusters.newAtBack()};
+    config[SCHED_TAIL] = config[SCHED_COMPUTE];
   }
 }
 
