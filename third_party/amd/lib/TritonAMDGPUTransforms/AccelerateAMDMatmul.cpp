@@ -400,6 +400,11 @@ public:
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
 
+    if (isSecondDot(dotOp) && (retShape[0] == mDim)) {
+      warpsPerTile[0] = 1;
+      warpsPerTile[1] = (unsigned)numWarps;
+    }
+
     bool isTransposed = isChainDot(dotOp);
     mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
