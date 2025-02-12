@@ -213,7 +213,7 @@ def _fwd_grouped_kernel_stage1_rope(
                       offs_c[None, :])
 
         if USE_ROPE and LAST_SPLIT:
-            tl.store(k_pe_last_token_ptr, k_pe_last_token)
+            tl.store(k_pe_last_token_ptr, k_pe_last_token, mask=mask_qk_r)
 
         tl.store(
             Att_Out + offs_mid_o,
@@ -512,6 +512,12 @@ def test_op_fwd_rope_neox(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, d
     (1, 128, 2048, 512, 128, 64),
     (1, 128, 2048, 512, 127, 64),
     (1, 128, 2050, 512, 127, 64),
+    (1, 128, 2050, 512, 128, 64),
+    (8, 128, 2048, 512, 64, 64),
+    (8, 128, 2048, 512, 128, 64),
+    (8, 128, 2048, 512, 127, 64),
+    (8, 128, 2050, 512, 127, 64),
+    (8, 128, 2050, 512, 128, 64),
 ])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize('use_rope', [True, False])
