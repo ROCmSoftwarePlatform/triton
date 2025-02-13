@@ -32,11 +32,6 @@ def is_hip():
 
 is_hip_ = is_hip()
 
-logger = logging.getLogger(__name__)
-
-# TODO: Remove this when triton>=3.2.0. This issue will not affect performance and accuracy.
-logger.warning("The following error message 'operation scheduled before its operands' can be ignored.")
-
 
 @triton.jit
 def tanh(x):
