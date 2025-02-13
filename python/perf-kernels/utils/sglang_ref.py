@@ -405,7 +405,7 @@ def _fwd_grouped_persistent_kernel_stage1(
     # TODO: mapping that has the workgroups that share the same q load or kv load at the same die for L2 reuse.
     pid = start_pid - NUM_WG # actual_pid = (pid//8)+(pid%8)*38
 
-    for _ in range(num_pids_per_wg):
+    for _ in range(0, num_pids_per_wg, 1, num_stages=0):
         pid += NUM_WG
         cur_batch = pid // num_splits_per_sample
         cur_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS 
@@ -536,7 +536,7 @@ def _decode_grouped_persistent_att_m_fwd(
     NUM_KV_SPLITS = num_kv_splits
 
     # We will launch NUM_CU * GRID_CU_MULTIP persistent workgroups
-    NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count
+    NUM_CU = 256 # torch.cuda.get_device_properties("cuda").multi_processor_count
     GRID_CU_MULTIP = 1
     
     # Init grid

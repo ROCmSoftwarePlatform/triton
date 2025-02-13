@@ -159,7 +159,7 @@ def benchmark(args):
 
     configs = []
 
-    x_vals_list = [(32, 16, 2048, 512, 128, 64, 32)]
+    x_vals_list = [(1, 128, 2048, 512, 128, 64, 32), (32, 16, 2048, 512, 128, 64, 32), (128, 16, 2048, 512, 128, 64, 32)]
     x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
     line_vals = ["ref", "persistent"]
     plot_name = "MLA-decode"
