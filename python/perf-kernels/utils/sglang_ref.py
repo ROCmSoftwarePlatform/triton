@@ -379,6 +379,7 @@ def _fwd_grouped_persistent_kernel_stage1(
     Lv: tl.constexpr,
     NUM_CU: tl.constexpr, GRID_CU_MULTIP: tl.constexpr, NUM_HEAD_GROUPS: tl.constexpr,
     NUM_PIDS_TOTAL: tl.constexpr,
+    num_stages: tl.constexpr,
 ):
 
     NUM_WG: tl.constexpr = NUM_CU * GRID_CU_MULTIP  # number of persistent workgroups launched
@@ -405,7 +406,7 @@ def _fwd_grouped_persistent_kernel_stage1(
     # TODO: mapping that has the workgroups that share the same q load or kv load at the same die for L2 reuse.
     pid = start_pid - NUM_WG # actual_pid = (pid//8)+(pid%8)*38
 
-    for _ in range(0, num_pids_per_wg, 1, num_stages=0):
+    for _ in range(0, num_pids_per_wg, 1, num_stages=num_stages):
         pid += NUM_WG
         cur_batch = pid // num_splits_per_sample
         cur_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS 
