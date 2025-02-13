@@ -159,7 +159,7 @@ def benchmark(args):
 
     configs = []
 
-    x_vals_list = [(1, 128, 2048, 512, 128, 64, 32)]
+    x_vals_list = [(1, 128, 2048, 512, 128, 64, 32), (32, 16, 2048, 512, 128, 64, 32), (128, 16, 2048, 512, 128, 64, 32)]
     x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
     line_vals = ["ref", "persistent"]
     plot_name = "MLA-decode"
@@ -212,13 +212,65 @@ def parse_args():
 
 arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
 
-def main():
+import re
+
+def parse_vgpr_usage(file_path):
+    with open(file_path, "r") as f:
+        lines = f.readlines()
+    
+    # Extract VGPR-related information
+    vgpr_info = []
+    table_lines = []
+    in_table = False
+
+    for line in lines:
+        if re.search(r"\.vgpr_count:", line) or re.search(r"\.vgpr_spill_count:", line):
+            vgpr_info.append(line.strip())
+        
+        # Detect start of table
+        if re.match(r"^\s*MLA-decode:", line):
+            in_table = True
+            table_lines.append(line.strip())
+        elif in_table:
+            table_lines.append(line.strip())
+
+    # Print extracted information
+    print("\n".join(vgpr_info))
+    print("\n".join(table_lines))
+
+
+def run_bench():
     torch.manual_seed(0)
     args = parse_args()
     torch.set_default_device(args.device)
-    x_vals_list, x_names, line_vals = benchmark(args)
+    benchmark(args)
 
+import sys
+import time
+import re
+import os
 
+def main():
+    # os.system("rm -rf ~/.triton/cache")
+    output_file = "/home/jukorhon/vgpr_usage"
+    
+    # Redirect stdout and stderr to the file
+    with open(output_file, "w") as f:
+        sys.stdout = f
+        sys.stderr = f
+        os.environ["AMDGCN_ENABLE_DUMP"] = "1"
+        run_bench()  # Run the benchmark
+        sys.stdout.flush()
+        sys.stderr.flush()
 
-if __name__ == '__main__':
-    sys.exit(main())
+    # Restore stdout and stderr to normal
+    sys.stdout = sys.__stdout__
+    sys.stderr = sys.__stderr__
+
+    time.sleep(0.5)  # Ensure everything is written before reading
+
+    # Parse and print relevant output
+    parse_vgpr_usage(output_file)
+
+if __name__ == "__main__":
+    main()
