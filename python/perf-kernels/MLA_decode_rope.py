@@ -99,7 +99,7 @@ def _fwd_grouped_kernel_stage1_rope(
     LAST_SPLIT = (split_kv_end == cur_batch_seq_len)
     k_pe_last_token = tl.zeros([BLOCK_R], dtype=q.dtype)
 
-    k_pe_last_token_ptr = k_pe_t_out + cur_batch * stride_kpe_tokens_out_b + tl.arange(0, BLOCK_R)
+
 
     if USE_ROPE:
         if IS_NEOX_STYLE:
@@ -204,7 +204,6 @@ def _fwd_grouped_kernel_stage1_rope(
                 other=0.0,
             )
 
-
             n_e_max = tl.maximum(tl.max(qk, 1), e_max)
             re_scale = tl.exp(e_max - n_e_max)
             p = tl.exp(qk - n_e_max[:, None])
@@ -218,8 +217,10 @@ def _fwd_grouped_kernel_stage1_rope(
         offs_mid_o = (cur_batch * stride_mid_ob + cur_head[:, None] * stride_mid_oh + split_kv_id * stride_mid_os +
                       offs_c[None, :])
 
-        if USE_ROPE and LAST_SPLIT:
-            tl.store(k_pe_last_token_ptr, k_pe_last_token, mask=mask_qk_r)
+        if USE_ROPE:
+            if LAST_SPLIT:
+                k_pe_last_token_ptrs = k_pe_t_out + cur_batch * stride_kpe_tokens_out_b + tl.arange(0, BLOCK_R)
+                tl.store(k_pe_last_token_ptrs, k_pe_last_token, mask=mask_qk_r)
 
         tl.store(
             Att_Out + offs_mid_o,
@@ -240,6 +241,9 @@ def _fwd_grouped_kernel_stage1_rope(
 def _decode_grouped_att_m_fwd_rope(q, k_buffer, v_buffer, att_out, k_pe_tokens_out, kv_lora_rank,  # c
                       cos_sin_cache, positions, rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
                       logit_cap, use_rope, is_neox_style=True):
+    if use_rope:
+        assert k_pe_tokens_out is not None, "We must output the k_pe tokens with rope applied if rope fusion enabled."
+    
     BLOCK = 32
     qk_rope_head_dim = k_buffer.shape[-1] - kv_lora_rank
     batch, head_num = B_req_idx.shape[0], q.shape[1]
@@ -264,7 +268,7 @@ def _decode_grouped_att_m_fwd_rope(q, k_buffer, v_buffer, att_out, k_pe_tokens_o
     _fwd_grouped_kernel_stage1_rope[grid](q, k_buffer, v_buffer, cos_sin_cache, positions, sm_scale, Req_to_tokens, B_req_idx,
                                           B_Seqlen, att_out, k_pe_tokens_out, Req_to_tokens.stride(0), q.stride(0),
                                           q.stride(1), k_buffer.stride(0), v_buffer.stride(0), att_out.stride(0), att_out.stride(1),
-                                          att_out.stride(2), k_pe_tokens_out.stride(0), cos_sin_cache.stride(0),
+                                          att_out.stride(2), k_pe_tokens_out.stride(0) if use_rope else 0, cos_sin_cache.stride(0),
                                           positions.stride(0), rotary_dim, kv_lora_rank, qk_rope_head_dim,
                                           kv_group_num=kv_group_num, q_head_num=head_num, BLOCK_C=BLOCK_C,
                                           BLOCK_R=BLOCK_R, BLOCK_N=BLOCK, BLOCK_H=BLOCK_H, NUM_KV_SPLITS=NUM_KV_SPLITS,
@@ -453,7 +457,7 @@ def test_op_fwd_rope(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, dtype,
 
     k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
     # we need to return the rope'd k_pe_tokens to be saved in cache
-    k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device)
+    k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device) if use_rope else None
 
     _decode_grouped_att_m_fwd_rope(q, k_input, v_input, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache, positions,
                       rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, use_rope)
@@ -489,7 +493,7 @@ def test_op_fwd_rope_neox(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, d
         B, H, S, kv_lora_rank, rotary_dim, qk_rope_head_dim, num_kv_splits, dtype, device, is_neox_style=is_neox_style)
 
     # we need to return the rope'd k_pe_tokens to be saved in cache
-    k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device)
+    k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device) if use_rope else None
 
     k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
 
@@ -532,7 +536,7 @@ def test_op_fwd_rope_integration(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary
         B, H, S, kv_lora_rank, rotary_dim, qk_rope_head_dim, num_kv_splits, dtype, device, is_neox_style=is_neox_style)
 
     # we need to return the rope'd k_pe_tokens to be saved in cache
-    k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device)
+    k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device) if use_rope else None
     tri_o = torch.empty(B, H, kv_lora_rank, dtype=kv_cache.dtype, device=device)
 
     k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
