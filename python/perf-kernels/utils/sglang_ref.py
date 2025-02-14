@@ -366,6 +366,7 @@ def _fwd_grouped_persistent_kernel_stage1(
     stride_mid_ob,
     stride_mid_oh,
     stride_mid_os,
+    batch_num,
     kv_group_num: tl.constexpr,
     q_head_num: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
@@ -378,9 +379,10 @@ def _fwd_grouped_persistent_kernel_stage1(
     Lk: tl.constexpr,
     Lv: tl.constexpr,
     NUM_CU: tl.constexpr, GRID_CU_MULTIP: tl.constexpr, NUM_HEAD_GROUPS: tl.constexpr,
-    NUM_PIDS_TOTAL: tl.constexpr,
     num_stages: tl.constexpr,
 ):
+
+    NUM_PIDS_TOTAL = batch_num * NUM_HEAD_GROUPS * NUM_KV_SPLITS
 
     NUM_WG: tl.constexpr = NUM_CU * GRID_CU_MULTIP  # number of persistent workgroups launched
     num_splits_per_head: tl.constexpr = NUM_KV_SPLITS # the number of programs (splits) per single head
@@ -398,12 +400,12 @@ def _fwd_grouped_persistent_kernel_stage1(
     mask_d = offs_d < Lk
     mask_dv = offs_dv < Lv
 
-    num_pids_per_wg: tl.constexpr = NUM_PIDS_TOTAL // NUM_WG
+    num_pids_per_wg = NUM_PIDS_TOTAL // NUM_WG
     
     # TODO: mapping that has the workgroups that share the same q load or kv load at the same die for L2 reuse.
     pid = start_pid - NUM_WG # actual_pid = (pid//8)+(pid%8)*38
 
-    for _ in tl.static_range(0, num_pids_per_wg, 1):
+    for _ in range(0, num_pids_per_wg, 1, num_stages=num_stages):
         pid += NUM_WG
         cur_batch = pid // num_splits_per_sample
         cur_head_id = pid % num_splits_per_sample % NUM_HEAD_GROUPS 
@@ -664,6 +666,7 @@ def _decode_grouped_persistent_att_m_fwd(
         att_out.stride(0),
         att_out.stride(1),
         att_out.stride(2),
+        batch,
         kv_group_num=kv_group_num,
         q_head_num=head_num,
         BLOCK_DMODEL=BLOCK_DMODEL,
@@ -677,7 +680,7 @@ def _decode_grouped_persistent_att_m_fwd(
         num_stages=num_stages,
         Lk=Lk,
         Lv=Lv,
-        NUM_CU=NUM_CU, GRID_CU_MULTIP=GRID_CU_MULTIP, NUM_HEAD_GROUPS=num_head_groups, NUM_PIDS_TOTAL=NUM_PIDS_TOTAL,
+        NUM_CU=NUM_CU, GRID_CU_MULTIP=GRID_CU_MULTIP, NUM_HEAD_GROUPS=num_head_groups,
         **extra_kargs,
     )
 

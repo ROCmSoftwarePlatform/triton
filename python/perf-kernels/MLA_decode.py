@@ -160,9 +160,15 @@ def benchmark(args):
     configs = []
 
     # x_vals_list = [(1, 128, 2048, 512, 128, 64, 32), (32, 16, 2048, 512, 128, 64, 32), (128, 16, 2048, 512, 128, 64, 32)]
-    x_vals_list = [(32, 16, 2048, 512, 128, 64, 32)]
+    x_vals_list = [(1, 16, 2048, 512, 128, 64, 32),
+                    # (2, 16, 2048, 512, 128, 64, 32), 
+                    # (4, 16, 2048, 512, 128, 64, 32),
+                    # (8, 16, 2048, 512, 128, 64, 32),
+                    # (16, 16, 2048, 512, 128, 64, 32),
+                    # (32, 16, 2048, 512, 128, 64, 32),
+                    ]
     x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
-    line_vals = ["ref", "persistent"]
+    line_vals = [ "persistent"]
     plot_name = "MLA-decode"
 
     configs.append(
@@ -251,7 +257,7 @@ import time
 import re
 import os
 
-def main():
+def main():    
     # os.system("rm -rf ~/.triton/cache")
     output_file = "/home/jukorhon/vgpr_usage"
     
@@ -260,6 +266,7 @@ def main():
         sys.stdout = f
         sys.stderr = f
         os.environ["AMDGCN_ENABLE_DUMP"] = "1"
+        os.environ["TRITON_ALWAYS_COMPILE"] = "1"
         run_bench()  # Run the benchmark
         sys.stdout.flush()
         sys.stderr.flush()
