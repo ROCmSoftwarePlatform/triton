@@ -161,11 +161,11 @@ def benchmark(args):
 
     # x_vals_list = [(1, 128, 2048, 512, 128, 64, 32), (32, 16, 2048, 512, 128, 64, 32), (128, 16, 2048, 512, 128, 64, 32)]
     x_vals_list = [(1, 16, 2048, 512, 128, 64, 32),
-                    # (2, 16, 2048, 512, 128, 64, 32), 
-                    # (4, 16, 2048, 512, 128, 64, 32),
-                    # (8, 16, 2048, 512, 128, 64, 32),
-                    # (16, 16, 2048, 512, 128, 64, 32),
-                    # (32, 16, 2048, 512, 128, 64, 32),
+                    (2, 16, 2048, 512, 128, 64, 32), 
+                    (4, 16, 2048, 512, 128, 64, 32),
+                    (8, 16, 2048, 512, 128, 64, 32),
+                    (16, 16, 2048, 512, 128, 64, 32),
+                    (32, 16, 2048, 512, 128, 64, 32),
                     ]
     x_names = ["B", "H", "S", "kv_lora_rank", "qk_nope_head_dim", "qk_rope_head_dim", "num_kv_splits"]
     line_vals = [ "persistent"]
@@ -256,18 +256,21 @@ import sys
 import time
 import re
 import os
+import tempfile
 
-def main():    
-    # os.system("rm -rf ~/.triton/cache")
-    output_file = "/home/jukorhon/vgpr_usage"
-    
-    # Redirect stdout and stderr to the file
-    with open(output_file, "w") as f:
-        sys.stdout = f
-        sys.stderr = f
+def main():
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
+        output_file = temp_file.name
+
+        # Redirect stdout and stderr to the temporary file
+        sys.stdout = temp_file
+        sys.stderr = temp_file
+        
         os.environ["AMDGCN_ENABLE_DUMP"] = "1"
-        os.environ["TRITON_ALWAYS_COMPILE"] = "1"
+        # os.environ["TRITON_ALWAYS_COMPILE"] = "1"
         run_bench()  # Run the benchmark
+        
         sys.stdout.flush()
         sys.stderr.flush()
 
@@ -279,6 +282,9 @@ def main():
 
     # Parse and print relevant output
     parse_vgpr_usage(output_file)
+
+    # Remove the temporary file
+    os.unlink(output_file)
 
 if __name__ == "__main__":
     main()
