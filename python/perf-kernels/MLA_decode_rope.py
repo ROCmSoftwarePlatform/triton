@@ -268,7 +268,7 @@ def _decode_grouped_att_m_fwd_rope(q, kv_cache, att_out, k_pe_tokens_out, kv_lor
                                           kv_group_num=kv_group_num, q_head_num=head_num, BLOCK_C=BLOCK_C,
                                           BLOCK_R=BLOCK_R, BLOCK_N=BLOCK, BLOCK_H=BLOCK_H, NUM_KV_SPLITS=NUM_KV_SPLITS,
                                           logit_cap=logit_cap, USE_ROPE=use_rope, IS_NEOX_STYLE=is_neox_style,
-                                          num_warps=4, num_stages=1, **extra_kargs)
+                                          num_warps=4, num_stages=2, **extra_kargs)
 
 
 def decode_attention_fwd_grouped_rope(
@@ -640,7 +640,51 @@ def main():
     torch.manual_seed(0)
     args = parse_args()
     torch.set_default_device(args.device)
-    benchmark(args)
+
+    # x_vals_list = [(1, 128, 2048, 512, 64, 64, 32)]
+    # x_names = ["B", "H", "S", "kv_lora_rank", "qk_rope_head_dim", "rotary_dim", "num_kv_splits"]
+
+    B = 1
+    H = 128
+    S = 2048
+    kv_lora_rank = 512
+    qk_rope_head_dim = 64
+    rotary_dim = 64
+    num_kv_splits = 32
+    use_rope = args.use_rope
+    is_neox_style = args.is_neox_style
+    dtype = arg_to_torch_dtype[args.dtype]
+    device = args.device
+    sm_scale = 1.0
+    logit_cap = 0.0
+
+    warmup = 2
+    rep = 2
+
+    k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=dtype, device=device)
+
+    Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, attn_logits, rotary_emb, positions = input_helper(
+        B, H, S, kv_lora_rank, rotary_dim, qk_rope_head_dim, num_kv_splits, dtype, device,
+        is_neox_style=is_neox_style)
+
+    if True:
+        fn = lambda: {
+            _decode_grouped_att_m_fwd_rope(q, kv_cache, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache,
+                              positions, rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+                              logit_cap, use_rope, is_neox_style=is_neox_style)
+        }
+    else:
+        k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
+        fn = lambda: {
+            ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits,
+                        sm_scale, logit_cap, rotary_emb, positions, use_rope, device="cuda")
+        }
+
+    ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
+
+    print(ms)
+
+    # benchmark(args)
 
 
 if __name__ == '__main__':
