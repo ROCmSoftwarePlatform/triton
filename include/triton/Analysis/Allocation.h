@@ -108,6 +108,13 @@ private:
 
 template <class T> Interval(T, T) -> Interval<T>;
 
+template <typename T>
+llvm::raw_ostream &operator<<(llvm::raw_ostream &ostr,
+                              const Interval<T> &ival) {
+  ostr << "[" << ival.start() << "," << ival.end() << ")";
+  return ostr;
+}
+
 class Allocation {
 public:
   /// A unique identifier for shared memory buffers

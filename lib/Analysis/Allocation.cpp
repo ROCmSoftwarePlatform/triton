@@ -18,7 +18,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#define DEBUG_TYPE "allocation-shared-memory"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -53,12 +52,6 @@ namespace mlir {
 
 namespace {
 // Debug utilities
-template <typename T>
-llvm::raw_ostream &operator<<(llvm::raw_ostream &ostr,
-                              const Interval<T> &range) {
-  ostr << "[" << range.start() << "," << range.end() << ")";
-  return ostr;
-}
 
 void printValue(mlir::Value v) {
   if (auto arg = dyn_cast<BlockArgument>(v)) {
@@ -448,12 +441,12 @@ private:
       auto value = valueBufferIter.first;
       auto *buffer = valueBufferIter.second;
       auto ranges = getLiveness(value);
-      if (!ranges.empty())
+      if (!ranges.empty()) {
         updateBufferRange(buffer, ranges.span());
         LLVM_DEBUG({
           llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
           value.dump();
-       });
+        });
       }
     }
   }
@@ -620,6 +613,15 @@ private:
       buffers.emplace_back(bufferIter.first);
     }
 
+    // Sort buffers by size in descending order to reduce the fragmentation
+    // on big buffers caused by smaller buffers. Big buffers have a higher
+    // chance to overlap with multiple other buffers, and allocating them first
+    // (by calculateStarts) ensures a higher chance that they will occupy a
+    // standalone smem slot.
+    // TODO(sjw): check not alias
+    llvm::stable_sort(
+        buffers, [&](BufferT *A, BufferT *B) { return A->size > B->size; });
+
     calculateStarts(buffers);
 
     // NOTE: The original paper doesn't consider interference between
@@ -669,13 +671,13 @@ private:
 
     while (!xBuffers.empty()) {
       auto tripleIt = tripleMap.begin();
-      auto offset = tripleIt->first;
-      auto range = tripleIt->second;
+      size_t offset = tripleIt->first;
+      IntervalT range = tripleIt->second;
       tripleMap.erase(tripleIt);
       auto bufferIt = llvm::find_if(xBuffers, [&](auto *buffer) {
         auto xRange = bufferRange[buffer];
         bool res = xRange.intersects(range);
-        for (auto val : tripleMap)
+        for (const auto &val : tripleMap)
           res = res &&
                 !val.second.intersects(xRange); // only one buffer intersect
         return res;
@@ -686,14 +688,11 @@ private:
         auto xRange = bufferRange.lookup(buffer);
         // TODO(Keren): A buffer's size shouldn't be determined here, have to
         // clean it up
-        size_t offset = size;
-        if (size_t diff = offset % buffer->alignment)
-          offset += buffer->alignment - diff;
-        buffer->offset = offset;
+        size_t alignOffset = buffer->setOffsetAligned(offset);
+        tripleMap.insert({alignOffset + xSize,
+                          Interval{std::max(range.start(), xRange.start()),
+                                   std::min(range.end(), xRange.end())}});
         LLDBG_L2V("INIT OFFSET", buffer->id << " <-> " << buffer->offset);
-        tripleMap.insert(
-            {offset + xSize, Interval{std::max(range.start(), xRange.start()),
-                                      std::min(range.end(), xRange.end())}});
         // We could either insert (range.start, xRange.start) or (range.start,
         // xRange.end), both are correct and determine the potential buffer
         // offset, and the graph coloring algorithm will solve the interference,
@@ -827,6 +826,29 @@ private:
 
 } // namespace triton
 
+std::map<Operation *, SmallVector<Allocation::BufferId>>
+Allocation::getLiveBuffers() {
+  std::map<Operation *, SmallVector<BufferId>> liveBuffers;
+
+  Operation *rootOperation = getOperation();
+  Liveness liveness(rootOperation);
+  auto analyzeOperation = [&](Operation *op) -> void {
+    auto scratchBuffer = getBufferId(op);
+    if (scratchBuffer != InvalidBufferId)
+      liveBuffers[op].push_back(scratchBuffer);
+    for (auto result : op->getOpResults()) {
+      auto bufferId = getBufferId(result);
+      if (bufferId == Allocation::InvalidBufferId)
+        continue;
+      auto liveOperations = liveness.resolveLiveness(result);
+      for (auto depOp : liveOperations)
+        liveBuffers[depOp].push_back(bufferId);
+    }
+  };
+  rootOperation->walk(analyzeOperation);
+  return liveBuffers;
+}
+
 void Allocation::BufferT::dump() const {
   LLDBG_L2("ID", (int)id);
   LLDBG_L2("KIND", (int)kind);
@@ -869,8 +891,11 @@ void Allocation::dump() const {
   }
 }
 
-void Allocation::run(FuncAllocMapT &funcAllocMap) {
-  triton::AllocationAnalysis(getOperation(), &funcAllocMap, this);
+void Allocation::run(
+    FuncAllocMapT &funcAllocMap,
+    triton::AllocationAnalysisScratchSizeFn scratchSizeGetter) {
+  triton::AllocationAnalysis(getOperation(), &funcAllocMap, this,
+                             scratchSizeGetter);
 }
 
 } // namespace mlir
