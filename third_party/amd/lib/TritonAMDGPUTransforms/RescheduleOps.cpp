@@ -1,5 +1,6 @@
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -19,11 +20,23 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace {
+
+// TODO (ravil): Note, took function from `SchedInstructions.cpp`.
+// we need to combine these two implementations
+Operation *createSchedBarrier(OpBuilder &rewriter, Location loc,
+                              mlir::amdgpu::sched_barrier_opt_enum maskValue) {
+  IntegerAttr mask =
+      rewriter.getI32IntegerAttr(static_cast<int32_t>(maskValue));
+  return rewriter.create<ROCDL::SchedBarrier>(loc, mask);
+}
+
 struct Node {
-  Node(Operation *op) : op(op) {}
+  Node(Operation *op, int32_t priority = 0) : op(op), priority(priority) {}
   enum class ChildType { Real, Artificials };
 
   Operation *getOp() { return op; }
+  int32_t getPriority() { return priority; }
+  void setPriority(int32_t priority) { this->priority = priority; }
 
   template <ChildType Type> void add(Node *node) {
     llvm::SetVector<Node *> *children =
@@ -66,9 +79,58 @@ struct Node {
 
 private:
   Operation *op;
+  int32_t priority;
   llvm::SetVector<Node *> realChildren;
   llvm::SetVector<Node *> artificialChildren;
   llvm::SetVector<Node *> parents;
+};
+
+struct PriorityStrategy {
+  virtual void set(llvm::SmallVector<std::unique_ptr<Node>> &nodes) = 0;
+};
+
+struct BasicDotOpsPriorityStrategy : public PriorityStrategy {
+  void set(llvm::SmallVector<std::unique_ptr<Node>> &nodes) override {
+    SmallVector<Node *> dots;
+    SmallVector<Node *> loads;
+    for (auto &node : nodes) {
+      if (dyn_cast<triton::DotOp>(node->getOp()))
+        dots.push_back(node.get());
+      if (dyn_cast<triton::LoadOp>(node->getOp()))
+        loads.push_back(node.get());
+    }
+
+    // Make sure that prio is never equal to `0` for dotOps
+    int32_t dotPrio = dots.size() + 10;
+    const int32_t loadPrio = dotPrio + 10;
+    for (auto loadNode : loads) {
+      propagate(loadNode, loadPrio);
+    }
+
+    for (auto dotNode : dots) {
+      propagate(dotNode, dotPrio--);
+    }
+  }
+
+private:
+  void propagate(Node *node, int32_t prio) {
+    if (visited.contains(node))
+      return;
+
+    node->setPriority(prio);
+    visited.insert({node});
+
+    if (node->hasChildren()) {
+      for (auto child : node->getRealChildren()) {
+        propagate(child, prio);
+      }
+      for (auto child : node->getArtificialChildren()) {
+        propagate(child, prio);
+      }
+    }
+  }
+
+  SetVector<Node *> visited{};
 };
 
 struct Graph {
@@ -82,7 +144,8 @@ public:
     using iteratorType = decltype(other.nodes.begin());
     DenseMap<Node *, iteratorType> map;
     for (auto it = other.nodes.begin(); it != other.nodes.end(); ++it) {
-      auto newNode = std::make_unique<Node>(it->get()->getOp());
+      auto newNode =
+          std::make_unique<Node>(it->get()->getOp(), it->get()->getPriority());
       map.insert({it->get(), it});
       lookup.insert({newNode->getOp(), newNode.get()});
       nodes.push_back(std::move(newNode));
@@ -118,6 +181,8 @@ public:
     }
     return copy;
   }
+
+  void setNotesPriorities(PriorityStrategy &&strategy) { strategy.set(nodes); }
 
 private:
   void createNodes(Block *mlirBlock) {
@@ -213,7 +278,8 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &out, Graph &graph) {
   out << "rankdir=\"LR\"\n";
   for (auto [idx, node] : llvm::enumerate(graph.getNodes())) {
     std::string name = std::to_string(reinterpret_cast<intptr_t>(node));
-    out << name << "\t[label=\"" << node->getOp()->getName() << "\"]\n";
+    out << name << "\t[label=\"" << node->getOp()->getName() << " ("
+        << node->getPriority() << ") \"]\n";
   }
   for (auto [idx, node] : llvm::enumerate(graph.getNodes())) {
     std::string name = std::to_string(reinterpret_cast<intptr_t>(node));
@@ -272,8 +338,13 @@ struct MachineModel {
     SmallVector<Node *> normPriorityNodes{};
     SmallVector<Node *> lowPriorityNodes{};
     void set(Node *node) {
-      if (!selectedNode)
+      if (!selectedNode) {
         selectedNode = node;
+      } else {
+        if (node->getPriority() > selectedNode->getPriority()) {
+          selectedNode = node;
+        }
+      }
     }
   };
 
@@ -328,7 +399,7 @@ struct MachineModel {
 
 private:
   const inline static int32_t maxLoadStoreIssues{2};
-  const inline static int32_t maxLocalLoadStoreIssues{6};
+  const inline static int32_t maxLocalLoadStoreIssues{4};
   int32_t issuedLoadStoreCounter{0};
   int32_t issuedLocalStoreLoadCounter{0};
 };
@@ -353,6 +424,7 @@ struct TritonAMDGPURescheduleOps
 
   void reschedule(Block *mlirBlock) {
     Graph graph(mlirBlock);
+    graph.setNotesPriorities(BasicDotOpsPriorityStrategy());
     LDBG("Dependency graph in dot-format:\n" << graph);
 
     GraphManager manager(graph);
@@ -372,6 +444,18 @@ struct TritonAMDGPURescheduleOps
       return earliestNodeToRun;
     };
 
+    auto prioritySelector = [&](const SmallVector<Node *> readyNodes) {
+      int32_t maxPriorityValue = std::numeric_limits<int32_t>::min();
+      Node *highPriorityNode = nullptr;
+      for (auto node : readyNodes) {
+        if (node->getPriority() > maxPriorityValue) {
+          maxPriorityValue = node->getPriority();
+          highPriorityNode = node;
+        }
+      }
+      return highPriorityNode;
+    };
+
     const bool verbose = false;
     std::string dbgStr;
     llvm::raw_string_ostream dbgStream(dbgStr);
@@ -380,6 +464,10 @@ struct TritonAMDGPURescheduleOps
       MachineModel::Result selectionResult = machineModel.select(readyNodes);
       auto selectedNode = selectionResult.selectedNode;
       bool selectedFromMachineModel = selectedNode ? true : false;
+
+      if (!selectedNode) {
+        selectedNode = prioritySelector(selectionResult.normPriorityNodes);
+      }
 
       bool selectedFromNormPrioQueue = false;
       if (!selectedNode) {
@@ -434,13 +522,22 @@ struct TritonAMDGPURescheduleOps
     for (auto it = rescheduledOps.rbegin(); it != rescheduledOps.rend(); ++it) {
       (*it)->moveBefore(mlirBlock, mlirBlock->begin());
     }
+
+    OpBuilder builder(&(mlirBlock->front()));
+    for (auto &op : mlirBlock->getOperations()) {
+      if (dyn_cast<triton::LoadOp>(&op)) {
+        auto barrier = createSchedBarrier(
+            builder, op.getLoc(), mlir::amdgpu::sched_barrier_opt_enum::none);
+        barrier->moveAfter(&op);
+      }
+    }
   }
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     llvm::SmallVector<Block *> blocks;
-    mod.walk([&](amdgpu::InstructionSchedHint hint) {
-      if (hint.getVariant() == amdgpu::SchedHint::refine_ops) {
+    mod.walk([&](triton::amdgpu::InstructionSchedHint hint) {
+      if (hint.getVariant() == triton::amdgpu::SchedHint::refine_ops) {
         blocks.push_back(hint->getBlock());
         hint->erase();
       }
