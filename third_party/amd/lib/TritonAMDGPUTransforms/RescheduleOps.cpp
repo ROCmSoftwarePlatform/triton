@@ -13,6 +13,11 @@
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h"
 
+#undef DEBUG_TYPE
+#define DEBUG_TYPE "tritonamdgpu-reschedule-ops"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
 namespace {
 struct Node {
   Node(Operation *op) : op(op) {}
@@ -348,6 +353,7 @@ struct TritonAMDGPURescheduleOps
 
   void reschedule(Block *mlirBlock) {
     Graph graph(mlirBlock);
+    LDBG("Dependency graph in dot-format:\n" << graph);
 
     GraphManager manager(graph);
     MachineModel machineModel;
@@ -366,7 +372,7 @@ struct TritonAMDGPURescheduleOps
       return earliestNodeToRun;
     };
 
-    bool verbose = false;
+    const bool verbose = false;
     std::string dbgStr;
     llvm::raw_string_ostream dbgStream(dbgStr);
     while (!manager.finished()) {
@@ -422,9 +428,12 @@ struct TritonAMDGPURescheduleOps
       outStream << "\n";
     }
 
-    // TODO: put `rescheduledOps` to the MLIR code
-    // (either create a new MLIR block or insert instruction into the existing
-    // one)
+    // re-order instruction based on the new schedule
+    // move instruction from the tail to the begining of the current BB
+    // one-by-one
+    for (auto it = rescheduledOps.rbegin(); it != rescheduledOps.rend(); ++it) {
+      (*it)->moveBefore(mlirBlock, mlirBlock->begin());
+    }
   }
 
   void runOnOperation() override {
