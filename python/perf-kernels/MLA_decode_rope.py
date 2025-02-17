@@ -54,8 +54,8 @@ def _fwd_grouped_kernel_stage1_rope(
         V_buffer,   # Holds [KV], b*s x (c)
         cos_sin_cache,  # max_seq_len x (rotary_dim * 2)
         positions,  # sequence positions
-        sm_scale, Req_to_tokens, B_req_idx, B_Seqlen, Att_Out,  # b x h x NUM_KV_SPLITS x (kv_lora_rank + 1)
-        k_pe_t_out, stride_req_to_tokens_b, stride_qb, stride_qh, stride_buf_kbs, 
+        sm_scale, kv_indptr, kv_indices, Att_Out,  # b x h x NUM_KV_SPLITS x (kv_lora_rank + 1)
+        k_pe_t_out, stride_qb, stride_qh, stride_buf_kbs,
         stride_buf_vbs,
         stride_mid_ob, stride_mid_oh,
         stride_mid_os, stride_kpe_tokens_out_b, stride_cos_sin_cache_s, stride_positions_b, rotary_dim: tl.constexpr,
@@ -85,8 +85,8 @@ def _fwd_grouped_kernel_stage1_rope(
     mask_c = offs_c < kv_lora_rank
     mask_qk_r = offs_qk_r < (kv_lora_rank + qk_rope_head_dim)
 
-    cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
-    cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
+    cur_batch_kv_start_idx = tl.load(kv_indptr + cur_batch)
+    cur_batch_seq_len = tl.load(kv_indptr + cur_batch + 1) - cur_batch_kv_start_idx
 
     q = tl.load(Q + offs_q, mask=(mask_h[:, None]) & (mask_c[None, :]), other=0.0)
     q_pe = tl.load(Q + off_q_pe, mask=(mask_h[:, None]) & (mask_qk_r[None, :]), other=0.0)
@@ -98,8 +98,6 @@ def _fwd_grouped_kernel_stage1_rope(
     # apply rotary embedding for q_pe, and k_pe (last token per batch of K_PE)
     LAST_SPLIT = (split_kv_end == cur_batch_seq_len)
     k_pe_last_token = tl.zeros([BLOCK_R], dtype=q.dtype)
-
-
 
     if USE_ROPE:
         if IS_NEOX_STYLE:
@@ -142,7 +140,8 @@ def _fwd_grouped_kernel_stage1_rope(
             if (cur_batch == 0 and cur_head == 0) and split_kv_id < NUM_KV_SPLITS - 1:
                 tl.device_assert(False, "Only last split should compute k_pe")
 
-            kv_loc = tl.load(Req_to_tokens + stride_req_to_tokens_b * cur_batch_req_idx + cur_batch_seq_len - 1)
+
+            kv_loc = tl.load(kv_indices + cur_batch_kv_start_idx + cur_batch_seq_len - 1)
             offs_buf_k_pe_last_token = kv_loc * stride_buf_kbs + offs_qk_r
             offs_buf_k_pe_rot_last_token = kv_loc * stride_buf_kbs + offs_qk_rot_r
             k_pe_last_token = tl.load(K_Buffer + offs_buf_k_pe_last_token)
@@ -160,10 +159,13 @@ def _fwd_grouped_kernel_stage1_rope(
         for start_n in range(split_kv_start, split_kv_end, BLOCK_N):
             offs_n = start_n + tl.arange(0, BLOCK_N)
             kv_loc = tl.load(
-                Req_to_tokens + stride_req_to_tokens_b * cur_batch_req_idx + offs_n,
+                kv_indices + cur_batch_kv_start_idx + offs_n,
                 mask=offs_n < split_kv_end,
                 other=0,
             )
+
+
+
             offs_buf_kv = (kv_loc[None, :] * stride_buf_kbs + offs_c[:, None])
             offs_buf_k_pe = (kv_loc[None, :] * stride_buf_kbs + offs_qk_r[:, None])
 
@@ -239,16 +241,20 @@ def _fwd_grouped_kernel_stage1_rope(
 
 # TODO rope offset
 def _decode_grouped_att_m_fwd_rope(q, k_buffer, v_buffer, att_out, k_pe_tokens_out, kv_lora_rank,  # c
-                      cos_sin_cache, positions, rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+                      cos_sin_cache, positions, rotary_dim, kv_indptr, kv_indices, num_kv_splits, sm_scale,
                       logit_cap, use_rope, is_neox_style=True):
     if use_rope:
         assert k_pe_tokens_out is not None, "We must output the k_pe tokens with rope applied if rope fusion enabled."
-    
+
     BLOCK = 32
+
+    # # [TODO] work around shmem limit on MI3xx
+    # if is_hip_ and kv_lora_rank >= 576:
+    #     BLOCK = 16
+
     qk_rope_head_dim = k_buffer.shape[-1] - kv_lora_rank
-    batch, head_num = B_req_idx.shape[0], q.shape[1]
-    # we view kv_cache as one head
-    kv_group_num = q.shape[1]
+    batch, head_num = kv_indptr.shape[0] - 1, q.shape[1]
+    kv_group_num = q.shape[1] // k_buffer.shape[1]
 
     BLOCK_C = triton.next_power_of_2(kv_lora_rank)
     BLOCK_R = triton.next_power_of_2(qk_rope_head_dim)
@@ -261,19 +267,22 @@ def _decode_grouped_att_m_fwd_rope(q, k_buffer, v_buffer, att_out, k_pe_tokens_o
         NUM_KV_SPLITS,
     )
 
-    # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
-    # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
-    extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 2}
+    extra_kargs = {}
+    num_stages = 2
+    if is_hip_:
+        # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
+        # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
+        extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 2}
+        num_stages = 1
 
-    _fwd_grouped_kernel_stage1_rope[grid](q, k_buffer, v_buffer, cos_sin_cache, positions, sm_scale, Req_to_tokens, B_req_idx,
-                                          B_Seqlen, att_out, k_pe_tokens_out, Req_to_tokens.stride(0), q.stride(0),
+    _fwd_grouped_kernel_stage1_rope[grid](q, k_buffer, v_buffer, cos_sin_cache, positions, sm_scale, kv_indptr, kv_indices, att_out, k_pe_tokens_out, q.stride(0),
                                           q.stride(1), k_buffer.stride(0), v_buffer.stride(0), att_out.stride(0), att_out.stride(1),
-                                          att_out.stride(2), k_pe_tokens_out.stride(0) if use_rope else 0, cos_sin_cache.stride(0),
-                                          positions.stride(0), rotary_dim, kv_lora_rank, qk_rope_head_dim,
+                                          att_out.stride(2), k_pe_tokens_out.stride(0) if use_rope else 0, cos_sin_cache.stride(0) if use_rope else 0,
+                                          positions.stride(0) if use_rope else 0, rotary_dim, kv_lora_rank, qk_rope_head_dim,
                                           kv_group_num=kv_group_num, q_head_num=head_num, BLOCK_C=BLOCK_C,
                                           BLOCK_R=BLOCK_R, BLOCK_N=BLOCK, BLOCK_H=BLOCK_H, NUM_KV_SPLITS=NUM_KV_SPLITS,
                                           logit_cap=logit_cap, USE_ROPE=use_rope, IS_NEOX_STYLE=is_neox_style,
-                                          num_warps=4, num_stages=1, **extra_kargs)
+                                          num_warps=4, num_stages=num_stages, **extra_kargs)
 
 
 def decode_attention_fwd_grouped_rope(
@@ -281,9 +290,8 @@ def decode_attention_fwd_grouped_rope(
     k_buffer,
     v_buffer,
     o,
-    req_to_token,
-    b_req_idx,
-    b_seq_len,
+    kv_indptr,
+    kv_indices,
     k_pe_tokens,
     kv_lora_rank,
     rotary_dim,
@@ -306,25 +314,24 @@ def decode_attention_fwd_grouped_rope(
         cos_sin_cache,
         positions,
         rotary_dim,
-        req_to_token,
-        b_req_idx,
-        b_seq_len,
+        kv_indptr,
+        kv_indices,
         num_kv_splits,
         sm_scale,
         logit_cap,
         use_rope,
         is_neox_style)
-    _decode_softmax_reducev_fwd(attn_logits, q, o, v_buffer, b_seq_len, num_kv_splits)
+    _decode_softmax_reducev_fwd(attn_logits, q, o, v_buffer, kv_indptr, num_kv_splits)
 
 
 def input_helper(B, H, S, kv_lora_rank, rotary_dim, qk_rope_head_dim, num_kv_splits, dtype, device, rope_base=10,
                  rope_max_seq_len=16324, rope_scaling=1.0, is_neox_style=True):
-    Req_to_tokens = torch.arange(B * S, device=device).reshape(B, S)
-    B_req_idx = torch.arange(B, device=device)
-    B_Seqlen = torch.full((B, ), S, device=device)
-
     q = torch.randn(B, H, kv_lora_rank + qk_rope_head_dim, dtype=dtype, device=device)
     kv_cache = torch.randn(B * S, kv_lora_rank + qk_rope_head_dim, dtype=dtype, device=device)
+
+    # interlancing [batch_start_off, batch_seq_len, batch_start_off, batch_seq_len, ...,]
+    kv_indptr = torch.arange(B + 1, device=device) * S
+    kv_indices = torch.arange(B*S, device=device)
 
     attn_logits = torch.empty(B, H, num_kv_splits, kv_lora_rank + 1, dtype=dtype, device=device)
 
@@ -341,7 +348,7 @@ def input_helper(B, H, S, kv_lora_rank, rotary_dim, qk_rope_head_dim, num_kv_spl
 
     positions = torch.tensor([S], device=device).unsqueeze(0).repeat(B, 1)  # k positions and q position as last
 
-    return Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, attn_logits, rotary_emb, positions
+    return kv_indptr, kv_indices, q, kv_cache, attn_logits, rotary_emb, positions
 
 
 def ref_preprocess(kv_cache, kv_lora_rank):
@@ -353,11 +360,10 @@ def ref_preprocess(kv_cache, kv_lora_rank):
     return k_input, v_input
 
 
-def ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+def ref_compute(q, k_input, v_input, kv_lora_rank, kv_indptr, kv_indices, num_kv_splits, sm_scale,
                 logit_cap, rotary_emb, positions, use_rope, device="cuda"):
-
     B, H = q.shape[0], q.shape[1]
-    S = B_Seqlen[0].item()
+    S = kv_indptr[1].item()
 
     qk_rope_head_dim = k_input.shape[-1] - kv_lora_rank
 
@@ -384,9 +390,8 @@ def ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_S
         k_input,
         v_input,
         attn_logits,
-        Req_to_tokens,
-        B_req_idx,
-        B_Seqlen,
+        kv_indptr,
+        kv_indices,
         num_kv_splits,
         sm_scale,
         logit_cap,
@@ -394,11 +399,11 @@ def ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_S
 
     return attn_logits, k_pe_t.squeeze() if use_rope else None
 
-def ref_compute_full_fwd(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+def ref_compute_full_fwd(q, k_input, v_input, kv_lora_rank, kv_indptr, kv_indices, num_kv_splits, sm_scale,
                 logit_cap, rotary_emb, positions, use_rope, device="cuda"):
 
     B, H = q.shape[0], q.shape[1]
-    S = B_Seqlen[0].item()
+    S = kv_indptr[1].item()
 
     qk_rope_head_dim = k_input.shape[-1] - kv_lora_rank
 
@@ -428,9 +433,8 @@ def ref_compute_full_fwd(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req
         k_input,
         v_input,
         o,
-        Req_to_tokens,
-        B_req_idx,
-        B_Seqlen,
+        kv_indptr,
+        kv_indices,
         attn_logits,
         num_kv_splits,
         sm_scale,
@@ -452,7 +456,7 @@ def test_op_fwd_rope(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, dtype,
                      sm_scale=1.0, logit_cap=0.0, device="cuda"):
     torch.manual_seed(0)
 
-    Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, attn_logits, rotary_emb, positions = input_helper(
+    kv_indptr, kv_indices, q, kv_cache, attn_logits, rotary_emb, positions = input_helper(
         B, H, S, kv_lora_rank, rotary_dim, qk_rope_head_dim, num_kv_splits, dtype, device)
 
     k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
@@ -460,12 +464,12 @@ def test_op_fwd_rope(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, dtype,
     k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device) if use_rope else None
 
     _decode_grouped_att_m_fwd_rope(q, k_input, v_input, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache, positions,
-                      rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, use_rope)
+                      rotary_dim, kv_indptr, kv_indices, num_kv_splits, sm_scale, logit_cap, use_rope)
 
     tri_logits = attn_logits
 
     # reference
-    ref_logits, ref_k_pe_tokens = ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_Seqlen,
+    ref_logits, ref_k_pe_tokens = ref_compute(q, k_input, v_input, kv_lora_rank, kv_indptr, kv_indices,
                                               num_kv_splits, sm_scale, logit_cap, rotary_emb, positions, use_rope,
                                               device="cuda")
 
@@ -489,7 +493,7 @@ def test_op_fwd_rope_neox(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, d
                           num_kv_splits=2, sm_scale=1.0, logit_cap=0.0, device="cuda"):
     torch.manual_seed(0)
 
-    Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, attn_logits, rotary_emb, positions = input_helper(
+    kv_indptr, kv_indices, q, kv_cache, attn_logits, rotary_emb, positions = input_helper(
         B, H, S, kv_lora_rank, rotary_dim, qk_rope_head_dim, num_kv_splits, dtype, device, is_neox_style=is_neox_style)
 
     # we need to return the rope'd k_pe_tokens to be saved in cache
@@ -498,13 +502,13 @@ def test_op_fwd_rope_neox(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary_dim, d
     k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
 
     _decode_grouped_att_m_fwd_rope(q, k_input, v_input, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache, positions,
-                      rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale, logit_cap, use_rope,
+                      rotary_dim, kv_indptr, kv_indices, num_kv_splits, sm_scale, logit_cap, use_rope,
                       is_neox_style=is_neox_style)
 
     tri_logits = attn_logits
 
     # reference
-    ref_logits, ref_k_pe_tokens = ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_Seqlen,
+    ref_logits, ref_k_pe_tokens = ref_compute(q, k_input, v_input, kv_lora_rank, kv_indptr, kv_indices,
                                               num_kv_splits, sm_scale, logit_cap, rotary_emb, positions, use_rope,
                                               device="cuda")
 
@@ -532,11 +536,11 @@ def test_op_fwd_rope_integration(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary
                           num_kv_splits=2, sm_scale=1.0, logit_cap=0.0, device="cuda"):
     torch.manual_seed(0)
 
-    Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, attn_logits, rotary_emb, positions = input_helper(
+    kv_indptr, kv_indices, q, kv_cache, attn_logits, rotary_emb, positions = input_helper(
         B, H, S, kv_lora_rank, rotary_dim, qk_rope_head_dim, num_kv_splits, dtype, device, is_neox_style=is_neox_style)
 
     # we need to return the rope'd k_pe_tokens to be saved in cache
-    k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device) if use_rope else None
+    k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=kv_cache.dtype, device=device)
     tri_o = torch.empty(B, H, kv_lora_rank, dtype=kv_cache.dtype, device=device)
 
     k_input, v_input = ref_preprocess(kv_cache, kv_lora_rank)
@@ -546,14 +550,13 @@ def test_op_fwd_rope_integration(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary
         k_input,
         v_input,
         tri_o,
-        Req_to_tokens,
-        B_req_idx,
-        B_Seqlen,
-        k_pe_tokens,
+        kv_indptr,
+        kv_indices,
+        k_pe_tokens if use_rope else None,
         kv_lora_rank,
-        rotary_dim,
-        rotary_emb.cos_sin_cache,
-        positions,
+        rotary_dim if use_rope else None,
+        rotary_emb.cos_sin_cache if use_rope else None,
+        positions if use_rope else None,
         attn_logits,
         num_kv_splits,
         sm_scale,
@@ -565,8 +568,7 @@ def test_op_fwd_rope_integration(B, H, S, kv_lora_rank, qk_rope_head_dim, rotary
     tri_logits = attn_logits
 
     # reference
-    
-    ref_logits, ref_o, ref_k_pe_tokens = ref_compute_full_fwd(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_Seqlen,
+    ref_logits, ref_o, ref_k_pe_tokens = ref_compute_full_fwd(q, k_input, v_input, kv_lora_rank, kv_indptr, kv_indices,
                                               num_kv_splits, sm_scale, logit_cap, rotary_emb, positions, use_rope,
                                               device="cuda")
 
@@ -601,7 +603,7 @@ def benchmark(args):
 
         k_pe_tokens = torch.empty(B, qk_rope_head_dim, dtype=dtype, device=device)
 
-        Req_to_tokens, B_req_idx, B_Seqlen, q, kv_cache, attn_logits, rotary_emb, positions = input_helper(
+        kv_indptr, kv_indices, q, kv_cache, attn_logits, rotary_emb, positions = input_helper(
             B, H, S, kv_lora_rank, rotary_dim, qk_rope_head_dim, num_kv_splits, dtype, device,
             is_neox_style=is_neox_style)
 
@@ -610,13 +612,13 @@ def benchmark(args):
         if "fused" in provider:
             fn = lambda: {
                 _decode_grouped_att_m_fwd_rope(q, k_input, v_input, attn_logits, k_pe_tokens, kv_lora_rank, rotary_emb.cos_sin_cache,
-                                  positions, rotary_dim, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits, sm_scale,
+                                  positions, rotary_dim, kv_indptr, kv_indices, num_kv_splits, sm_scale,
                                   logit_cap, use_rope, is_neox_style=is_neox_style)
             }
 
         if "ref" in provider:
             fn = lambda: {
-                ref_compute(q, k_input, v_input, kv_lora_rank, Req_to_tokens, B_req_idx, B_Seqlen, num_kv_splits,
+                ref_compute(q, k_input, v_input, kv_lora_rank, kv_indptr, kv_indices, num_kv_splits,
                             sm_scale, logit_cap, rotary_emb, positions, use_rope, device="cuda")
             }
 
@@ -650,8 +652,8 @@ def main():
     torch.manual_seed(0)
     args = parse_args()
     torch.set_default_device(args.device)
-    benchmark(args)
-
+    # benchmark(args)
+    test_op_fwd_rope_integration(8, 128, 2048, 512, 64, 64, torch.bfloat16, True, False)
 
 if __name__ == '__main__':
     sys.exit(main())
