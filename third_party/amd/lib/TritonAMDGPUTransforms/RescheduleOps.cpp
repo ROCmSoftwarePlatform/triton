@@ -31,12 +31,12 @@ Operation *createSchedBarrier(OpBuilder &rewriter, Location loc,
 }
 
 struct Node {
-  Node(Operation *op, int32_t priority = 0) : op(op), priority(priority) {}
+  Node(Operation *op, int32_t weight = 0) : op(op), weight(weight) {}
   enum class ChildType { Real, Artificials };
 
   Operation *getOp() { return op; }
-  int32_t getPriority() { return priority; }
-  void setPriority(int32_t priority) { this->priority = priority; }
+  int32_t getWeight() { return weight; }
+  void setWeight(int32_t priority) { this->weight = priority; }
 
   template <ChildType Type> void add(Node *node) {
     llvm::SetVector<Node *> *children =
@@ -79,17 +79,17 @@ struct Node {
 
 private:
   Operation *op;
-  int32_t priority;
+  int32_t weight;
   llvm::SetVector<Node *> realChildren;
   llvm::SetVector<Node *> artificialChildren;
   llvm::SetVector<Node *> parents;
 };
 
-struct PriorityStrategy {
+struct NodeWeightStrategy {
   virtual void set(llvm::SmallVector<std::unique_ptr<Node>> &nodes) = 0;
 };
 
-struct BasicDotOpsPriorityStrategy : public PriorityStrategy {
+struct BasicDotWeightStrategy : public NodeWeightStrategy {
   void set(llvm::SmallVector<std::unique_ptr<Node>> &nodes) override {
     SmallVector<Node *> dots;
     SmallVector<Node *> loads;
@@ -101,31 +101,32 @@ struct BasicDotOpsPriorityStrategy : public PriorityStrategy {
     }
 
     // Make sure that prio is never equal to `0` for dotOps
-    int32_t dotPrio = dots.size() + 10;
-    const int32_t loadPrio = dotPrio + 10;
+    constexpr int32_t extraDefaultWeight = 10;
+    int32_t dotWeight = dots.size() + extraDefaultWeight;
+    const int32_t loadWeight = dotWeight + extraDefaultWeight;
     for (auto loadNode : loads) {
-      propagate(loadNode, loadPrio);
+      propagate(loadNode, loadWeight);
     }
 
     for (auto dotNode : dots) {
-      propagate(dotNode, dotPrio--);
+      propagate(dotNode, dotWeight--);
     }
   }
 
 private:
-  void propagate(Node *node, int32_t prio) {
+  void propagate(Node *node, int32_t weight) {
     if (visited.contains(node))
       return;
 
-    node->setPriority(prio);
+    node->setWeight(weight);
     visited.insert({node});
 
     if (node->hasChildren()) {
       for (auto child : node->getRealChildren()) {
-        propagate(child, prio);
+        propagate(child, weight);
       }
       for (auto child : node->getArtificialChildren()) {
-        propagate(child, prio);
+        propagate(child, weight);
       }
     }
   }
@@ -145,7 +146,7 @@ public:
     DenseMap<Node *, iteratorType> map;
     for (auto it = other.nodes.begin(); it != other.nodes.end(); ++it) {
       auto newNode =
-          std::make_unique<Node>(it->get()->getOp(), it->get()->getPriority());
+          std::make_unique<Node>(it->get()->getOp(), it->get()->getWeight());
       map.insert({it->get(), it});
       lookup.insert({newNode->getOp(), newNode.get()});
       nodes.push_back(std::move(newNode));
@@ -182,7 +183,7 @@ public:
     return copy;
   }
 
-  void setNotesPriorities(PriorityStrategy &&strategy) { strategy.set(nodes); }
+  void setNodesWeights(NodeWeightStrategy &&strategy) { strategy.set(nodes); }
 
 private:
   void createNodes(Block *mlirBlock) {
@@ -279,7 +280,7 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &out, Graph &graph) {
   for (auto [idx, node] : llvm::enumerate(graph.getNodes())) {
     std::string name = std::to_string(reinterpret_cast<intptr_t>(node));
     out << name << "\t[label=\"" << node->getOp()->getName() << " ("
-        << node->getPriority() << ") \"]\n";
+        << node->getWeight() << ") \"]\n";
   }
   for (auto [idx, node] : llvm::enumerate(graph.getNodes())) {
     std::string name = std::to_string(reinterpret_cast<intptr_t>(node));
@@ -341,7 +342,7 @@ struct MachineModel {
       if (!selectedNode) {
         selectedNode = node;
       } else {
-        if (node->getPriority() > selectedNode->getPriority()) {
+        if (node->getWeight() > selectedNode->getWeight()) {
           selectedNode = node;
         }
       }
@@ -424,7 +425,7 @@ struct TritonAMDGPURescheduleOps
 
   void reschedule(Block *mlirBlock) {
     Graph graph(mlirBlock);
-    graph.setNotesPriorities(BasicDotOpsPriorityStrategy());
+    graph.setNodesWeights(BasicDotWeightStrategy());
     LDBG("Dependency graph in dot-format:\n" << graph);
 
     GraphManager manager(graph);
@@ -444,16 +445,16 @@ struct TritonAMDGPURescheduleOps
       return earliestNodeToRun;
     };
 
-    auto prioritySelector = [&](const SmallVector<Node *> readyNodes) {
-      int32_t maxPriorityValue = std::numeric_limits<int32_t>::min();
-      Node *highPriorityNode = nullptr;
+    auto nodeWeightsSelector = [&](const SmallVector<Node *> readyNodes) {
+      int32_t maxWeightValue = std::numeric_limits<int32_t>::min();
+      Node *selectedNode = nullptr;
       for (auto node : readyNodes) {
-        if (node->getPriority() > maxPriorityValue) {
-          maxPriorityValue = node->getPriority();
-          highPriorityNode = node;
+        if (node->getWeight() > maxWeightValue) {
+          maxWeightValue = node->getWeight();
+          selectedNode = node;
         }
       }
-      return highPriorityNode;
+      return selectedNode;
     };
 
     const bool verbose = false;
@@ -466,7 +467,7 @@ struct TritonAMDGPURescheduleOps
       bool selectedFromMachineModel = selectedNode ? true : false;
 
       if (!selectedNode) {
-        selectedNode = prioritySelector(selectionResult.normPriorityNodes);
+        selectedNode = nodeWeightsSelector(selectionResult.normPriorityNodes);
       }
 
       bool selectedFromNormPrioQueue = false;
