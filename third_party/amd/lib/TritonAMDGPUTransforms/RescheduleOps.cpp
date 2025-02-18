@@ -136,7 +136,8 @@ private:
 
 struct Graph {
 public:
-  Graph(Block *mlirBlock) {
+  Graph(Block *mlirBlock, llvm::StringRef graphName = "dep-graph")
+      : graphName(graphName) {
     createNodes(mlirBlock);
     createEdges();
   }
@@ -173,6 +174,7 @@ public:
       }
       nodes.push_back(std::make_unique<Node>(otherNode->getOp()));
     }
+    graphName = other.graphName;
   }
 
   SmallVector<Node *> getNodes() {
@@ -184,6 +186,7 @@ public:
   }
 
   void setNodesWeights(NodeWeightStrategy &&strategy) { strategy.set(nodes); }
+  StringRef getGraphName() { return graphName; }
 
 private:
   void createNodes(Block *mlirBlock) {
@@ -270,12 +273,13 @@ private:
     }
   }
 
+  llvm::StringRef graphName;
   llvm::SmallVector<std::unique_ptr<Node>> nodes;
   llvm::MapVector<Operation *, Node *> lookup;
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &out, Graph &graph) {
-  out << "digraph \"dep-graph\" {\n";
+  out << "digraph \"" << graph.getGraphName() << "\" {\n";
   out << "rankdir=\"LR\"\n";
   for (auto [idx, node] : llvm::enumerate(graph.getNodes())) {
     std::string name = std::to_string(reinterpret_cast<intptr_t>(node));
@@ -459,7 +463,8 @@ struct TritonAMDGPURescheduleOps
   }
 
   void reschedule(Block *mlirBlock) {
-    Graph graph(mlirBlock);
+    auto funcOp = mlirBlock->front().getParentOfType<triton::FuncOp>();
+    Graph graph(mlirBlock, funcOp.getSymName());
     graph.setNodesWeights(BasicDotWeightStrategy());
     LDBG("Dependency graph in dot-format:\n" << graph);
 
