@@ -436,7 +436,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
              stride_om, stride_on, stride_bz, stride_bh, stride_bm, stride_bn, stride_az, stride_ah, Q_descale,
              K_descale, P_scale, P_descale, V_descale, cu_seqlens_q, cu_seqlens_k, dropout_p, philox_seed,
              PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: tl.constexpr,
-             GRID_CU_MULTIP: tl.constexpr, B: tl.constexpr, philox_offset_base, encoded_softmax, alibi_slopes,
+             GRID_CU_MULTIP: tl.constexpr, B, philox_offset_base, encoded_softmax, alibi_slopes,
              HQ: tl.constexpr, HK: tl.constexpr, ACTUAL_BLOCK_DMODEL: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr,
              MAX_SEQLENS_K: tl.constexpr, VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
              BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
@@ -1918,7 +1918,7 @@ def run_benchmark(custom, args):
             extra_args = {'dtype': dtype, 'causal': causal, 'mode': mode}
 
     print_time = args.return_time
-    line_vals = ['triton', 'torch']  # 'Time (ms)' if print_time else 'TFLOPS'
+    line_vals = ['Triton', 'Torch'] if args.print_torch else ['Triton'] 
     configs.append(
         triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
                                  line_names=line_vals, styles=[('green', '-'), ('red', '-')],
@@ -1958,7 +1958,7 @@ def run_benchmark(custom, args):
         if causal:
             input_metadata.need_causal()
 
-        if "triton" in provider:
+        if "Triton" in provider:
             o = torch.empty_like(q)
             if int8:
                 q, k, v = quantize_input(q, k, v, input_metadata, quantize_p=quantize_p, int8_kv=int8_kv)
@@ -1969,7 +1969,7 @@ def run_benchmark(custom, args):
                 do = torch.randn_like(o)
                 fn = lambda: o.backward(do, retain_graph=True)
 
-        elif "torch" in provider and args.layout in ["thd", "bhsd", "bshd"]:
+        if "Torch" in provider and args.layout in ["thd", "bhsd", "bshd"] and args.print_torch:
             # torch requires the layout to be (b (optional),...,h,s,d)
             if args.layout in ["thd", "bshd"]:
                 q = q.transpose(-3, -2)
@@ -1984,9 +1984,7 @@ def run_benchmark(custom, args):
 
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, attn_mask=None, dropout_p=0.0, is_causal=causal, scale=input_metadata.sm_scale)
-        else:
-            assert False, f"Unknown provider {provider} in flash-attention."
-
+      
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         total_flops = 2 * flops_per_matmul
         if causal:
@@ -2048,6 +2046,7 @@ def parse_args():
         "-persistent", nargs='?', const='fixed', choices=['fixed', 'dynamic'], default=None,
         help="Enable persistent kernels. Use '-persistent dynamic' for dynamic scheduling of the tiles.")
     parser.add_argument("-print_vgpr", action="store_true", default=False)
+    parser.add_argument("-print_torch", action="store_true", default=False)
     return parser.parse_args()
 
 
